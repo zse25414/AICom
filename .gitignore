@@ -1,0 +1,9 @@
+node_modules/
+enterprise-data.json
+terminals/
+mcps/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
