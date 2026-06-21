@@ -11,7 +11,7 @@
     <title>光流 AI Lumina • 個人生產力神器</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
         
@@ -1379,7 +1379,7 @@
                         <h2 class="page-header-title">數據洞察與成長</h2>
                         <p class="page-header-desc">Lumina 持續學習你的工作模式，給出精準建議</p>
                     </div>
-                    <button onclick="generateNewInsights()" class="self-start md:self-auto text-sm flex items-center gap-x-2 px-4 py-2.5 rounded-xl border border-slate-600 hover:bg-slate-800/80 transition-colors">
+                    <button onclick="recalculateInsights()" class="self-start md:self-auto text-sm flex items-center gap-x-2 px-4 py-2.5 rounded-xl border border-slate-600 hover:bg-slate-800/80 transition-colors">
                         <i class="fa-solid fa-sync-alt"></i><span>更新洞察</span>
                     </button>
                 </div>
@@ -1969,6 +1969,9 @@
                                 <input id="settings-api-key" type="password" placeholder="sk-..." autocomplete="off"
                                        class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring font-mono">
                                 <div class="text-[10px] text-amber-400/80 mt-1.5">⚠️ Key 只存在你的瀏覽器 localStorage，不會寫入程式碼。請勿分享或公開貼出。</div>
+                                <button type="button" onclick="clearApiKey()" class="mt-2 text-[10px] px-3 py-1.5 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10">
+                                    清除已儲存的 API Key
+                                </button>
                             </div>
                             <div id="api-proxy-group" class="hidden">
                                 <label class="text-xs text-slate-400 block mb-1.5">代理伺服器 URL</label>
@@ -2144,7 +2147,7 @@
     </div>
     
     <!-- Toast Container -->
-    <div id="toast-container" class="fixed bottom-20 md:bottom-5 right-5 z-[100] space-y-2"></div>
+    <div id="toast-container" class="fixed bottom-20 md:bottom-5 right-5 z-[100] space-y-2" aria-live="polite" aria-relevant="additions"></div>
     
     <script>
         // Tailwind script
@@ -2184,7 +2187,18 @@
         let enterpriseSession = null;
         let enterpriseGroupData = null;
         let enterprisePollTimer = null;
+        let chatHistory = [];
+        let rolledCountOnInit = 0;
+        let analyticsPersistTimer = null;
+        let chartJsLoadPromise = null;
+        let enterpriseDataFetchedAt = 0;
+        let todayStatsCache = null;
+        let weeklyChartInstance = null;
+        let pieChartInstance = null;
         const LOCAL_ENTERPRISE_KEY = 'lumina_enterprise_local_store';
+        const CHART_JS_URL = 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js';
+        const ENTERPRISE_FETCH_TTL_MS = 5000;
+        const ENTERPRISE_POLL_INTERVAL_MS = 15000;
         
         const CATEGORIES = {
             deep:       { label: '深度工作', color: 'bg-indigo-500/10 text-indigo-400' },
@@ -2214,6 +2228,75 @@
             return CATEGORIES[cat]?.color || 'bg-slate-500/10 text-slate-300';
         }
         
+        function $(id) {
+            return document.getElementById(id);
+        }
+        
+        function resolveCategory(task) {
+            return task.category || inferCategory(task.name, task.energy || 3);
+        }
+        
+        function invalidateTodayStats() {
+            todayStatsCache = null;
+        }
+        
+        function computeTodayStats() {
+            const today = getTodayISO();
+            const stats = {
+                today,
+                relevant: [],
+                pending: [],
+                futurePending: [],
+                completed: 0,
+                rate: 0,
+                focusMinutes: 0,
+                futureCount: 0,
+                highEnergyPending: 0
+            };
+            
+            for (const t of tasks) {
+                if (!t.completed && t.energy >= 4) stats.highEnergyPending++;
+                if (t.due <= today) {
+                    stats.relevant.push(t);
+                    if (t.completed) {
+                        stats.completed++;
+                        stats.focusMinutes += t.duration || 0;
+                    } else {
+                        stats.pending.push(t);
+                    }
+                } else if (!t.completed) {
+                    stats.futurePending.push(t);
+                }
+            }
+            stats.futureCount = stats.futurePending.length;
+            stats.rate = stats.relevant.length
+                ? Math.round((stats.completed / stats.relevant.length) * 100)
+                : 0;
+            return stats;
+        }
+        
+        function getTodayStats() {
+            if (!todayStatsCache) todayStatsCache = computeTodayStats();
+            return todayStatsCache;
+        }
+        
+        function getScoringContext() {
+            return {
+                today: getTodayISO(),
+                hour: new Date().getHours(),
+                peakStart: parseHour(userProfile.peakStart),
+                peakEnd: parseHour(userProfile.peakEnd)
+            };
+        }
+        
+        function buildSyncedEnterpriseIdSet() {
+            const ids = new Set();
+            for (const t of tasks) {
+                if (t.enterpriseTaskId) ids.add(t.enterpriseTaskId);
+            }
+            return ids;
+        }
+        
         function migrateTasks() {
             tasks = tasks.map(t => ({
                 ...t,
@@ -2235,24 +2318,38 @@
         
         function getFilteredTasks(taskList) {
             if (activeCategoryFilter === 'all') return taskList;
-            return taskList.filter(t => (t.category || inferCategory(t.name, t.energy)) === activeCategoryFilter);
+            return taskList.filter(t => resolveCategory(t) === activeCategoryFilter);
         }
         
         function getCategoryCounts() {
             const counts = { all: tasks.length };
             Object.keys(CATEGORIES).forEach(k => { counts[k] = 0; });
             tasks.forEach(t => {
-                const cat = t.category || inferCategory(t.name, t.energy);
+                const cat = resolveCategory(t);
                 if (counts[cat] !== undefined) counts[cat]++;
             });
             return counts;
         }
         
+        function refreshUI(parts = {}) {
+            const {
+                dashboard = false,
+                scheduler = false,
+                filters = true,
+                schedule = false
+            } = parts;
+            invalidateTodayStats();
+            if (filters) renderCategoryFilters();
+            if (dashboard) updateDashboard();
+            if (scheduler) renderTaskList();
+            if (schedule && $('scheduler')?.classList.contains('active')) {
+                optimizeSchedule(true);
+            }
+        }
+        
         function setCategoryFilter(cat) {
             activeCategoryFilter = cat;
-            renderCategoryFilters();
-            renderTaskList();
-            updateDashboard();
+            refreshUI({ dashboard: true, scheduler: true });
         }
         
         function renderCategoryFilters() {
@@ -2342,7 +2439,6 @@
                 const PRECACHE = [
                     'https://cdn.tailwindcss.com',
                     'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
-                    'https://cdn.jsdelivr.net/npm/chart.js',
                     'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+TC:wght@300;400;500;700&display=swap'
                 ];
                 
@@ -2480,6 +2576,171 @@
             return div.innerHTML;
         }
         
+        const SANITIZE_ALLOWED_TAGS = new Set(['BR', 'STRONG', 'B', 'EM', 'I', 'P', 'UL', 'OL', 'LI']);
+        const IMPORT_MAX_BYTES = 2 * 1024 * 1024;
+        const TEXT_MAX_LEN = 500;
+        const TASK_NAME_MAX_LEN = 200;
+        const SAFE_FA_ICONS = new Set(['fa-plus', 'fa-brain', 'fa-comment-dots', 'fa-sun', 'fa-list-check', 'fa-circle']);
+        
+        function sanitizeHtml(html) {
+            if (!html) return '';
+            const template = document.createElement('template');
+            template.innerHTML = String(html);
+            
+            function walk(parent) {
+                [...parent.childNodes].forEach(node => {
+                    if (node.nodeType === Node.TEXT_NODE) return;
+                    if (node.nodeType !== Node.ELEMENT_NODE) {
+                        node.remove();
+                        return;
+                    }
+                    if (!SANITIZE_ALLOWED_TAGS.has(node.tagName)) {
+                        const fragment = document.createDocumentFragment();
+                        while (node.firstChild) fragment.appendChild(node.firstChild);
+                        node.replaceWith(fragment);
+                        walk(parent);
+                        return;
+                    }
+                    [...node.attributes].forEach(attr => node.removeAttribute(attr.name));
+                    walk(node);
+                });
+            }
+            walk(template.content);
+            return template.innerHTML;
+        }
+        
+        function isSafeHttpUrl(url) {
+            if (!url || typeof url !== 'string') return false;
+            try {
+                const parsed = new URL(url.trim());
+                return ['http:', 'https:'].includes(parsed.protocol);
+            } catch (_) {
+                return false;
+            }
+        }
+        
+        function clampText(value, max = TEXT_MAX_LEN) {
+            return String(value ?? '').slice(0, max);
+        }
+        
+        function isPlainObject(value) {
+            return value !== null && typeof value === 'object' && !Array.isArray(value)
+                && Object.getPrototypeOf(value) === Object.prototype;
+        }
+        
+        function sanitizeImportedTask(raw, index) {
+            if (!isPlainObject(raw)) return null;
+            const energy = Math.min(5, Math.max(1, parseInt(raw.energy, 10) || 3));
+            const duration = Math.min(480, Math.max(5, parseInt(raw.duration, 10) || 30));
+            const validCategories = Object.keys(CATEGORIES);
+            const category = validCategories.includes(raw.category) ? raw.category : undefined;
+            const name = clampText(raw.name, TASK_NAME_MAX_LEN).trim();
+            if (!name) return null;
+            const task = {
+                id: typeof raw.id === 'number' ? raw.id : Date.now() + index,
+                name,
+                duration,
+                energy,
+                due: clampText(raw.due, 12) || getTodayISO(),
+                completed: !!raw.completed,
+                wasOverdue: !!raw.wasOverdue
+            };
+            if (category) task.category = category;
+            if (raw.parentGoalId != null) task.parentGoalId = Number(raw.parentGoalId);
+            if (raw.parentGoalName) task.parentGoalName = clampText(raw.parentGoalName, TASK_NAME_MAX_LEN);
+            if (raw.enterpriseTaskId) task.enterpriseTaskId = clampText(raw.enterpriseTaskId, 64);
+            return task;
+        }
+        
+        function validateImportedData(data) {
+            if (!isPlainObject(data)) throw new Error('無效的資料格式');
+            for (const key of ['__proto__', 'constructor', 'prototype']) {
+                if (Object.prototype.hasOwnProperty.call(data, key)) throw new Error('含不允許的欄位');
+            }
+            if (data.tasks !== undefined) {
+                if (!Array.isArray(data.tasks)) throw new Error('tasks 必須是陣列');
+                if (data.tasks.length > 2000) throw new Error('任務數量超過上限');
+            }
+            if (data.userProfile !== undefined && !isPlainObject(data.userProfile)) {
+                throw new Error('userProfile 格式錯誤');
+            }
+            if (data.weeklyScores !== undefined) {
+                if (!Array.isArray(data.weeklyScores) || data.weeklyScores.length !== 7) {
+                    throw new Error('weeklyScores 格式錯誤');
+                }
+            }
+            if (data.dailyHistory !== undefined && !isPlainObject(data.dailyHistory)) {
+                throw new Error('dailyHistory 格式錯誤');
+            }
+        }
+        
+        function sanitizeImportedProfile(raw) {
+            const allowed = [
+                'name', 'role', 'workStart', 'workEnd', 'peakStart', 'peakEnd',
+                'streakThreshold', 'enableConfetti', 'apiEnabled', 'apiMode',
+                'apiModel', 'apiProxyUrl', 'enterpriseApiUrl'
+            ];
+            const out = {};
+            for (const key of allowed) {
+                if (raw[key] === undefined) continue;
+                if (key === 'streakThreshold') {
+                    out[key] = Math.min(100, Math.max(0, parseInt(raw[key], 10) || 80));
+                } else if (key === 'enableConfetti' || key === 'apiEnabled') {
+                    out[key] = !!raw[key];
+                } else if (key === 'apiMode') {
+                    out[key] = raw[key] === 'proxy' ? 'proxy' : 'direct';
+                } else if (key === 'apiModel') {
+                    out[key] = ['deepseek-chat', 'deepseek-reasoner'].includes(raw[key])
+                        ? raw[key] : 'deepseek-chat';
+                } else if (key === 'apiProxyUrl' || key === 'enterpriseApiUrl') {
+                    const url = clampText(raw[key], 300).trim();
+                    if (url && isSafeHttpUrl(url)) out[key] = url;
+                } else {
+                    out[key] = clampText(raw[key], 80);
+                }
+            }
+            return out;
+        }
+        
+        function clearSensitiveLocalData() {
+            const preserved = {};
+            for (const key of ['lumina_api_key', 'lumina_profile']) {
+                const val = localStorage.getItem(key);
+                if (val) preserved[key] = val;
+            }
+            localStorage.clear();
+            Object.entries(preserved).forEach(([k, v]) => localStorage.setItem(k, v));
+        }
+        
+        async function hashPin(pin) {
+            const str = 'lumina-pin:v1:' + String(pin);
+            if (crypto?.subtle?.digest) {
+                const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+                return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+            let h = 0x811c9dc5;
+            for (let i = 0; i < str.length; i++) {
+                h ^= str.charCodeAt(i);
+                h = Math.imul(h, 0x01000193);
+            }
+            return (h >>> 0).toString(16).padStart(8, '0');
+        }
+        
+        async function verifyLocalManagerPin(group, pin) {
+            if (group.managerPinHash) {
+                return (await hashPin(pin)) === group.managerPinHash;
+            }
+            if (group.managerPin !== undefined) {
+                return String(pin) === String(group.managerPin);
+            }
+            return false;
+        }
+        
+        function sanitizeFaIcon(icon) {
+            const cleaned = String(icon || '').replace(/[^a-z0-9-]/gi, '');
+            return SAFE_FA_ICONS.has(cleaned) ? cleaned : 'fa-circle';
+        }
+        
         function getCompletedCount() {
             return tasks.filter(t => t.completed).length;
         }
@@ -2502,33 +2763,27 @@
         }
         
         function getTodayRelevantTasks() {
-            const today = getTodayISO();
-            return tasks.filter(t => t.due <= today);
+            return getTodayStats().relevant;
         }
         
         function getTodayPendingTasks() {
-            return getTodayRelevantTasks().filter(t => !t.completed);
+            return getTodayStats().pending;
         }
         
         function getFuturePendingTasks() {
-            const today = getTodayISO();
-            return tasks.filter(t => !t.completed && t.due > today);
+            return getTodayStats().futurePending;
         }
         
         function getTodayCompletedCount() {
-            return getTodayRelevantTasks().filter(t => t.completed).length;
+            return getTodayStats().completed;
         }
         
         function getTodayFocusMinutes() {
-            return getTodayRelevantTasks()
-                .filter(t => t.completed)
-                .reduce((sum, t) => sum + (t.duration || 0), 0);
+            return getTodayStats().focusMinutes;
         }
         
         function getTodayCompletionRate() {
-            const relevant = getTodayRelevantTasks();
-            if (relevant.length === 0) return 0;
-            return Math.round((relevant.filter(t => t.completed).length / relevant.length) * 100);
+            return getTodayStats().rate;
         }
         
         function loadDailyHistory() {
@@ -2585,8 +2840,7 @@
             weeklyScores = scores;
         }
         
-        function getFocusComparisonText() {
-            const todayMinutes = getTodayFocusMinutes();
+        function getFocusComparisonText(todayMinutes = getTodayFocusMinutes()) {
             const yesterday = new Date();
             yesterday.setDate(yesterday.getDate() - 1);
             const yesterdayISO = toLocalISO(yesterday);
@@ -2605,14 +2859,12 @@
             return { text: '與昨天相同', positive: null };
         }
         
-        function evaluateStreakForDate(dateISO) {
+        function applyStreakReward(dateISO, rate, { notify = false } = {}) {
             const earnedKey = 'lumina_streak_earned_' + dateISO;
-            if (localStorage.getItem(earnedKey)) return;
+            if (localStorage.getItem(earnedKey)) return false;
             
-            const snap = dailyHistory[dateISO];
-            const rate = snap?.rate ?? 0;
             const threshold = userProfile.streakThreshold || 80;
-            if (rate < threshold) return;
+            if (rate < threshold) return false;
             
             localStorage.setItem(earnedKey, 'true');
             const prev = new Date(dateISO + 'T12:00:00');
@@ -2620,13 +2872,21 @@
             const prevISO = toLocalISO(prev);
             const lastEarned = localStorage.getItem('lumina_last_streak_date');
             
-            if (lastEarned === prevISO) {
-                userProfile.streak += 1;
-            } else {
-                userProfile.streak = 1;
-            }
+            if (lastEarned === prevISO) userProfile.streak += 1;
+            else userProfile.streak = 1;
+            
             userProfile.bestStreak = Math.max(userProfile.bestStreak || 0, userProfile.streak);
             localStorage.setItem('lumina_last_streak_date', dateISO);
+            
+            if (notify) {
+                showToast(`🔥 達成今日 ${threshold}% 目標！連續高效 ${userProfile.streak} 天`, 'success');
+            }
+            return true;
+        }
+        
+        function evaluateStreakForDate(dateISO) {
+            const snap = dailyHistory[dateISO];
+            applyStreakReward(dateISO, snap?.rate ?? 0);
         }
         
         function processDailyRollover() {
@@ -2664,7 +2924,7 @@
             localStorage.setItem(LAST_ACTIVE_DATE_KEY, today);
             recordDailySnapshot();
             recalculateWeeklyScores();
-            saveState();
+            saveState({ immediateAnalytics: true });
             
             return { rolledCount };
         }
@@ -2673,17 +2933,14 @@
             return parseInt((timeStr || '09:00').split(':')[0], 10);
         }
         
-        function scoreTaskForNextStep(task) {
-            const today = getTodayISO();
+        function scoreTaskForNextStep(task, ctx) {
+            ctx = ctx || getScoringContext();
             let score = 0;
-            if (task.due < today) score += 50;
-            else if (task.due === today) score += 30;
+            if (task.due < ctx.today) score += 50;
+            else if (task.due === ctx.today) score += 30;
             
-            const hour = new Date().getHours();
-            const peakStart = parseHour(userProfile.peakStart);
-            const peakEnd = parseHour(userProfile.peakEnd);
-            const inPeak = hour >= peakStart && hour < peakEnd;
-            const cat = task.category || inferCategory(task.name, task.energy);
+            const inPeak = ctx.hour >= ctx.peakStart && ctx.hour < ctx.peakEnd;
+            const cat = resolveCategory(task);
             
             if (inPeak && cat === 'deep') score += 25;
             if (task.duration <= 25) score += 15;
@@ -2692,13 +2949,69 @@
             return score;
         }
         
+        function rankTasksByNextStepScore(taskList, ctx) {
+            ctx = ctx || getScoringContext();
+            return taskList
+                .map(t => ({ task: t, score: scoreTaskForNextStep(t, ctx) }))
+                .sort((a, b) => b.score - a.score)
+                .map(x => x.task);
+        }
+        
         function getNextRecommendedTask(scope = 'today') {
             let pending = scope === 'today' ? getTodayPendingTasks() : tasks.filter(t => !t.completed);
-            if (!pending.length && scope === 'today') {
-                pending = getFuturePendingTasks();
-            }
+            if (!pending.length && scope === 'today') pending = getFuturePendingTasks();
             if (!pending.length) return null;
-            return pending.sort((a, b) => scoreTaskForNextStep(b) - scoreTaskForNextStep(a))[0];
+            return rankTasksByNextStepScore(pending)[0];
+        }
+        
+        function getNextStepReason(task) {
+            if (task.wasOverdue) return '延後任務優先';
+            if (task.duration <= 25) return '短任務易啟動';
+            if (resolveCategory(task) === 'deep') return '高效時段適合深度工作';
+            return '依優先順序推薦';
+        }
+        
+        function renderPersonalTaskRow(task, variant = 'scheduler') {
+            const cat = resolveCategory(task);
+            const isDashboard = variant === 'dashboard';
+            const checked = task.completed ? 'checked' : '';
+            const dashFlag = isDashboard ? ', true' : '';
+            const onChange = `onchange="toggleTaskComplete(${task.id}, this${dashFlag})"`;
+            
+            if (isDashboard) {
+                return `<div class="flex items-center justify-between px-4 py-3 bg-slate-950 border border-slate-700 rounded-2xl task-card group">
+                    <div class="flex items-center gap-x-3 flex-1 min-w-0">
+                        <input type="checkbox" ${onChange} class="accent-indigo-500 w-4 h-4 cursor-pointer">
+                        <div class="min-w-0 flex-1">
+                            <div class="font-medium text-sm truncate">${escapeHtml(task.name)}</div>
+                            <div class="text-[10px] text-slate-500 flex flex-wrap items-center gap-1">${task.duration} 分鐘 • <span class="cat-badge ${getCategoryColor(cat)}">${getCategoryLabel(cat)}</span> ${renderTaskBadges(task)}</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <button onclick="openTaskEdit(${task.id})" class="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-300 p-1.5 transition-opacity" title="編輯"><i class="fa-solid fa-pen text-xs"></i></button>
+                        <div class="text-xs px-3 py-1 rounded-xl bg-slate-800 text-slate-300 font-mono whitespace-nowrap">${task.due}</div>
+                    </div>
+                </div>`;
+            }
+            
+            return `<div class="task-card flex items-center gap-x-3 px-4 py-3.5 bg-slate-950 border border-slate-700 rounded-2xl group ${task.completed ? 'opacity-60' : ''}">
+                <input type="checkbox" ${checked} ${onChange} class="accent-indigo-500 w-[17px] h-[17px] cursor-pointer flex-shrink-0">
+                <div class="flex-1 min-w-0">
+                    <div class="font-medium text-sm ${task.completed ? 'line-through text-slate-400' : ''}">${escapeHtml(task.name)}</div>
+                    <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs mt-0.5">
+                        <span class="font-mono text-slate-400">${task.duration} min</span>
+                        <span class="cat-badge ${getCategoryColor(cat)}">${getCategoryLabel(cat)}</span>
+                        <span class="px-2 py-px rounded text-[10px] ${getEnergyColor(task.energy)}">${getEnergyLabel(task.energy)}</span>
+                        <span class="text-slate-500">${task.due}</span>
+                        ${renderTaskBadges(task)}
+                    </div>
+                </div>
+                <div class="flex items-center gap-x-1 opacity-0 group-hover:opacity-100 transition-all">
+                    <button onclick="openTaskEdit(${task.id})" class="text-slate-400 hover:text-indigo-300 p-1.5" title="編輯任務"><i class="fa-solid fa-pen text-xs"></i></button>
+                    ${task.duration >= 60 && !task.completed ? `<button onclick="splitTask(${task.id})" class="text-indigo-400 hover:text-indigo-300 p-1.5" title="拆分任務"><i class="fa-solid fa-scissors text-xs"></i></button>` : ''}
+                    <button onclick="deleteTask(${task.id}, event)" class="text-red-400 hover:text-red-500 p-1.5"><i class="fa-solid fa-trash text-xs"></i></button>
+                </div>
+            </div>`;
         }
         
         function getActiveParentGoals() {
@@ -2797,12 +3110,7 @@
             
             saveState();
             closeTaskEdit();
-            renderTaskList();
-            updateDashboard();
-            
-            if (document.getElementById('scheduler')?.classList.contains('active')) {
-                optimizeSchedule(true);
-            }
+            refreshUI({ dashboard: true, scheduler: true, schedule: true });
             showToast('任務已更新', 'success');
         }
         
@@ -2828,36 +3136,15 @@
             });
             
             saveState();
-            updateDashboard();
-            renderTaskList();
+            refreshUI({ dashboard: true, scheduler: true });
             showToast('已同步到個人今日清單', 'success');
         }
         
         function evaluateStreakOnComplete() {
-            const today = getTodayISO();
-            const rate = getTodayCompletionRate();
-            const threshold = userProfile.streakThreshold || 80;
-            const earnedKey = 'lumina_streak_earned_' + today;
-            
-            if (rate < threshold || localStorage.getItem(earnedKey)) return;
-            
-            localStorage.setItem(earnedKey, 'true');
-            const lastEarned = localStorage.getItem('lumina_last_streak_date');
-            const yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            const yesterdayISO = toLocalISO(yesterday);
-            
-            if (lastEarned === yesterdayISO) {
-                userProfile.streak += 1;
-            } else {
-                userProfile.streak = 1;
+            invalidateTodayStats();
+            if (applyStreakReward(getTodayISO(), getTodayStats().rate, { notify: true })) {
+                persistProfile();
             }
-            
-            userProfile.bestStreak = Math.max(userProfile.bestStreak, userProfile.streak);
-            localStorage.setItem('lumina_last_streak_date', today);
-            saveState();
-            updateDashboard();
-            showToast(`🔥 達成今日 ${threshold}% 目標！連續高效 ${userProfile.streak} 天`, 'success');
         }
         
         // Load from localStorage
@@ -2881,7 +3168,7 @@
             migrateTasks();
             
             const rollover = processDailyRollover();
-            window._luminaRolledCount = rollover.rolledCount;
+            rolledCountOnInit = rollover.rolledCount;
             
             const dueInput = document.getElementById('task-due');
             if (dueInput) dueInput.value = getTomorrowISO();
@@ -2939,6 +3226,7 @@
             if (jsonMode) payload.response_format = { type: 'json_object' };
             
             const url = useProxy ? userProfile.apiProxyUrl : 'https://api.deepseek.com/chat/completions';
+            if (useProxy && !isSafeHttpUrl(url)) throw new Error('代理 URL 不安全或格式錯誤');
             const headers = { 'Content-Type': 'application/json' };
             if (!useProxy) headers['Authorization'] = `Bearer ${apiKey}`;
             
@@ -3039,6 +3327,14 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             updateApiStatusBadge();
         }
         
+        function clearApiKey() {
+            localStorage.removeItem('lumina_api_key');
+            const input = document.getElementById('settings-api-key');
+            if (input) input.value = '';
+            updateApiStatusBadge();
+            showToast('API Key 已清除', 'success');
+        }
+        
         function saveSettings() {
             userProfile.name = document.getElementById('settings-name').value.trim() || '使用者';
             userProfile.role = document.getElementById('settings-role').value.trim() || '知識工作者';
@@ -3051,14 +3347,23 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             userProfile.apiEnabled = document.getElementById('settings-api-enabled').checked;
             userProfile.apiMode = document.getElementById('settings-api-mode').value;
             userProfile.apiModel = document.getElementById('settings-api-model').value;
-            userProfile.apiProxyUrl = document.getElementById('settings-api-proxy').value.trim();
-            userProfile.enterpriseApiUrl = document.getElementById('settings-enterprise-api').value.trim() || 'http://localhost:3001';
+            
+            const proxyUrl = document.getElementById('settings-api-proxy').value.trim();
+            const enterpriseUrl = document.getElementById('settings-enterprise-api').value.trim() || 'http://localhost:3001';
+            if (userProfile.apiMode === 'proxy' && proxyUrl && !isSafeHttpUrl(proxyUrl)) {
+                return showToast('代理伺服器 URL 無效，請使用 http:// 或 https://', 'error');
+            }
+            if (!isSafeHttpUrl(enterpriseUrl)) {
+                return showToast('企業 API 位址無效，請使用 http:// 或 https://', 'error');
+            }
+            userProfile.apiProxyUrl = proxyUrl;
+            userProfile.enterpriseApiUrl = enterpriseUrl;
             
             const apiKey = document.getElementById('settings-api-key').value.trim();
             if (apiKey) localStorage.setItem('lumina_api_key', apiKey);
             
             saveState();
-            updateDashboard();
+            refreshUI({ dashboard: true, filters: true });
             updateApiStatusBadge();
             showToast('設定已儲存！', 'success');
             showSection('dashboard');
@@ -3086,39 +3391,70 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
         function importData(event) {
             const file = event.target.files[0];
             if (!file) return;
+            if (file.size > IMPORT_MAX_BYTES) {
+                showToast('匯入失敗：檔案過大（上限 2MB）', 'error');
+                event.target.value = '';
+                return;
+            }
             
             const reader = new FileReader();
             reader.onload = (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    if (data.tasks) tasks = data.tasks;
-                    if (data.userProfile) userProfile = { ...userProfile, ...data.userProfile };
-                    if (data.weeklyScores) weeklyScores = data.weeklyScores;
+                    validateImportedData(data);
+                    if (data.tasks) {
+                        tasks = data.tasks.map((t, i) => sanitizeImportedTask(t, i)).filter(Boolean);
+                    }
+                    if (data.userProfile) {
+                        userProfile = { ...userProfile, ...sanitizeImportedProfile(data.userProfile) };
+                    }
+                    if (data.weeklyScores) {
+                        weeklyScores = data.weeklyScores.map(s => Math.min(100, Math.max(0, parseInt(s, 10) || 0)));
+                    }
                     if (data.dailyHistory) dailyHistory = data.dailyHistory;
                     migrateTasks();
-                    saveState();
-                    updateDashboard();
-                    renderTaskList();
+                    saveState({ immediateAnalytics: true });
+                    refreshUI({ dashboard: true, scheduler: true });
                     loadSettingsForm();
                     showToast('資料匯入成功！', 'success');
                 } catch (err) {
-                    showToast('匯入失敗：檔案格式錯誤', 'error');
+                    showToast('匯入失敗：' + (err.message || '檔案格式錯誤'), 'error');
                 }
             };
             reader.readAsText(file);
             event.target.value = '';
         }
         
-        function saveState() {
+        function persistTasks() {
             localStorage.setItem('lumina_tasks', JSON.stringify(tasks));
-            recordDailySnapshot();
-            recalculateWeeklyScores();
-            localStorage.setItem('lumina_weekly', JSON.stringify(weeklyScores));
+        }
+        
+        function persistProfile() {
             localStorage.setItem('lumina_profile', JSON.stringify(userProfile));
         }
         
+        function persistAnalytics(immediate = false) {
+            const run = () => {
+                recordDailySnapshot();
+                recalculateWeeklyScores();
+                localStorage.setItem('lumina_weekly', JSON.stringify(weeklyScores));
+            };
+            clearTimeout(analyticsPersistTimer);
+            if (immediate) run();
+            else analyticsPersistTimer = setTimeout(run, 300);
+        }
+        
+        function saveState(opts = {}) {
+            const { immediateAnalytics = false } = opts;
+            persistTasks();
+            persistProfile();
+            persistAnalytics(immediateAnalytics);
+            invalidateTodayStats();
+        }
+        
         function getEnterpriseBaseUrl() {
-            return (userProfile.enterpriseApiUrl || 'http://localhost:3001').replace(/\/$/, '');
+            const url = (userProfile.enterpriseApiUrl || 'http://localhost:3001').replace(/\/$/, '');
+            return isSafeHttpUrl(url) ? url : 'http://localhost:3001';
         }
         
         function loadLocalEnterpriseStore() {
@@ -3153,29 +3489,47 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             }
         }
         
-        function enterpriseLocalCreate(body) {
+        async function enterpriseLocalCreate(body) {
             const store = loadLocalEnterpriseStore();
             const code = normalizeEnterpriseCode(body.code);
             if (store.groups[code]) throw new Error('此群組代碼已存在');
             const managerId = 'm_' + Date.now();
             store.groups[code] = {
-                code, name: body.name || '未命名團隊', managerPin: body.managerPin || '0000',
-                members: [{ id: managerId, name: body.managerName, role: 'manager', joinedAt: new Date().toISOString() }],
+                code,
+                name: clampText(body.name || '未命名團隊', 80),
+                managerPinHash: await hashPin(body.managerPin || '0000'),
+                members: [{
+                    id: managerId,
+                    name: clampText(body.managerName, 80),
+                    role: 'manager',
+                    joinedAt: new Date().toISOString()
+                }],
                 tasks: []
             };
             saveLocalEnterpriseStore(store);
             return { group: { code, name: store.groups[code].name }, member: store.groups[code].members[0] };
         }
         
-        function enterpriseLocalJoin(body) {
+        async function enterpriseLocalJoin(body) {
             const store = loadLocalEnterpriseStore();
             const code = normalizeEnterpriseCode(body.code);
             const group = store.groups[code];
             if (!group) throw new Error('找不到此群組代碼');
-            if (body.role === 'manager' && body.pin !== group.managerPin) throw new Error('主管金鑰錯誤');
+            if (body.role === 'manager' && !(await verifyLocalManagerPin(group, body.pin))) {
+                throw new Error('主管金鑰錯誤');
+            }
+            if (group.managerPin !== undefined && !group.managerPinHash) {
+                group.managerPinHash = await hashPin(group.managerPin);
+                delete group.managerPin;
+            }
             const existing = group.members.find(m => m.name.toLowerCase() === body.name.toLowerCase());
             if (existing) return { group: { code, name: group.name }, member: existing };
-            const member = { id: 'u_' + Date.now(), name: body.name, role: body.role || 'member', joinedAt: new Date().toISOString() };
+            const member = {
+                id: 'u_' + Date.now(),
+                name: clampText(body.name, 80),
+                role: body.role || 'member',
+                joinedAt: new Date().toISOString()
+            };
             group.members.push(member);
             saveLocalEnterpriseStore(store);
             return { group: { code, name: group.name }, member };
@@ -3274,7 +3628,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                 result = api.data;
             } else {
                 try {
-                    result = { ok: true, ...enterpriseLocalCreate(payload) };
+                    result = { ok: true, ...(await enterpriseLocalCreate(payload)) };
                     showToast('已建立群組（本機離線模式）', 'success');
                 } catch (e) {
                     return showToast(e.message, 'error');
@@ -3311,7 +3665,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                 result = api.data;
             } else {
                 try {
-                    result = { ok: true, ...enterpriseLocalJoin(payload) };
+                    result = { ok: true, ...(await enterpriseLocalJoin(payload)) };
                     showToast('已加入群組（本機離線模式）', 'success');
                 } catch (e) {
                     return showToast(e.message, 'error');
@@ -3340,8 +3694,14 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             showToast('已離開群組', 'success');
         }
         
-        async function refreshEnterpriseData() {
+        async function refreshEnterpriseData(force = false) {
             if (!enterpriseSession) return;
+            
+            const now = Date.now();
+            if (!force && enterpriseGroupData && (now - enterpriseDataFetchedAt) < ENTERPRISE_FETCH_TTL_MS) {
+                renderEnterpriseTasks();
+                return;
+            }
             
             const code = enterpriseSession.groupCode;
             const api = await enterpriseFetch('GET', `/api/enterprise/group/${code}`);
@@ -3356,6 +3716,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                     return;
                 }
             }
+            enterpriseDataFetchedAt = Date.now();
             renderEnterpriseTasks();
         }
         
@@ -3412,10 +3773,11 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             const progressEl = document.getElementById('team-my-progress');
             
             const members = enterpriseGroupData.members || [];
-            const tasks = enterpriseGroupData.tasks || [];
+            const groupTasks = enterpriseGroupData.tasks || [];
+            const syncedIds = buildSyncedEnterpriseIdSet();
             
-            const totalTasks = tasks.length;
-            const doneTasks = tasks.filter(t => t.completed).length;
+            const totalTasks = groupTasks.length;
+            const doneTasks = groupTasks.filter(t => t.completed).length;
             const rate = totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0;
             
             const statMembers = document.getElementById('team-stat-members');
@@ -3438,7 +3800,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                     .join('') || '<option value="">（尚無成員，請邀請同事加入）</option>';
             }
             
-            const myTasks = tasks.filter(t => t.assigneeId === enterpriseSession.memberId);
+            const myTasks = groupTasks.filter(t => t.assigneeId === enterpriseSession.memberId);
             const done = myTasks.filter(t => t.completed).length;
             const myRate = myTasks.length ? Math.round((done / myTasks.length) * 100) : 0;
             
@@ -3466,12 +3828,12 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                             <div class="text-xs text-slate-600 mt-1">完成後主管會即時看到更新</div>
                         </div>`;
                 } else {
-                    myTasksEl.innerHTML = myTasks.map(t => renderEnterpriseTaskRow(t, true)).join('');
+                    myTasksEl.innerHTML = myTasks.map(t => renderEnterpriseTaskRow(t, true, syncedIds)).join('');
                 }
             }
             
             if (overviewBody && enterpriseSession.role === 'manager') {
-                if (tasks.length === 0) {
+                if (groupTasks.length === 0) {
                     overviewBody.innerHTML = `
                         <tr><td colspan="4">
                             <div class="empty-state py-8">
@@ -3481,7 +3843,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                             </div>
                         </td></tr>`;
                 } else {
-                    overviewBody.innerHTML = tasks.map(t => `
+                    overviewBody.innerHTML = groupTasks.map(t => `
                         <tr>
                             <td class="px-4 py-3 font-medium">${escapeHtml(t.title)}</td>
                             <td class="px-4 py-3">
@@ -3502,8 +3864,8 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             }
         }
         
-        function renderEnterpriseTaskRow(task, canToggle) {
-            const synced = tasks.some(t => t.enterpriseTaskId === task.id);
+        function renderEnterpriseTaskRow(task, canToggle, syncedIds) {
+            const synced = syncedIds ? syncedIds.has(task.id) : buildSyncedEnterpriseIdSet().has(task.id);
             return `
                 <div class="task-row ${task.completed ? 'task-row-done' : ''}">
                     <input type="checkbox" ${task.completed ? 'checked' : ''} ${canToggle ? `onchange="toggleEnterpriseTask('${task.id}', this.checked)"` : 'disabled'}
@@ -3619,10 +3981,11 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             stopEnterprisePolling();
             if (!enterpriseSession) return;
             enterprisePollTimer = setInterval(() => {
-                if (document.getElementById('team')?.classList.contains('active')) {
+                if (document.visibilityState !== 'visible') return;
+                if ($('team')?.classList.contains('active')) {
                     refreshEnterpriseData();
                 }
-            }, 8000);
+            }, ENTERPRISE_POLL_INTERVAL_MS);
         }
         
         function stopEnterprisePolling() {
@@ -3724,7 +4087,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             
             if (iconEl) {
                 iconEl.className = 'onboarding-icon ' + step.iconBg;
-                iconEl.innerHTML = `<i class="fa-solid ${step.icon}"></i>`;
+                iconEl.innerHTML = `<i class="fa-solid ${sanitizeFaIcon(step.icon)}"></i>`;
             }
             if (titleEl) titleEl.textContent = step.title;
             if (descEl) descEl.textContent = step.desc;
@@ -3855,12 +4218,14 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             }
         }
         
-        function updateNextStepCard() {
-            const el = document.getElementById('next-step-card');
+        function updateNextStepCard(stats) {
+            const el = $('next-step-card');
             if (!el) return;
             
-            const todayPending = getTodayPendingTasks();
-            const futurePending = getFuturePendingTasks();
+            stats = stats || getTodayStats();
+            const todayPending = stats.pending;
+            const futurePending = stats.futurePending;
+            const scoreCtx = getScoringContext();
             
             if (tasks.length === 0) {
                 el.innerHTML = `<div class="next-step-label">開始使用</div>
@@ -3886,8 +4251,8 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                 return;
             }
             
-            const top = todayPending.sort((a, b) => scoreTaskForNextStep(b) - scoreTaskForNextStep(a))[0];
-            const reason = top.wasOverdue ? '延後任務優先' : (top.duration <= 25 ? '短任務易啟動' : (top.category === 'deep' ? '高效時段適合深度工作' : '依優先順序推薦'));
+            const top = rankTasksByNextStepScore(todayPending, scoreCtx)[0];
+            const reason = getNextStepReason(top);
             el.innerHTML = `
                 <div class="next-step-label">建議先做這件事 <span class="text-slate-500 font-normal">（今日 ${todayPending.length} 項待辦）</span></div>
                 <div class="font-semibold text-lg leading-snug">${escapeHtml(top.name)}</div>
@@ -3981,15 +4346,15 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                     switchSchedulerTab(schedulerTabPending);
                     schedulerTabPending = null;
                 }
-                renderTaskList();
-                const timeline = document.getElementById('timeline-view');
+                refreshUI({ scheduler: true, filters: true });
+                const timeline = $('timeline-view');
                 if (timeline && timeline.innerHTML.trim() === '') {
                     optimizeSchedule(true);
                 }
             }
             
             if (section === 'dashboard') {
-                updateDashboard();
+                refreshUI({ dashboard: true, filters: true });
             }
         }
         
@@ -4010,29 +4375,27 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
         
         // Update dashboard numbers and lists
         function updateDashboard() {
-            const todayRelevant = getTodayRelevantTasks();
-            const todayCompleted = todayRelevant.filter(t => t.completed).length;
+            invalidateTodayStats();
+            const stats = getTodayStats();
+            const scoreCtx = getScoringContext();
+            const todayRelevant = stats.relevant;
             const todayTotal = todayRelevant.length || 1;
             const firstName = userProfile.name.split(' ')[0] || userProfile.name;
-            const todayRate = getTodayCompletionRate();
             const weekScore = Math.round(weeklyScores.reduce((a, b) => a + b, 0) / weeklyScores.length);
             
             setElText('greeting-text', `${getGreeting()}，${firstName}`);
             
-            const summaryEl = document.getElementById('today-summary');
-            const futureCount = getFuturePendingTasks().length;
+            const summaryEl = $('today-summary');
             if (summaryEl) {
-                const futureNote = futureCount > 0 ? ` · 之後 ${futureCount} 項` : '';
-                summaryEl.textContent = `${formatDateTW()} · 今日 ${todayCompleted}/${todayRelevant.length} 項（${todayRate}%）${futureNote} · 連續 ${userProfile.streak} 天 · 本週 ${weekScore} 分`;
+                const futureNote = stats.futureCount > 0 ? ` · 之後 ${stats.futureCount} 項` : '';
+                summaryEl.textContent = `${formatDateTW()} · 今日 ${stats.completed}/${todayRelevant.length} 項（${stats.rate}%）${futureNote} · 連續 ${userProfile.streak} 天 · 本週 ${weekScore} 分`;
             }
             
-            setElText('tasks-completed', todayCompleted);
+            setElText('tasks-completed', stats.completed);
             setElText('tasks-total', todayTotal);
+            setElText('focus-time', (stats.focusMinutes / 60).toFixed(1));
             
-            const focusMinutes = getTodayFocusMinutes();
-            setElText('focus-time', (focusMinutes / 60).toFixed(1));
-            
-            const comparison = getFocusComparisonText();
+            const comparison = getFocusComparisonText(stats.focusMinutes);
             const compEl = document.getElementById('focus-comparison');
             if (compEl) {
                 const icon = comparison.positive === true ? 'fa-arrow-trend-up text-emerald-400'
@@ -4042,7 +4405,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                 compEl.innerHTML = `<i class="fa-solid ${icon}"></i><span>${comparison.text}</span>`;
             }
             
-            const completionPercent = todayRelevant.length > 0 ? Math.round((todayCompleted / todayRelevant.length) * 100) : 0;
+            const completionPercent = todayRelevant.length > 0 ? stats.rate : 0;
             setElStyle('completion-bar', 'width', completionPercent + '%');
             
             setElText('streak', userProfile.streak);
@@ -4054,50 +4417,28 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             
             setElText('dash-peak-time', `${userProfile.peakStart || '09:00'} - ${userProfile.peakEnd || '12:30'}`);
             
-            const pendingHighEnergy = tasks.filter(t => !t.completed && t.energy >= 4).length;
-            setElText('dash-peak-hint', pendingHighEnergy > 0
-                ? `有 ${pendingHighEnergy} 項高能量任務 • 今日完成 ${todayRate}%`
-                : `是你最高效時段 • 今日完成 ${todayRate}%`);
+            setElText('dash-peak-hint', stats.highEnergyPending > 0
+                ? `有 ${stats.highEnergyPending} 項高能量任務 • 今日完成 ${stats.rate}%`
+                : `是你最高效時段 • 今日完成 ${stats.rate}%`);
             setElText('best-streak', userProfile.bestStreak);
             
-            renderCategoryFilters();
-            
-            const container = document.getElementById('today-focus-list');
+            const container = $('today-focus-list');
             if (!container) return;
-            container.innerHTML = '';
             
-            const pending = getFilteredTasks(getTodayPendingTasks())
-                .sort((a, b) => scoreTaskForNextStep(b) - scoreTaskForNextStep(a))
-                .slice(0, 6);
+            const pending = getFilteredTasks(stats.pending);
+            const ranked = rankTasksByNextStepScore(pending, scoreCtx).slice(0, 6);
             
-            if (pending.length === 0) {
-                const futureHint = futureCount > 0
-                    ? `<span class="text-xs text-slate-500 mt-1">之後還有 ${futureCount} 項待辦，可到「任務」頁查看</span>`
+            if (ranked.length === 0) {
+                const futureHint = stats.futureCount > 0
+                    ? `<span class="text-xs text-slate-500 mt-1">之後還有 ${stats.futureCount} 項待辦，可到「任務」頁查看</span>`
                     : '';
                 container.innerHTML = `<div class="text-center py-4 text-emerald-400 flex flex-col items-center"><i class="fa-solid fa-check-circle text-3xl mb-2"></i><span class="text-sm">太棒了！今日任務已全部完成</span>${futureHint}</div>`;
             } else {
-                pending.forEach(task => {
-                    const div = document.createElement('div');
-                    div.className = `flex items-center justify-between px-4 py-3 bg-slate-950 border border-slate-700 rounded-2xl task-card group`;
-                    div.innerHTML = `
-                        <div class="flex items-center gap-x-3 flex-1 min-w-0">
-                            <input type="checkbox" onchange="toggleTaskComplete(${task.id}, this, true)" class="accent-indigo-500 w-4 h-4 cursor-pointer">
-                            <div class="min-w-0 flex-1">
-                                <div class="font-medium text-sm truncate">${escapeHtml(task.name)}</div>
-                                <div class="text-[10px] text-slate-500 flex flex-wrap items-center gap-1">${task.duration} 分鐘 • <span class="cat-badge ${getCategoryColor(task.category)}">${getCategoryLabel(task.category)}</span> ${renderTaskBadges(task)}</div>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-1">
-                            <button onclick="openTaskEdit(${task.id})" class="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-300 p-1.5 transition-opacity" title="編輯"><i class="fa-solid fa-pen text-xs"></i></button>
-                            <div class="text-xs px-3 py-1 rounded-xl bg-slate-800 text-slate-300 font-mono whitespace-nowrap">${task.due}</div>
-                        </div>
-                    `;
-                    container.appendChild(div);
-                });
+                container.innerHTML = ranked.map(t => renderPersonalTaskRow(t, 'dashboard')).join('');
             }
             
             renderActiveGoalsPanel();
-            updateNextStepCard();
+            updateNextStepCard(stats);
         }
         
         function askCoachAboutNextTask() {
@@ -4115,33 +4456,6 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             if (energy >= 4) return '高';
             if (energy >= 3) return '中';
             return '低';
-        }
-        
-        function renderUpcomingMini() {
-            const container = document.getElementById('upcoming-tasks');
-            if (!container) return;
-            container.innerHTML = '';
-            
-            const upcoming = [...tasks].filter(t => !t.completed).sort((a,b) => new Date(a.due) - new Date(b.due)).slice(0, 3);
-            
-            upcoming.forEach(task => {
-                const div = document.createElement('div');
-                div.className = `px-4 py-3 bg-slate-950 border border-slate-700 rounded-2xl text-sm flex flex-col justify-between h-full`;
-                div.innerHTML = `
-                    <div>
-                        <div class="font-medium line-clamp-2 leading-tight mb-1.5">${escapeHtml(task.name)}</div>
-                        <div class="flex items-center justify-between text-xs">
-                            <span class="text-slate-400">${task.duration}min</span>
-                            <span class="px-2 py-px rounded bg-slate-800 text-[10px]">${task.due}</span>
-                        </div>
-                    </div>
-                `;
-                container.appendChild(div);
-            });
-            
-            if (upcoming.length === 0) {
-                container.innerHTML = `<div class="col-span-3 text-center text-xs py-6 text-slate-400">目前沒有即將到期的任務</div>`;
-            }
         }
         
         // Quick add from dashboard
@@ -4165,14 +4479,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             input.value = '';
             
             showToast('任務已快速加入！', 'success');
-            updateDashboard();
-            renderTaskList();
-            
-            // If scheduler is open, refresh timeline hint
-            const schedulerEl = document.getElementById('scheduler');
-            if (schedulerEl?.classList.contains('active')) {
-                optimizeSchedule(true);
-            }
+            refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
         }
         
         function renderDecomposePlan(plan, source = '規則引擎') {
@@ -4460,13 +4767,8 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             // Clear inputs
             document.getElementById('task-name').value = '';
             
-            renderTaskList();
+            refreshUI({ scheduler: true, filters: true, schedule: true });
             showToast('任務已加入清單', 'success');
-            
-            // Auto refresh timeline if visible
-            if (document.getElementById('scheduler')?.classList.contains('active')) {
-                setTimeout(() => optimizeSchedule(true), 300);
-            }
         }
         
         function renderTaskList() {
@@ -4490,38 +4792,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                 return;
             }
             
-            filtered.forEach(task => {
-                const div = document.createElement('div');
-                div.className = `task-card flex items-center gap-x-3 px-4 py-3.5 bg-slate-950 border border-slate-700 rounded-2xl group ${task.completed ? 'opacity-60' : ''}`;
-                
-                div.innerHTML = `
-                    <input type="checkbox" ${task.completed ? 'checked' : ''} 
-                           onchange="toggleTaskComplete(${task.id}, this)"
-                           class="accent-indigo-500 w-[17px] h-[17px] cursor-pointer flex-shrink-0">
-                    
-                    <div class="flex-1 min-w-0">
-                        <div class="font-medium text-sm ${task.completed ? 'line-through text-slate-400' : ''}">${escapeHtml(task.name)}</div>
-                        <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs mt-0.5">
-                            <span class="font-mono text-slate-400">${task.duration} min</span>
-                            <span class="cat-badge ${getCategoryColor(task.category)}">${getCategoryLabel(task.category)}</span>
-                            <span class="px-2 py-px rounded text-[10px] ${getEnergyColor(task.energy)}">${getEnergyLabel(task.energy)}</span>
-                            <span class="text-slate-500">${task.due}</span>
-                            ${renderTaskBadges(task)}
-                        </div>
-                    </div>
-                    
-                    <div class="flex items-center gap-x-1 opacity-0 group-hover:opacity-100 transition-all">
-                        <button onclick="openTaskEdit(${task.id})" class="text-slate-400 hover:text-indigo-300 p-1.5" title="編輯任務"><i class="fa-solid fa-pen text-xs"></i></button>
-                        ${task.duration >= 60 && !task.completed ? `<button onclick="splitTask(${task.id})" class="text-indigo-400 hover:text-indigo-300 p-1.5" title="拆分任務"><i class="fa-solid fa-scissors text-xs"></i></button>` : ''}
-                        <button onclick="deleteTask(${task.id}, event)" class="text-red-400 hover:text-red-500 p-1.5">
-                            <i class="fa-solid fa-trash text-xs"></i>
-                        </button>
-                    </div>
-                `;
-                container.appendChild(div);
-            });
-            
-            renderCategoryFilters();
+            container.innerHTML = filtered.map(t => renderPersonalTaskRow(t, 'scheduler')).join('');
         }
         
         function getEnergyColor(energy) {
@@ -4538,19 +4809,20 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             task.completed = checkbox.checked;
             saveState();
             
-            updateDashboard();
-            if (!fromDashboard) renderTaskList();
-            
-            const schedulerActive = document.getElementById('scheduler')?.classList.contains('active');
-            if (schedulerActive) optimizeSchedule(true);
+            refreshUI({
+                dashboard: true,
+                scheduler: !fromDashboard,
+                filters: true,
+                schedule: true
+            });
             
             if (task.completed) {
                 showToast('太棒了！任務完成', 'success');
                 evaluateStreakOnComplete();
                 checkParentGoalComplete(task);
                 
-                const todayRelevant = getTodayRelevantTasks();
-                if (todayRelevant.length > 0 && todayRelevant.every(t => t.completed)) {
+                const stats = getTodayStats();
+                if (stats.relevant.length > 0 && stats.relevant.every(t => t.completed)) {
                     if (userProfile.enableConfetti !== false) triggerConfetti();
                     showToast('🎉 今日所有任務已完成！', 'success');
                 } else if (userProfile.enableConfetti !== false && Math.random() > 0.6) {
@@ -4577,8 +4849,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             );
             
             saveState();
-            renderTaskList();
-            optimizeSchedule(true);
+            refreshUI({ scheduler: true, filters: true, schedule: true });
             showToast('任務已拆分為兩部分，重新排程中', 'success');
         }
         
@@ -4588,17 +4859,14 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             
             tasks = tasks.filter(t => t.id !== taskId);
             saveState();
-            renderTaskList();
-            
-            const schedulerActive = document.getElementById('scheduler')?.classList.contains('active');
-            if (schedulerActive) optimizeSchedule(true);
+            refreshUI({ scheduler: true, filters: true, schedule: true });
         }
         
         function clearAllTasks() {
             if (!confirm('確定清空所有任務？')) return;
             tasks = [];
             saveState();
-            renderTaskList();
+            refreshUI({ scheduler: true, filters: true });
             setElHtml('timeline-view', '<div class="text-center text-xs py-8 text-slate-400">清空後請新增任務並點擊「AI 重新優化排程」</div>');
             setElText('total-scheduled-time', '0h 0m');
         }
@@ -4770,8 +5038,6 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
         }
         
         // AI Coach Chat
-        let chatHistory = [];
-        
         function initCoachChat() {
             const container = document.getElementById('chat-messages');
             if (!container) return;
@@ -4844,16 +5110,17 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                 response = generateCoachResponse(msg) + `<br><br><span class="text-amber-300 text-xs">（DeepSeek 暫不可用：${escapeHtml(err.message)}，已改用離線建議）</span>`;
             }
             
+            const safeResponse = sanitizeHtml(response);
             thinkingDiv.remove();
             const aiDiv = document.createElement('div');
             aiDiv.className = `flex gap-x-3`;
             aiDiv.innerHTML = `
                 <div class="w-8 h-8 rounded-2xl bg-gradient-to-br from-sky-400 to-indigo-500 flex-shrink-0 flex items-center justify-center text-xs">AI</div>
-                <div><div class="ai-bubble chat-bubble text-sm">${response}</div></div>
+                <div><div class="ai-bubble chat-bubble text-sm">${safeResponse}</div></div>
             `;
             container.appendChild(aiDiv);
             container.scrollTop = container.scrollHeight;
-            chatHistory.push({ role: 'assistant', content: response });
+            chatHistory.push({ role: 'assistant', content: safeResponse });
         }
         
         function getCoachContext() {
@@ -4923,11 +5190,27 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             };
         }
         
-        function refreshInsightsPage() {
-            updateInsightsCards();
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => initCharts());
+        function loadChartJs() {
+            if (typeof Chart !== 'undefined') return Promise.resolve();
+            if (chartJsLoadPromise) return chartJsLoadPromise;
+            chartJsLoadPromise = new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = CHART_JS_URL;
+                script.onload = resolve;
+                script.onerror = () => reject(new Error('Chart.js 載入失敗'));
+                document.head.appendChild(script);
             });
+            return chartJsLoadPromise;
+        }
+        
+        async function refreshInsightsPage() {
+            updateInsightsCards();
+            try {
+                await loadChartJs();
+                requestAnimationFrame(() => initCharts());
+            } catch (_) {
+                $('weekly-chart-fallback')?.classList.remove('hidden');
+            }
         }
         
         function updateInsightsCards() {
@@ -4946,8 +5229,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                     `深度工作佔比 ${dist.deep}%，${dist.deep > 35 ? '節奏良好' : '建議增加上午深度時段'}`);
             }
             if (improveEl) {
-                const dist = getTimeDistribution();
-                const deepPending = tasks.filter(t => !t.completed && (t.category || inferCategory(t.name, t.energy)) === 'deep').length;
+                const deepPending = tasks.filter(t => !t.completed && resolveCategory(t) === 'deep').length;
                 const meetingMins = tasks.filter(t => t.category === 'meeting').reduce((s, t) => s + t.duration, 0);
                 
                 if (deepPending > 2) {
@@ -4973,10 +5255,6 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             }
         }
         
-        // Charts
-        let weeklyChartInstance = null;
-        let pieChartInstance = null;
-        
         function initCharts() {
             const weeklyFallback = document.getElementById('weekly-chart-fallback');
             const pieFallback = document.getElementById('pie-chart-fallback');
@@ -4997,12 +5275,11 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             const weekAvg = Math.round(weeklyScores.reduce((a, b) => a + b, 0) / weeklyScores.length);
             if (weekAvgEl) weekAvgEl.innerText = weekAvg;
             
-            if (weeklyChartInstance) {
-                weeklyChartInstance.destroy();
-                weeklyChartInstance = null;
-            }
-            
             try {
+                if (weeklyChartInstance) {
+                    weeklyChartInstance.data.datasets[0].data = weeklyScores;
+                    weeklyChartInstance.update('none');
+                } else {
                 weeklyChartInstance = new Chart(weeklyCanvas.getContext('2d'), {
                     type: 'bar',
                     data: {
@@ -5034,14 +5311,10 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                         }
                     }
                 });
+                }
             } catch (err) {
                 console.error('[Lumina] weekly chart error:', err);
                 weeklyFallback?.classList.remove('hidden');
-            }
-            
-            if (pieChartInstance) {
-                pieChartInstance.destroy();
-                pieChartInstance = null;
             }
             
             const dist = getTimeDistribution();
@@ -5059,6 +5332,10 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             }
             
             try {
+                if (pieChartInstance) {
+                    pieChartInstance.data.datasets[0].data = pieData;
+                    pieChartInstance.update('none');
+                } else {
                 pieChartInstance = new Chart(pieCanvas.getContext('2d'), {
                     type: 'doughnut',
                     data: {
@@ -5090,13 +5367,14 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                         }
                     }
                 });
+                }
             } catch (err) {
                 console.error('[Lumina] pie chart error:', err);
                 pieFallback?.classList.remove('hidden');
             }
         }
         
-        function generateNewInsights() {
+        function recalculateInsights() {
             showToast('正在重新計算本週洞察...', 'success');
             
             recordDailySnapshot();
@@ -5112,7 +5390,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                 } else {
                     updateInsightsCards();
                 }
-                updateDashboard();
+                refreshUI({ dashboard: true, filters: true });
                 const msg = daysWithData > 0
                     ? `洞察已更新！本週平均完成率 ${avgScore}%`
                     : '洞察已更新！完成更多任務後數據會更準確';
@@ -5132,8 +5410,6 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             
             setTimeout(() => {
                 showSection('dashboard');
-                updateDashboard();
-                renderTaskList();
                 
                 // Show scheduler with optimized view
                 setTimeout(() => {
@@ -5177,23 +5453,33 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
         // Toast notifications
         function showToast(message, type = 'success') {
             const container = document.getElementById('toast-container');
+            if (!container) return;
             const toast = document.createElement('div');
             const icon = type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation';
             toast.className = `toast-item ${type === 'success' ? 'toast-success' : 'toast-error'}`;
-            toast.innerHTML = `
-                <i class="fa-solid ${icon} flex-shrink-0"></i>
-                <div class="flex-1 leading-snug">${message}</div>
-                <button class="opacity-70 hover:opacity-100 text-lg leading-none" onclick="this.parentElement.remove()" aria-label="關閉">×</button>
-            `;
+            toast.setAttribute('role', 'status');
+            
+            const iconEl = document.createElement('i');
+            iconEl.className = `fa-solid ${icon} flex-shrink-0`;
+            const textEl = document.createElement('div');
+            textEl.className = 'flex-1 leading-snug';
+            textEl.textContent = String(message);
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'opacity-70 hover:opacity-100 text-lg leading-none';
+            closeBtn.setAttribute('aria-label', '關閉');
+            closeBtn.textContent = '×';
+            closeBtn.addEventListener('click', () => toast.remove());
+            
+            toast.append(iconEl, textEl, closeBtn);
             container.appendChild(toast);
             setTimeout(() => { if (toast.parentElement) toast.remove(); }, 3200);
         }
         
         // Reset everything
         function resetAllData() {
-            if (!confirm('確定要重置所有資料嗎？這會清除任務與統計。')) return;
+            if (!confirm('確定要重置所有資料嗎？這會清除任務與統計（API Key 與基本設定會保留）。')) return;
             
-            localStorage.clear();
+            clearSensitiveLocalData();
             location.reload();
         }
         
@@ -5253,9 +5539,7 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
             applyTeamInviteFromUrl();
             
             try {
-                updateDashboard();
-                renderTaskList();
-                initCoachChat();
+                refreshUI({ dashboard: true, scheduler: true, filters: true });
             } catch (e) {
                 console.error('[Lumina] Dashboard init failed', e);
                 showToast('部分介面載入失敗，請重新整理頁面', 'error');
@@ -5272,8 +5556,8 @@ priority 只能是「高」「中」「低」。steps 4-8 個。`;
                 }
             }, 1200);
             
-            if (window._luminaRolledCount > 0) {
-                showToast(`${window._luminaRolledCount} 項延後任務已移至今日`, 'success');
+            if (rolledCountOnInit > 0) {
+                showToast(`${rolledCountOnInit} 項延後任務已移至今日`, 'success');
             }
             
             setTimeout(() => {
