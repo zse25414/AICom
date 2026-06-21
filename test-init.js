@@ -2,8 +2,10 @@ const fs = require('fs');
 const { JSDOM } = require('jsdom');
 
 let html = fs.readFileSync('lumina-ai.html', 'utf8');
-// Strip external scripts that block or fail in JSDOM
+const appJs = fs.readFileSync('js/lumina-app.js', 'utf8');
+// Strip external scripts; inline app bundle for JSDOM
 html = html.replace(/<script src="[^"]+"><\/script>\s*/g, '');
+html = html.replace('</body>', `<script>${appJs}</script>\n</body>`);
 
 const dom = new JSDOM(html, {
   runScripts: 'dangerously',

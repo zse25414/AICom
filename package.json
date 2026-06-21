@@ -1,0 +1,18 @@
+{
+  "name": "lumina-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "光流 AI Lumina — 個人生產力應用",
+  "scripts": {
+    "start": "http-server . -p 3456 -c-1 --cors",
+    "api": "node api-proxy.js",
+    "dev": "concurrently -n web,api -c blue,magenta \"npm run start\" \"npm run api\"",
+    "test": "node test-init.js",
+    "split-html": "node scripts/split-html.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "http-server": "^14.1.1",
+    "jsdom": "^26.1.0"
+  }
+}

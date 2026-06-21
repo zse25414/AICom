@@ -12,6 +12,8 @@
  *   GET  /api/enterprise/group/:code
  *   POST /api/enterprise/task/assign
  *   PATCH /api/enterprise/task/:id
+ *   GET  /api/enterprise/notifications?groupCode=&memberId=
+ *   PATCH /api/enterprise/notifications/read
  */
 
 const http = require('http');
@@ -125,6 +127,7 @@ function loadStore() {
             const store = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
             for (const group of Object.values(store.groups || {})) {
                 migrateGroupPin(group);
+                ensureNotifications(group);
             }
             return store;
         }
@@ -147,6 +150,36 @@ function normalizeCode(code) {
 function getGroup(store, code) {
     const key = normalizeCode(code);
     return store.groups[key] || null;
+}
+
+function ensureNotifications(group) {
+    if (!Array.isArray(group.notifications)) group.notifications = [];
+}
+
+function pushNotification(group, payload) {
+    ensureNotifications(group);
+    const note = {
+        id: uid(),
+        type: payload.type,
+        recipientId: payload.recipientId,
+        title: clampText(payload.title, 80) || '團隊通知',
+        message: clampText(payload.message, 300),
+        taskId: payload.taskId || null,
+        taskTitle: clampText(payload.taskTitle, 120),
+        actorId: payload.actorId || null,
+        actorName: clampText(payload.actorName, 80),
+        read: false,
+        createdAt: new Date().toISOString()
+    };
+    group.notifications.unshift(note);
+    if (group.notifications.length > 200) group.notifications.length = 200;
+    return note;
+}
+
+function parseQuery(req) {
+    const idx = (req.url || '').indexOf('?');
+    if (idx < 0) return new URLSearchParams();
+    return new URLSearchParams((req.url || '').slice(idx + 1));
 }
 
 function handleEnterprise(req, res, urlPath, method) {
@@ -181,7 +214,8 @@ function handleEnterprise(req, res, urlPath, method) {
                     role: 'manager',
                     joinedAt: new Date().toISOString()
                 }],
-                tasks: []
+                tasks: [],
+                notifications: []
             };
             saveStore(store);
 
@@ -246,15 +280,22 @@ function handleEnterprise(req, res, urlPath, method) {
         if (!group) {
             return sendJson(res, 404, { error: '找不到群組' });
         }
-        sendJson(res, 200, {
-            ok: true,
-            group: {
-                code: group.code,
-                name: group.name,
-                members: group.members,
-                tasks: group.tasks
-            }
-        });
+        ensureNotifications(group);
+        const query = parseQuery(req);
+        const memberId = query.get('memberId');
+        const payload = {
+            code: group.code,
+            name: group.name,
+            members: group.members,
+            tasks: group.tasks
+        };
+        if (memberId) {
+            payload.notifications = group.notifications
+                .filter(n => n.recipientId === memberId)
+                .slice(0, 50);
+            payload.unreadCount = payload.notifications.filter(n => !n.read).length;
+        }
+        sendJson(res, 200, { ok: true, group: payload });
         return;
     }
 
@@ -293,8 +334,31 @@ function handleEnterprise(req, res, urlPath, method) {
             };
 
             group.tasks.unshift(task);
+            const notifications = [];
+            if (assignee.id !== manager.id) {
+                notifications.push(pushNotification(group, {
+                    type: 'task_assigned',
+                    recipientId: assignee.id,
+                    title: '新任務指派',
+                    message: `${manager.name} 指派了「${title}」給你，截止 ${task.due}`,
+                    taskId: task.id,
+                    taskTitle: title,
+                    actorId: manager.id,
+                    actorName: manager.name
+                }));
+            }
+            notifications.push(pushNotification(group, {
+                type: 'task_assigned_confirm',
+                recipientId: manager.id,
+                title: '任務已指派',
+                message: `已將「${title}」指派給 ${assignee.name}，截止 ${task.due}`,
+                taskId: task.id,
+                taskTitle: title,
+                actorId: manager.id,
+                actorName: manager.name
+            }));
             saveStore(store);
-            sendJson(res, 200, { ok: true, task });
+            sendJson(res, 200, { ok: true, task, notifications });
         });
     }
 
@@ -315,13 +379,83 @@ function handleEnterprise(req, res, urlPath, method) {
             const canEdit = member.role === 'manager' || task.assigneeId === memberId;
             if (!canEdit) return sendJson(res, 403, { error: '無權限更新此任務' });
 
+            let notifications = [];
             if (typeof body.completed === 'boolean') {
+                const wasCompleted = !!task.completed;
                 task.completed = body.completed;
                 task.completedAt = body.completed ? new Date().toISOString() : null;
+                if (body.completed && !wasCompleted) {
+                    if (task.assignedById && task.assignedById !== memberId) {
+                        notifications.push(pushNotification(group, {
+                            type: 'task_completed',
+                            recipientId: task.assignedById,
+                            title: '任務已完成',
+                            message: `${member.name} 完成了「${task.title}」`,
+                            taskId: task.id,
+                            taskTitle: task.title,
+                            actorId: member.id,
+                            actorName: member.name
+                        }));
+                    }
+                    if (task.assigneeId === memberId && task.assigneeId !== task.assignedById) {
+                        notifications.push(pushNotification(group, {
+                            type: 'task_completed_confirm',
+                            recipientId: memberId,
+                            title: '任務已標記完成',
+                            message: `你已完成「${task.title}」，主管已收到通知`,
+                            taskId: task.id,
+                            taskTitle: task.title,
+                            actorId: member.id,
+                            actorName: member.name
+                        }));
+                    }
+                }
             }
 
             saveStore(store);
-            sendJson(res, 200, { ok: true, task });
+            sendJson(res, 200, { ok: true, task, notifications });
+        });
+    }
+
+    if (method === 'GET' && urlPath === '/api/enterprise/notifications') {
+        const query = parseQuery(req);
+        const code = normalizeCode(query.get('groupCode'));
+        const memberId = query.get('memberId');
+        const group = getGroup(store, code);
+        if (!group) return sendJson(res, 404, { error: '找不到群組' });
+        if (!memberId || !group.members.some(m => m.id === memberId)) {
+            return sendJson(res, 403, { error: '無效的成員' });
+        }
+        ensureNotifications(group);
+        const notifications = group.notifications
+            .filter(n => n.recipientId === memberId)
+            .slice(0, 50);
+        const unreadCount = notifications.filter(n => !n.read).length;
+        sendJson(res, 200, { ok: true, notifications, unreadCount });
+        return;
+    }
+
+    if (method === 'PATCH' && urlPath === '/api/enterprise/notifications/read') {
+        return readBody(req).then(body => {
+            const code = normalizeCode(body.groupCode);
+            const memberId = body.memberId;
+            const group = getGroup(store, code);
+            if (!group) return sendJson(res, 404, { error: '找不到群組' });
+            if (!memberId || !group.members.some(m => m.id === memberId)) {
+                return sendJson(res, 403, { error: '無效的成員' });
+            }
+            ensureNotifications(group);
+            const ids = Array.isArray(body.ids) ? body.ids : [];
+            let updated = 0;
+            for (const note of group.notifications) {
+                if (note.recipientId !== memberId) continue;
+                if (body.readAll || ids.includes(note.id)) {
+                    if (!note.read) updated++;
+                    note.read = true;
+                }
+            }
+            saveStore(store);
+            sendJson(res, 200, { ok: true, updated });
         });
     }
 
@@ -395,6 +529,8 @@ server.listen(PORT, () => {
     console.log(`  GET  /api/enterprise/group/:code  → 群組資料`);
     console.log(`  POST /api/enterprise/task/assign  → 指派任務`);
     console.log(`  PATCH /api/enterprise/task/:id    → 更新任務`);
+    console.log(`  GET  /api/enterprise/notifications → 團隊通知`);
+    console.log(`  PATCH /api/enterprise/notifications/read → 標記已讀`);
     console.log(`  Data file: ${DATA_FILE}`);
     console.log(`  Allowed origins: ${ALLOWED_ORIGINS.join(', ')}`);
     if (!API_KEY) console.warn('  ⚠️  DEEPSEEK_API_KEY not set (AI chat proxy disabled)');
