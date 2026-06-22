@@ -1,5 +1,11 @@
 node_modules/
 enterprise-data.json
+auth-users.json
+user-data.json
+uploads/
+rag_service/storage/
+rag_service/.cache/
+rag_service/__pycache__/
 terminals/
 mcps/
 .env

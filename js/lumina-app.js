@@ -51,8 +51,162 @@ const coachPlans = new Map();
 
 // RAG Global States
 let ragServiceActive = false;
+let ragRetrievalMode = 'hybrid';
+let ragSyncedGroupKey = null;
+let userDataSyncTimer = null;
+const USER_DATA_SYNC_DELAY_MS = 800;
 let checkedRagKbs = ['general'];
 const RAG_SERVICE_URL = "http://127.0.0.1:8000";
+const RAG_KB_LABELS = {
+    general: '一般預設 (General)',
+    onboarding: '新人培訓 (Onboarding)',
+    specs: '開發規格 (Specs)',
+    meetings: '會議 SOP (Meetings)'
+};
+
+function getRagFilenameForDoc(doc) {
+    if (!doc) return '';
+    if (doc.filename) return doc.filename;
+    if (doc.title) return `text::${doc.title}.md`;
+    return '';
+}
+
+function getRagKbLabel(kbId) {
+    return RAG_KB_LABELS[kbId] || kbId;
+}
+
+async function syncDocumentToRag({ groupCode, kbId, docType, title, content, filename, fileData }, options = {}) {
+    if (!groupCode) return false;
+    const kb = kbId || 'general';
+    const ragFilename = filename || `text::${title}.md`;
+    const textContent = (content || '').trim();
+
+    try {
+        if (textContent) {
+            const res = await fetch(`${RAG_SERVICE_URL}/api/rag/document/upload-text`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    group_code: groupCode,
+                    kb_id: kb,
+                    title,
+                    content: textContent,
+                    filename: docType === 'text' ? `text::${title}.md` : ragFilename
+                })
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `RAG 文字索引失敗 (${res.status})`);
+            }
+        } else if (fileData && filename && (docType === 'pdf' || docType === 'excel')) {
+            const byteCharacters = atob(fileData);
+            const byteArray = new Uint8Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteArray[i] = byteCharacters.charCodeAt(i);
+            }
+            const mime = docType === 'pdf'
+                ? 'application/pdf'
+                : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+            const fileBlob = new Blob([byteArray], { type: mime });
+            const formData = new FormData();
+            formData.append('group_code', groupCode);
+            formData.append('kb_id', kb);
+            formData.append('file', fileBlob, filename);
+            const res = await fetch(`${RAG_SERVICE_URL}/api/rag/document/upload`, {
+                method: 'POST',
+                body: formData
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `RAG 檔案索引失敗 (${res.status})`);
+            }
+        } else {
+            throw new Error('沒有可索引的文件內容');
+        }
+
+        console.log(`[Lumina RAG] 已索引：${title} (${kb})`);
+        if (options.toastOnSuccess) showToast(`已同步至 RAG：${title}`, 'success');
+        return true;
+    } catch (e) {
+        console.warn('[Lumina RAG] 文件索引同步失敗:', e.message);
+        if (options.toastOnError) showToast(`RAG 索引失敗：${e.message}`, 'error');
+        return false;
+    }
+}
+
+async function reindexEnterpriseDocumentsToRag(options = {}) {
+    if (!enterpriseSession || !enterpriseGroupData?.documents?.length) return { ok: 0, fail: 0 };
+
+    let ok = 0;
+    let fail = 0;
+    for (const doc of enterpriseGroupData.documents) {
+        const synced = await syncDocumentToRag({
+            groupCode: enterpriseSession.groupCode,
+            kbId: doc.kbId || 'general',
+            docType: doc.docType || 'text',
+            title: doc.title,
+            content: doc.content,
+            filename: getRagFilenameForDoc(doc)
+        });
+        if (synced) ok++;
+        else fail++;
+    }
+
+    if (options.toast && ok > 0) {
+        showToast(`已重新同步 ${ok} 份文件至 RAG 知識庫`, 'success');
+    }
+    if (options.toast && fail > 0) {
+        showToast(`${fail} 份文件同步 RAG 失敗，請稍後再試`, 'error');
+    }
+    if (ok > 0) await window.renderRagKbCheckboxes?.();
+    return { ok, fail };
+}
+
+async function ensureEnterpriseDocsInRag(options = {}) {
+    if (!enterpriseSession || !enterpriseGroupData?.documents?.length) return;
+    const syncKey = `${enterpriseSession.groupCode}:${enterpriseGroupData.documents.map(d => d.id).join(',')}`;
+    if (!options.force && ragSyncedGroupKey === syncKey) return;
+
+    try {
+        const res = await fetch(`${RAG_SERVICE_URL}/health`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.service !== 'lumina-rag-service') return;
+    } catch (_) {
+        return;
+    }
+
+    const result = await reindexEnterpriseDocumentsToRag(options);
+    if (result.ok > 0) ragSyncedGroupKey = syncKey;
+}
+
+async function deleteDocumentFromRag({ groupCode, kbId, filename }) {
+    if (!ragServiceActive || !groupCode || !filename) return;
+    try {
+        const formData = new FormData();
+        formData.append('group_code', groupCode);
+        formData.append('kb_id', kbId || 'general');
+        formData.append('filename', filename);
+        const res = await fetch(`${RAG_SERVICE_URL}/api/rag/document/delete`, {
+            method: 'POST',
+            body: formData
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `RAG 刪除失敗 (${res.status})`);
+        }
+        console.log('[Lumina RAG] 文件已從知識庫索引移除。');
+    } catch (e) {
+        console.warn('[Lumina RAG] 知識庫刪除同步失敗:', e.message);
+    }
+}
+
+async function fetchRagKbIds(groupCode) {
+    const res = await fetch(`${RAG_SERVICE_URL}/api/rag/kb/list?group_code=${encodeURIComponent(groupCode)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data.kb_ids) ? data.kb_ids : null;
+}
 const taskCoachPlans = new Map();
 let rolledCountOnInit = 0;
 let todayFocusTaskId = null;
@@ -307,7 +461,7 @@ function registerServiceWorker() {
     if (!('serviceWorker' in navigator) || window.location.protocol === 'file:') return;
     
     const swCode = `
-        const CACHE = 'lumina-v6';
+        const CACHE = 'lumina-v7';
         const PRECACHE = [
             'https://cdn.tailwindcss.com',
             'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
@@ -620,27 +774,49 @@ function isValidEmail(email) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function loadAuthUsers() {
-    try {
-        const raw = JSON.parse(localStorage.getItem(AUTH_USERS_KEY) || '{"users":{}}');
-        return raw && typeof raw.users === 'object' ? raw : { users: {} };
-    } catch (_) {
-        return { users: {} };
-    }
+function getAuthBaseUrl() {
+    return getEnterpriseBaseUrl();
 }
 
-function saveAuthUsers(store) {
-    localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(store));
+function getAuthHeaders(includeJson = true) {
+    const headers = {};
+    if (includeJson) headers['Content-Type'] = 'application/json';
+    try {
+        const session = JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || 'null');
+        if (session?.token) headers.Authorization = `Bearer ${session.token}`;
+    } catch (_) {}
+    return headers;
+}
+
+async function authApiRequest(path, options = {}) {
+    const res = await fetch(getAuthBaseUrl() + path, {
+        ...options,
+        headers: {
+            ...getAuthHeaders(options.body !== undefined),
+            ...(options.headers || {})
+        }
+    });
+    let data = {};
+    try {
+        data = await res.json();
+    } catch (_) {}
+    if (!res.ok) {
+        const err = new Error(data.error || '請求失敗');
+        err.status = res.status;
+        throw err;
+    }
+    return data;
 }
 
 function getAuthSession() {
     try {
         const session = JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || 'null');
         if (!session?.email) return null;
-        const store = loadAuthUsers();
-        const user = store.users[normalizeEmail(session.email)];
-        if (!user || user.id !== session.userId) return null;
-        return { session, user };
+        if (session.token && session.user?.id) {
+            if (session.userId && session.user.id !== session.userId) return null;
+            return { session, user: session.user };
+        }
+        return null;
     } catch (_) {
         return null;
     }
@@ -651,17 +827,26 @@ function isLoggedIn() {
 }
 
 function needsAuthGate() {
-    if (localStorage.getItem(AUTH_SESSION_KEY)) return false;
-    if (localStorage.getItem('lumina_profile')) return false;
+    const auth = getAuthSession();
+    if (auth?.session?.token) return false;
     return true;
 }
 
-function persistAuthSession(user) {
+function persistAuthSession(user, token) {
     localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({
+        token,
         userId: user.id,
         email: user.email,
+        user: {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role || '知識工作者',
+            createdAt: user.createdAt
+        },
         loggedInAt: new Date().toISOString()
     }));
+    localStorage.removeItem(AUTH_USERS_KEY);
 }
 
 function applyAuthUserToProfile(user, isNew = false) {
@@ -719,8 +904,81 @@ function updateAuthUI() {
     }
 }
 
-function finishAuth(user, isNew) {
-    persistAuthSession(user);
+function buildUserDataPayload() {
+    return {
+        tasks,
+        profile: userProfile,
+        dailyHistory,
+        weeklyScores,
+        updatedAt: new Date().toISOString()
+    };
+}
+
+function applyUserDataFromServer(data) {
+    if (!data) return;
+    if (Array.isArray(data.tasks)) {
+        tasks = data.tasks;
+        localStorage.setItem('lumina_tasks', JSON.stringify(tasks));
+        migrateTasks();
+    }
+    if (data.profile && typeof data.profile === 'object') {
+        userProfile = { ...userProfile, ...data.profile };
+        persistProfile();
+    }
+    if (data.dailyHistory && typeof data.dailyHistory === 'object') {
+        dailyHistory = data.dailyHistory;
+        saveDailyHistory();
+    }
+    if (Array.isArray(data.weeklyScores) && data.weeklyScores.length === 7) {
+        weeklyScores = data.weeklyScores;
+        localStorage.setItem('lumina_weekly', JSON.stringify(weeklyScores));
+    }
+    invalidateTodayStats();
+}
+
+async function syncUserDataToServer(options = {}) {
+    const auth = getAuthSession();
+    if (!auth?.session?.token) return;
+    const run = async () => {
+        try {
+            await authApiRequest('/api/user/data', {
+                method: 'PUT',
+                body: JSON.stringify(buildUserDataPayload())
+            });
+        } catch (e) {
+            console.warn('[Lumina] 個人資料同步失敗:', e.message);
+        }
+    };
+    if (options.immediate) return run();
+    clearTimeout(userDataSyncTimer);
+    userDataSyncTimer = setTimeout(run, USER_DATA_SYNC_DELAY_MS);
+}
+
+async function loadUserDataFromServer() {
+    const auth = getAuthSession();
+    if (!auth?.session?.token) return;
+    try {
+        const res = await authApiRequest('/api/user/data', { method: 'GET' });
+        const serverData = res.data;
+        let localTasks = [];
+        try {
+            localTasks = JSON.parse(localStorage.getItem('lumina_tasks') || '[]');
+        } catch (_) {}
+        const hasLocal = Array.isArray(localTasks) && localTasks.length > 0;
+        const hasServer = Array.isArray(serverData?.tasks) && serverData.tasks.length > 0;
+
+        if (hasServer) {
+            applyUserDataFromServer(serverData);
+        } else if (hasLocal) {
+            await syncUserDataToServer({ immediate: true });
+        }
+    } catch (e) {
+        console.warn('[Lumina] 個人資料雲端載入失敗:', e.message);
+    }
+}
+
+async function finishAuth(user, isNew, token) {
+    persistAuthSession(user, token);
     applyAuthUserToProfile(user, isNew);
     if (isNew) {
         tasks = [];
@@ -728,6 +986,7 @@ function finishAuth(user, isNew) {
         localStorage.removeItem('lumina_onboarding_v2');
         localStorage.removeItem('lumina_welcomed');
     }
+    await loadUserDataFromServer();
     hideAuthOverlay();
     updateAuthUI();
     refreshUI({ dashboard: true, filters: true });
@@ -766,29 +1025,21 @@ async function handleRegister(e) {
         return;
     }
     
-    const store = loadAuthUsers();
-    if (store.users[email]) {
-        if (errEl) errEl.textContent = '此電子郵件已註冊，請直接登入';
-        switchAuthTab('login');
-        document.getElementById('auth-login-email').value = email;
-        return;
-    }
-    
     if (btn) btn.disabled = true;
     try {
-        const user = {
-            id: (crypto.randomUUID && crypto.randomUUID()) || Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
-            email,
-            name,
-            role,
-            passwordHash: await hashPassword(password),
-            createdAt: new Date().toISOString()
-        };
-        store.users[email] = user;
-        saveAuthUsers(store);
-        finishAuth(user, true);
+        const data = await authApiRequest('/api/auth/register', {
+            method: 'POST',
+            body: JSON.stringify({ name, email, role, password })
+        });
+        finishAuth(data.user, true, data.token);
     } catch (err) {
-        if (errEl) errEl.textContent = err.message || '註冊失敗，請稍後再試';
+        if (err.status === 409) {
+            if (errEl) errEl.textContent = err.message || '此電子郵件已註冊，請直接登入';
+            switchAuthTab('login');
+            document.getElementById('auth-login-email').value = email;
+            return;
+        }
+        if (errEl) errEl.textContent = err.message || '註冊失敗，請確認 API 服務已啟動';
     } finally {
         if (btn) btn.disabled = false;
     }
@@ -812,23 +1063,15 @@ async function handleLogin(e) {
         return;
     }
     
-    const store = loadAuthUsers();
-    const user = store.users[email];
-    if (!user) {
-        if (errEl) errEl.textContent = '找不到此帳號，請先註冊';
-        return;
-    }
-    
     if (btn) btn.disabled = true;
     try {
-        const hash = await hashPassword(password);
-        if (hash !== user.passwordHash) {
-            if (errEl) errEl.textContent = '密碼錯誤，請再試一次';
-            return;
-        }
-        finishAuth(user, false);
+        const data = await authApiRequest('/api/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ email, password })
+        });
+        finishAuth(data.user, false, data.token);
     } catch (err) {
-        if (errEl) errEl.textContent = err.message || '登入失敗，請稍後再試';
+        if (errEl) errEl.textContent = err.message || '登入失敗，請確認 API 服務已啟動';
     } finally {
         if (btn) btn.disabled = false;
     }
@@ -841,20 +1084,34 @@ function handleLogout() {
     hideAuthOverlay();
     updateAuthUI();
     showToast('已登出', 'success');
-    if (needsAuthGate()) showAuthOverlay('login');
+    showAuthOverlay('login');
 }
 
 function openUserMenu() {
-    if (isLoggedIn() || localStorage.getItem('lumina_profile')) {
+    if (isLoggedIn()) {
         showSection('settings');
         return;
     }
     showAuthOverlay('login');
 }
 
-function checkAuthOnInit() {
+async function checkAuthOnInit() {
     const auth = getAuthSession();
-    if (auth) applyAuthUserToProfile(auth.user, false);
+    if (auth?.session?.token) {
+        try {
+            const data = await authApiRequest('/api/auth/me', { method: 'GET' });
+            if (data.user) {
+                persistAuthSession(data.user, auth.session.token);
+                applyAuthUserToProfile(data.user, false);
+                await loadUserDataFromServer();
+                updateAuthUI();
+                refreshUI({ dashboard: true, filters: true });
+                return;
+            }
+        } catch (_) {
+            localStorage.removeItem(AUTH_SESSION_KEY);
+        }
+    }
     updateAuthUI();
     if (needsAuthGate()) showAuthOverlay('register');
 }
@@ -1348,16 +1605,14 @@ function isGenericCoachFallback(reply) {
 async function coachAgentRespondWithAI(userMsg, task, session) {
     if (ragServiceActive && checkedRagKbs.length > 0 && enterpriseSession) {
         try {
-            const apiKey = (localStorage.getItem('lumina_api_key') || '').trim();
             const payload = {
                 query: userMsg,
                 group_code: enterpriseSession.groupCode,
                 kb_ids: checkedRagKbs,
-                openai_api_key: apiKey,
-                deepseek_api_key: apiKey
+                ...getRagLlmCredentials()
             };
             
-            const response = await fetch(`${RAG_SERVICE_URL}/api/rag/query`, {
+            const response = await fetch(getRagQueryUrl(), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -1365,6 +1620,7 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
             
             if (response.ok) {
                 const data = await response.json();
+                if (data.retrieval_mode) ragRetrievalMode = data.retrieval_mode;
                 let reply = data.answer || '';
                 
                 // Add Claude-style options to the reply if they are not generated
@@ -1881,13 +2137,53 @@ function loadState() {
     }
     
     document.getElementById('settings-api-mode')?.addEventListener('change', toggleApiModeFields);
+    migrateApiSettings();
     updateApiStatusBadge();
+}
+
+function hasStoredApiKey() {
+    return !!getStoredApiKey();
+}
+
+function migrateApiSettings() {
+    if (hasStoredApiKey() && !userProfile.apiEnabled && userProfile.apiMode !== 'proxy') {
+        userProfile.apiEnabled = true;
+        persistProfile();
+    }
+}
+
+function getStoredApiKey() {
+    return (localStorage.getItem('lumina_api_key') || '').trim();
+}
+
+function getDeepSeekClientCredentials() {
+    if (!userProfile.apiEnabled) return {};
+    if (userProfile.apiMode === 'proxy') return {};
+    const apiKey = getStoredApiKey();
+    if (!apiKey) return {};
+    return {
+        deepseek_api_key: apiKey,
+        api_base: 'https://api.deepseek.com/v1'
+    };
+}
+
+function getRagLlmCredentials() {
+    const apiKey = getStoredApiKey();
+    if (!apiKey) return {};
+    return {
+        deepseek_api_key: apiKey,
+        api_base: 'https://api.deepseek.com/v1'
+    };
+}
+
+function getRagQueryUrl() {
+    return getEnterpriseBaseUrl() + '/api/rag/query';
 }
 
 function isApiReady() {
     if (!userProfile.apiEnabled) return false;
     if (userProfile.apiMode === 'proxy') return !!userProfile.apiProxyUrl;
-    return !!(localStorage.getItem('lumina_api_key') || '').trim();
+    return hasStoredApiKey();
 }
 
 function updateApiStatusBadge() {
@@ -1896,6 +2192,9 @@ function updateApiStatusBadge() {
     if (isApiReady()) {
         badge.textContent = userProfile.apiMode === 'proxy' ? '代理模式' : 'DeepSeek 已啟用';
         badge.className = 'text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300';
+    } else if (hasStoredApiKey() && !userProfile.apiEnabled) {
+        badge.textContent = '已填 Key，請啟用開關';
+        badge.className = 'text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300';
     } else {
         badge.textContent = '未啟用（使用規則引擎）';
         badge.className = 'text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400';
@@ -2585,8 +2884,13 @@ ${contextBlock}
 
 async function testApiConnection() {
     const keyInput = document.getElementById('settings-api-key').value.trim();
-    if (keyInput) localStorage.setItem('lumina_api_key', keyInput);
-    userProfile.apiEnabled = document.getElementById('settings-api-enabled').checked;
+    if (keyInput) {
+        localStorage.setItem('lumina_api_key', keyInput);
+        userProfile.apiEnabled = true;
+        document.getElementById('settings-api-enabled').checked = true;
+    } else {
+        userProfile.apiEnabled = document.getElementById('settings-api-enabled').checked;
+    }
     userProfile.apiMode = document.getElementById('settings-api-mode').value;
     userProfile.apiProxyUrl = document.getElementById('settings-api-proxy').value.trim();
     userProfile.apiModel = document.getElementById('settings-api-model').value;
@@ -2655,7 +2959,11 @@ function saveSettings() {
     userProfile.enterpriseApiUrl = enterpriseUrl;
     
     const apiKey = document.getElementById('settings-api-key').value.trim();
-    if (apiKey) localStorage.setItem('lumina_api_key', apiKey);
+    if (apiKey) {
+        localStorage.setItem('lumina_api_key', apiKey);
+        userProfile.apiEnabled = true;
+        document.getElementById('settings-api-enabled').checked = true;
+    }
     
     saveState();
     refreshUI({ dashboard: true, filters: true });
@@ -2745,6 +3053,7 @@ function saveState(opts = {}) {
     persistProfile();
     persistAnalytics(immediateAnalytics);
     invalidateTodayStats();
+    syncUserDataToServer();
 }
 
 function getEnterpriseBaseUrl() {
@@ -2773,7 +3082,10 @@ async function enterpriseFetch(method, path, body) {
     try {
         const res = await fetch(url, {
             method,
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                ...getAuthHeaders(!!body),
+                ...(body ? { 'Content-Type': 'application/json' } : {})
+            },
             body: body ? JSON.stringify(body) : undefined
         });
         const data = await res.json();
@@ -3341,6 +3653,9 @@ async function refreshEnterpriseData(force = false) {
     }
     enterpriseDataFetchedAt = Date.now();
     renderEnterpriseTasks();
+    if (enterpriseGroupData?.documents?.length) {
+        ensureEnterpriseDocsInRag();
+    }
 }
 
 function renderEnterprisePage() {
@@ -3776,6 +4091,16 @@ async function saveTeamDocument() {
             group.documents.unshift(newDoc);
             saveLocalEnterpriseStore(store);
             ok = true;
+            await syncDocumentToRag({
+                groupCode: enterpriseSession.groupCode,
+                kbId,
+                docType,
+                title,
+                content,
+                filename,
+                fileData
+            }, { toastOnError: true });
+            ragSyncedGroupKey = null;
         } catch (e) {
             showToast('本機保存失敗: ' + e.message, 'error');
         }
@@ -3785,34 +4110,16 @@ async function saveTeamDocument() {
             ok = true;
             newDoc = res.data.document;
             
-            // Sync with backend Python RAG pipeline if running
-            if (ragServiceActive && (docType === 'pdf' || docType === 'excel')) {
-                try {
-                    const apiKey = (localStorage.getItem('lumina_api_key') || '').trim();
-                    const byteCharacters = atob(fileData);
-                    const byteNumbers = new Array(byteCharacters.length);
-                    for (let i = 0; i < byteCharacters.length; i++) {
-                        byteNumbers[i] = byteCharacters.charCodeAt(i);
-                    }
-                    const byteArray = new Uint8Array(byteNumbers);
-                    const fileBlob = new Blob([byteArray], { type: docType === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-                    
-                    const formData = new FormData();
-                    formData.append('group_code', enterpriseSession.groupCode);
-                    formData.append('kb_id', kbId);
-                    formData.append('openai_api_key', apiKey);
-                    formData.append('deepseek_api_key', apiKey);
-                    formData.append('file', fileBlob, filename);
-                    
-                    await fetch(`${RAG_SERVICE_URL}/api/rag/document/upload`, {
-                        method: 'POST',
-                        body: formData
-                    });
-                    console.log('[Lumina RAG] Document successfully indexed in RAG backend.');
-                } catch (ragErr) {
-                    console.warn('[Lumina RAG] Failed to index document in RAG service:', ragErr.message);
-                }
-            }
+            await syncDocumentToRag({
+                groupCode: enterpriseSession.groupCode,
+                kbId,
+                docType,
+                title,
+                content,
+                filename,
+                fileData
+            }, { toastOnError: true });
+            ragSyncedGroupKey = null;
         } else {
             showToast('發布失敗: ' + res.error, 'error');
         }
@@ -3881,25 +4188,12 @@ async function deleteTeamDocument(docId) {
     if (ok) {
         showToast('文件已成功刪除', 'success');
         
-        // Sync document deletion with RAG backend
-        if (ragServiceActive && docToDelete && docToDelete.filename) {
-            try {
-                const apiKey = (localStorage.getItem('lumina_api_key') || '').trim();
-                const formData = new FormData();
-                formData.append('group_code', enterpriseSession.groupCode);
-                formData.append('kb_id', docToDelete.kbId || 'general');
-                formData.append('filename', docToDelete.filename);
-                formData.append('openai_api_key', apiKey);
-                formData.append('deepseek_api_key', apiKey);
-                
-                await fetch(`${RAG_SERVICE_URL}/api/rag/document/delete`, {
-                    method: 'POST',
-                    body: formData
-                });
-                console.log('[Lumina RAG] Document deleted from RAG backend index.');
-            } catch (ragErr) {
-                console.warn('[Lumina RAG] Failed to delete document from RAG service:', ragErr.message);
-            }
+        if (ragServiceActive && docToDelete) {
+            await deleteDocumentFromRag({
+                groupCode: enterpriseSession.groupCode,
+                kbId: docToDelete.kbId || 'general',
+                filename: getRagFilenameForDoc(docToDelete)
+            });
         }
         
         refreshEnterpriseData();
@@ -5402,9 +5696,9 @@ function getCoachWorkspace() {
 function renderCoachAgentThread(thinking) {
     const el = document.getElementById('coach-agent-thread');
     if (!el) return;
-    const recent = coachAgentMessages.slice(-5);
+    const recent = coachAgentMessages.slice(-12);
     if (!recent.length && !thinking) {
-        el.innerHTML = '<div class="coach-agent-thread-hint">教練會在這裡回應你，帶你一步一步做</div>';
+        el.innerHTML = '<div class="coach-agent-thread-hint"><i class="fa-solid fa-bolt text-sky-500/60 text-2xl mb-3 block"></i>教練會在這裡回應你<br>帶你一步一步完成任務</div>';
         return;
     }
     const thinkingLabel = thinking === 'deepseek' ? 'DeepSeek 回覆中'
@@ -5427,17 +5721,18 @@ function renderCoachAgentThread(thinking) {
         let sourcesHtml = '';
         if (m.sources && m.sources.length > 0) {
             sourcesHtml = `
-                <div class="mt-2.5 pt-2 border-t border-slate-800/80 text-[10px] text-slate-500">
-                    <div class="font-medium text-slate-400 mb-1 flex items-center gap-1">
+                <div class="mt-3 pt-2.5 border-t border-slate-800/80 text-xs text-slate-500">
+                    <div class="font-medium text-slate-400 mb-1.5 flex items-center gap-1.5">
                         <i class="fa-solid fa-list-check text-purple-400"></i>
-                        <span>資料來源引用：</span>
+                        <span>資料來源引用</span>
                     </div>
-                    <div class="flex flex-wrap gap-1.5 mt-1">
+                    <div class="flex flex-wrap gap-2 mt-1">
                         ${m.sources.map(s => `
-                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400">
-                                <span class="font-mono text-purple-400">[${s.ref_id}]</span> 
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-400">
+                                <span class="font-mono text-purple-400">[${s.ref_id}]</span>
+                                ${s.kb_id ? `<span class="text-indigo-400/80">${escapeHtml(getRagKbLabel(s.kb_id))}</span>` : ''}
                                 <span>${escapeHtml(s.filename)}</span>
-                                <span class="text-[9px] text-slate-600">(${Math.round(s.score * 100)}% 關聯)</span>
+                                <span class="text-[10px] text-slate-600">(${Math.round(s.score * 100)}%)</span>
                             </span>
                         `).join('')}
                     </div>
@@ -5447,14 +5742,14 @@ function renderCoachAgentThread(thinking) {
 
         html += `
             <div class="coach-agent-msg coach-agent-msg-${m.role}">
-                ${m.role === 'coach' ? '<i class="fa-solid fa-bolt text-sky-400 text-[10px] mt-0.5"></i>' : ''}
-                <div class="flex-1">
+                ${m.role === 'coach' ? '<i class="fa-solid fa-bolt text-sky-400"></i>' : ''}
+                <div class="flex-1 min-w-0">
                     <span>${escapeHtml(displayContent)}</span>
                     ${sourcesHtml}
                     ${(isLast && options.length > 0 && !thinking) ? `
-                        <div class="coach-agent-options flex flex-wrap gap-2 mt-2">
+                        <div class="coach-agent-options flex flex-wrap gap-2 mt-3">
                             ${options.map(opt => `
-                                <button type="button" onclick="sendCoachAgentMessage(this.dataset.msg)" data-msg="${escapeHtml(opt)}" class="px-2.5 py-1 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-300 text-[10px] font-medium hover:bg-sky-500/25 transition-colors cursor-pointer">${escapeHtml(opt)}</button>
+                                <button type="button" onclick="sendCoachAgentMessage(this.dataset.msg)" data-msg="${escapeHtml(opt)}" class="coach-agent-option-btn">${escapeHtml(opt)}</button>
                             `).join('')}
                         </div>
                     ` : ''}
@@ -6067,7 +6362,7 @@ function setupKeyboardShortcuts() {
 }
 
 // Initialize everything
-function initializeApp() {
+async function initializeApp() {
     if (typeof pdfjsLib !== 'undefined') {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     }
@@ -6078,7 +6373,7 @@ function initializeApp() {
     try { setupOfflineDetection(); } catch (e) { console.warn('[Lumina] Offline detection skipped', e); }
     
     loadState();
-    checkAuthOnInit();
+    await checkAuthOnInit();
     applyTeamInviteFromUrl();
     
     if (enterpriseSession) {
@@ -6144,12 +6439,14 @@ function initializeApp() {
             if (res.ok) {
                 const data = await res.json();
                 if (data.service === 'lumina-rag-service') {
+                    ragRetrievalMode = data.retrieval || ragRetrievalMode;
                     if (!ragServiceActive) {
                         ragServiceActive = true;
-                        console.log('[Lumina RAG] RAG 服務已連線，啟用智慧知識庫檢索。');
+                        console.log(`[Lumina RAG] 已連線 — 檢索模式：${data.retrieval || 'hybrid'}，Embedding：${data.embedding || 'local'}`);
                         document.getElementById('rag-kb-selector-wrap')?.classList.remove('hidden');
-                        window.renderRagKbCheckboxes();
+                        await ensureEnterpriseDocsInRag({ toast: true, force: true });
                     }
+                    await window.renderRagKbCheckboxes();
                     return;
                 }
             }
@@ -6162,21 +6459,26 @@ function initializeApp() {
         }
     };
 
-    window.renderRagKbCheckboxes = () => {
+    window.renderRagKbCheckboxes = async () => {
         const container = document.getElementById('rag-kb-checkboxes');
-        if (!container) return;
-        const kbs = [
-            { id: 'general', label: '一般預設 (General)' },
-            { id: 'onboarding', label: '新人培訓 (Onboarding)' },
-            { id: 'specs', label: '開發規格 (Specs)' },
-            { id: 'meetings', label: '會議 SOP (Meetings)' }
-        ];
+        if (!container || !enterpriseSession) return;
+
+        let kbIds = await fetchRagKbIds(enterpriseSession.groupCode).catch(() => null);
+        if (!kbIds || !kbIds.length) {
+            kbIds = Object.keys(RAG_KB_LABELS);
+        }
+
+        const available = new Set(kbIds);
+        const kbs = [...available].map(id => ({ id, label: getRagKbLabel(id) }));
+        checkedRagKbs = checkedRagKbs.filter(id => available.has(id));
+        if (!checkedRagKbs.length) checkedRagKbs = [kbs[0]?.id || 'general'];
+
         container.innerHTML = kbs.map(kb => {
             const checked = checkedRagKbs.includes(kb.id) ? 'checked' : '';
             return `
                 <label class="inline-flex items-center gap-1.5 cursor-pointer bg-slate-900 border border-slate-800 hover:border-slate-700/80 px-2 py-1 rounded-lg text-[10px] text-slate-300">
                     <input type="checkbox" name="rag-kb" value="${kb.id}" ${checked} onchange="window.onRagKbCheckboxChange()" class="accent-purple-500 w-3 h-3">
-                    <span>${kb.label}</span>
+                    <span>${escapeHtml(kb.label)}</span>
                 </label>
             `;
         }).join('');

@@ -6,9 +6,14 @@
   "scripts": {
     "start": "http-server . -p 3456 -c-1 --cors",
     "api": "node api-proxy.js",
-    "dev": "concurrently -n web,api -c blue,magenta \"npm run start\" \"npm run api\"",
+    "rag": "py -3.12 rag_service/main.py",
+    "dev": "concurrently -n web,api,rag -c blue,magenta,green \"npm run start\" \"npm run api\" \"npm run rag\"",
     "test": "node test-init.js",
     "split-html": "node scripts/split-html.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "mongodb": "^6.21.0"
   },
   "devDependencies": {
     "concurrently": "^9.2.0",
