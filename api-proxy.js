@@ -26,9 +26,13 @@ const API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
 const DATA_FILE = path.join(__dirname, 'enterprise-data.json');
 const PIN_SALT = process.env.PIN_SALT || 'lumina-pin-salt-change-in-production';
-const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES = 6 * 1024 * 1024; // 6 MB to support file uploads
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 120;
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3456,http://127.0.0.1:3456,http://localhost:3000,http://127.0.0.1:3000')
     .split(',')
@@ -287,7 +291,8 @@ function handleEnterprise(req, res, urlPath, method) {
             code: group.code,
             name: group.name,
             members: group.members,
-            tasks: group.tasks
+            tasks: group.tasks,
+            documents: group.documents || []
         };
         if (memberId) {
             payload.notifications = group.notifications
@@ -297,6 +302,96 @@ function handleEnterprise(req, res, urlPath, method) {
         }
         sendJson(res, 200, { ok: true, group: payload });
         return;
+    }
+
+    if (method === 'POST' && urlPath === '/api/enterprise/group/document/add') {
+        return readBody(req).then(body => {
+            const code = normalizeCode(body.groupCode);
+            const managerId = body.managerId;
+            const title = clampText(body.title, 100) || body.filename || '未命名文件';
+            const content = clampText(body.content, 10000);
+            const docType = clampText(body.docType, 10) || 'text';
+
+            const group = getGroup(store, code);
+            if (!group) return sendJson(res, 404, { error: '找不到群組' });
+
+            const manager = group.members.find(m => m.id === managerId && m.role === 'manager');
+            if (!manager) return sendJson(res, 403, { error: '僅主管可管理知識庫' });
+
+            if (docType === 'text' && (!title || !content)) {
+                return sendJson(res, 400, { error: '請輸入標題與內容' });
+            }
+            if (!title) {
+                return sendJson(res, 400, { error: '請輸入標題' });
+            }
+
+            let fileUrl = null;
+            if ((docType === 'pdf' || docType === 'image' || docType === 'excel') && body.fileData && body.filename) {
+                try {
+                    const fileBuffer = Buffer.from(body.fileData, 'base64');
+                    const ext = path.extname(body.filename) || (docType === 'pdf' ? '.pdf' : docType === 'excel' ? '.xlsx' : '.png');
+                    const uniqueFilename = `${uid()}-${path.basename(body.filename, ext)}${ext}`;
+                    const filePath = path.join(UPLOADS_DIR, uniqueFilename);
+                    fs.writeFileSync(filePath, fileBuffer);
+                    fileUrl = `/uploads/${uniqueFilename}`;
+                } catch (e) {
+                    return sendJson(res, 500, { error: '檔案儲存失敗: ' + e.message });
+                }
+            }
+
+            if (!group.documents) group.documents = [];
+            const doc = {
+                id: uid(),
+                title,
+                content, // represents extractedText or description for files
+                docType,
+                fileUrl,
+                filename: body.filename || null,
+                kbId: clampText(body.kbId, 30) || 'general',
+                author: manager.name,
+                createdAt: new Date().toISOString()
+            };
+            group.documents.unshift(doc);
+            saveStore(store);
+
+            sendJson(res, 200, { ok: true, document: doc });
+        });
+    }
+
+    if (method === 'POST' && urlPath === '/api/enterprise/group/document/delete') {
+        return readBody(req).then(body => {
+            const code = normalizeCode(body.groupCode);
+            const managerId = body.managerId;
+            const docId = body.documentId;
+
+            const group = getGroup(store, code);
+            if (!group) return sendJson(res, 404, { error: '找不到群組' });
+
+            const manager = group.members.find(m => m.id === managerId && m.role === 'manager');
+            if (!manager) return sendJson(res, 403, { error: '僅主管可管理知識庫' });
+
+            if (!group.documents) group.documents = [];
+            const index = group.documents.findIndex(d => d.id === docId);
+            if (index === -1) return sendJson(res, 404, { error: '找不到該文件' });
+
+            const doc = group.documents[index];
+            if (doc.fileUrl) {
+                try {
+                    const baseName = path.basename(doc.fileUrl);
+                    const filePath = path.join(UPLOADS_DIR, baseName);
+                    if (fs.existsSync(filePath)) {
+                        fs.unlinkSync(filePath);
+                    }
+                } catch (e) {
+                    console.warn('[Lumina Backend] 檔案刪除失敗:', e.message);
+                }
+            }
+
+            group.documents.splice(index, 1);
+            saveStore(store);
+
+            sendJson(res, 200, { ok: true });
+        });
     }
 
     if (method === 'POST' && urlPath === '/api/enterprise/task/assign') {

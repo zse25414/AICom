@@ -48,6 +48,11 @@ let chatHistory = [];
 let coachAgentMessages = [];
 let coachRequestInFlight = false;
 const coachPlans = new Map();
+
+// RAG Global States
+let ragServiceActive = false;
+let checkedRagKbs = ['general'];
+const RAG_SERVICE_URL = "http://127.0.0.1:8000";
 const taskCoachPlans = new Map();
 let rolledCountOnInit = 0;
 let todayFocusTaskId = null;
@@ -1180,8 +1185,8 @@ function getCoachTask() {
     return getCoachContext().nextTask;
 }
 
-function pushCoachAgentMessage(role, content) {
-    coachAgentMessages.push({ role, content, ts: Date.now() });
+function pushCoachAgentMessage(role, content, sources) {
+    coachAgentMessages.push({ role, content, ts: Date.now(), sources: sources || null });
     if (coachAgentMessages.length > 24) coachAgentMessages = coachAgentMessages.slice(-24);
     chatHistory.push({ role: role === 'coach' ? 'assistant' : 'user', content });
     if (chatHistory.length > 20) chatHistory = chatHistory.slice(-20);
@@ -1190,7 +1195,7 @@ function pushCoachAgentMessage(role, content) {
 function getOpeningCoachMessage(task, steps) {
     const s0 = steps[0];
     const total = steps.reduce((n, s) => n + parseStepMinutes(s), 0);
-    return `我來帶你完成「${task.name}」，分 ${steps.length} 步、約 ${total} 分鐘。\n\n現在：${s0.title} — ${s0.action}\n\n做完跟我說，或點「完成這步」。`;
+    return `我來帶你完成「${task.name}」，分 ${steps.length} 步、約 ${total} 分鐘。\n\n現在：${s0.title} — ${s0.action}\n\n做完跟我說，或點「完成這步」。\n[選項: 我準備好了，開始第一步]\n[選項: 這個任務有難度，先幫我做些引導分析]`;
 }
 
 function ensureCoachSessionForTask(task) {
@@ -1341,14 +1346,62 @@ function isGenericCoachFallback(reply) {
 }
 
 async function coachAgentRespondWithAI(userMsg, task, session) {
+    if (ragServiceActive && checkedRagKbs.length > 0 && enterpriseSession) {
+        try {
+            const apiKey = (localStorage.getItem('lumina_api_key') || '').trim();
+            const payload = {
+                query: userMsg,
+                group_code: enterpriseSession.groupCode,
+                kb_ids: checkedRagKbs,
+                openai_api_key: apiKey,
+                deepseek_api_key: apiKey
+            };
+            
+            const response = await fetch(`${RAG_SERVICE_URL}/api/rag/query`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                let reply = data.answer || '';
+                
+                // Add Claude-style options to the reply if they are not generated
+                if (!reply.includes('[選項:')) {
+                    reply += `\n\n[選項: 我了解，繼續執行當前步驟]\n[選項: 請幫我把這段資料再做詳細拆解]`;
+                }
+                
+                return {
+                    reply: clampText(reply, 5000),
+                    sources: data.sources || [],
+                    ...inferAgentActionsFromUserMsg(userMsg, session)
+                };
+            }
+        } catch (e) {
+            console.warn('[Lumina RAG] RAG 查詢失敗，降級到一般 AI 問答:', e.message);
+        }
+    }
+
     const step = session.steps[session.currentStep];
     const contextBlock = buildCoachContextText(getCoachContext());
-    const systemPrompt = `你是 Lumina 行動教練，坐在用戶旁邊一起做事。
-繁體中文，每次 1-3 句，口語、直接。
-用戶剛傳了一則訊息——請針對他的話回應，不要每次重複貼上完整步驟說明。
-若他問怎麼做：給一個 30 秒～2 分鐘能完成的最小動作。
-若他卡住：把當前步再拆更小。
-禁止：JSON、markdown、清單、文件、長篇教學。
+    const systemPrompt = `你是 Lumina 行動教練，是引導用戶高效工作的專業教練。
+請使用繁體中文，語氣專業嚴謹、邏輯條理清晰。請根據用戶當前的情境給予深入且具實用性、結構化的專業引導與建議。
+用戶剛傳了一則訊息——請針對他的訊息進行嚴謹的回應，不要重複貼上無關的完整步驟說明。
+
+重要要求——動態行動選項：
+你必須在回答的最後，根據當前的對話進度與情境，額外設計 2 到 3 個用戶可能想要選擇的「具體行動選項」，供用戶點選回答（類似 Claude 的引導選項）。
+請嚴格遵守以下格式，在回答的最底部每行輸出一個選項（不要放在代碼塊中）：
+[選項: 選項文字]
+例如：
+[選項: 沒問題，我準備好開始寫第一段]
+[選項: 遇到瓶頸，請幫我把當前步驟再拆更細]
+[選項: 我需要找一些範本參考，能給我關鍵字嗎]
+
+若用戶詢問如何執行或怎麼做：請給予結構化、有步驟邏輯的引導，列出清晰的步驟。
+若用戶表示卡住、遇到瓶頸或拖延：請為他分析可能原因，並提供具體的應對方法或重新規劃子步驟。
+禁止：直接回傳原始 JSON。
+允許且建議：使用 markdown（例如粗體、無序列表、有序列點、程式碼區塊等）使回答更具結構性。
 ${contextBlock}
 當前任務：${task.name}
 當前步驟（${session.currentStep + 1}/${session.steps.length}）「${step?.title}」：${step?.action}`;
@@ -2747,7 +2800,8 @@ async function enterpriseLocalCreate(body) {
             joinedAt: new Date().toISOString()
         }],
         tasks: [],
-        notifications: []
+        notifications: [],
+        documents: []
     };
     saveLocalEnterpriseStore(store);
     return { group: { code, name: store.groups[code].name }, member: store.groups[code].members[0] };
@@ -3434,6 +3488,546 @@ function renderEnterpriseTasks() {
             `).join('');
         }
     }
+    renderEnterpriseDocuments();
+}
+
+function toggleAddDocForm(show) {
+    const form = document.getElementById('team-add-doc-form');
+    if (!form) return;
+    if (show === undefined) {
+        form.classList.toggle('hidden');
+    } else {
+        form.classList.toggle('hidden', !show);
+    }
+}
+
+let selectedDocFile = null;
+
+function switchDocFormType(type) {
+    const isText = type === 'text';
+    document.getElementById('team-doc-text-area')?.classList.toggle('hidden', !isText);
+    document.getElementById('team-doc-file-area')?.classList.toggle('hidden', isText);
+    selectedDocFile = null;
+    const infoEl = document.getElementById('team-doc-file-info');
+    if (infoEl) {
+        infoEl.innerHTML = '';
+        infoEl.classList.add('hidden');
+    }
+    const fileInput = document.getElementById('team-doc-file');
+    if (fileInput) fileInput.value = '';
+}
+
+async function handleDocFileSelect(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+        selectedDocFile = null;
+        return;
+    }
+    
+    if (file.size > 5 * 1024 * 1024) {
+        showToast('檔案大小不能超過 5MB', 'error');
+        event.target.value = '';
+        selectedDocFile = null;
+        return;
+    }
+    
+    const infoEl = document.getElementById('team-doc-file-info');
+    if (infoEl) {
+        infoEl.classList.remove('hidden');
+        infoEl.textContent = '載入並解析檔案中，請稍候...';
+    }
+    
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    const isImage = file.type.startsWith('image/');
+    const isExcel = file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
+                    file.type === 'application/vnd.ms-excel' || 
+                    file.name.toLowerCase().endsWith('.xlsx') || 
+                    file.name.toLowerCase().endsWith('.xls');
+    
+    if (!isPdf && !isImage && !isExcel) {
+        showToast('僅支援上傳 PDF 文件、圖片與 Excel 檔案', 'error');
+        event.target.value = '';
+        selectedDocFile = null;
+        if (infoEl) infoEl.classList.add('hidden');
+        return;
+    }
+    
+    const titleInput = document.getElementById('team-doc-title');
+    if (titleInput && !titleInput.value) {
+        const extIndex = file.name.lastIndexOf('.');
+        titleInput.value = extIndex !== -1 ? file.name.slice(0, extIndex) : file.name;
+    }
+    
+    try {
+        const reader = new FileReader();
+        const base64Promise = new Promise((resolve) => {
+            reader.onload = () => {
+                const res = reader.result;
+                const base64 = res.split(',')[1];
+                resolve(base64);
+            };
+            reader.readAsDataURL(file);
+        });
+        
+        const base64Data = await base64Promise;
+        
+        if (isPdf) {
+            let extractedText = '';
+            try {
+                extractedText = await extractTextFromPdf(file);
+            } catch (e) {
+                console.warn('[Lumina PDF] 文字解析失敗:', e.message);
+                extractedText = '';
+            }
+            
+            selectedDocFile = {
+                filename: file.name,
+                fileData: base64Data,
+                docType: 'pdf',
+                extractedText: extractedText
+            };
+            
+            if (infoEl) {
+                infoEl.innerHTML = `<i class="fa-solid fa-file-pdf mr-1 text-red-400"></i> PDF 解析完成！共擷取 <strong>${extractedText.length}</strong> 字元，將會自動餵給 AI 行動教練。`;
+            }
+        } else if (isExcel) {
+            let extractedText = '';
+            try {
+                extractedText = await extractTextFromExcel(file);
+            } catch (e) {
+                console.warn('[Lumina Excel] 資料解析失敗:', e.message);
+                extractedText = '';
+            }
+            
+            selectedDocFile = {
+                filename: file.name,
+                fileData: base64Data,
+                docType: 'excel',
+                extractedText: extractedText
+            };
+            
+            if (infoEl) {
+                infoEl.innerHTML = `<i class="fa-solid fa-file-excel mr-1 text-green-500"></i> Excel 解析完成！共擷取 <strong>${extractedText.length}</strong> 字元，將會自動餵給 AI 行動教練。`;
+            }
+        } else if (isImage) {
+            selectedDocFile = {
+                filename: file.name,
+                fileData: base64Data,
+                docType: 'image',
+                extractedText: ''
+            };
+            
+            if (infoEl) {
+                infoEl.innerHTML = `
+                    <div class="flex flex-col gap-1.5">
+                        <span class="text-emerald-400"><i class="fa-solid fa-file-image mr-1"></i> 圖片已載入</span>
+                        <img src="data:${file.type};base64,${base64Data}" class="max-h-24 rounded-lg border border-slate-800 object-contain w-fit self-start mt-1">
+                    </div>`;
+            }
+        }
+    } catch (err) {
+        showToast('檔案載入失敗: ' + err.message, 'error');
+        event.target.value = '';
+        selectedDocFile = null;
+        if (infoEl) infoEl.classList.add('hidden');
+    }
+}
+
+async function extractTextFromPdf(file) {
+    if (typeof pdfjsLib === 'undefined') {
+        throw new Error('PDF.js 未載入');
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = '';
+    
+    const maxPages = Math.min(pdf.numPages, 30);
+    for (let i = 1; i <= maxPages; i++) {
+        try {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(' ');
+            fullText += pageText + '\n';
+        } catch (e) {
+            console.warn(`[Lumina PDF] 第 ${i} 頁解析失敗`, e);
+        }
+    }
+    return fullText.trim();
+}
+
+async function extractTextFromExcel(file) {
+    if (typeof XLSX === 'undefined') {
+        throw new Error('SheetJS (XLSX) 未載入');
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    let fullText = '';
+    
+    for (const sheetName of workbook.SheetNames) {
+        const worksheet = workbook.Sheets[sheetName];
+        const csv = XLSX.utils.sheet_to_csv(worksheet);
+        if (csv && csv.trim()) {
+            fullText += `--- 工作表: ${sheetName} ---\n${csv}\n\n`;
+        }
+    }
+    return fullText.trim();
+}
+
+async function saveTeamDocument() {
+    if (!enterpriseSession) return;
+    
+    const typeRadios = document.getElementsByName('team-doc-type');
+    let docFormType = 'text';
+    for (const r of typeRadios) {
+        if (r.checked) {
+            docFormType = r.value;
+            break;
+        }
+    }
+    
+    const title = document.getElementById('team-doc-title')?.value?.trim();
+    if (!title) {
+        showToast('請輸入文件標題', 'error');
+        return;
+    }
+    
+    let content = '';
+    let docType = 'text';
+    let fileData = null;
+    let filename = null;
+    
+    if (docFormType === 'text') {
+        content = document.getElementById('team-doc-content')?.value?.trim();
+        if (!content) {
+            showToast('請輸入文件內容', 'error');
+            return;
+        }
+    } else {
+        if (!selectedDocFile) {
+            showToast('請選擇要上傳的檔案 (PDF / 圖片 / Excel)', 'error');
+            return;
+        }
+        
+        docType = selectedDocFile.docType;
+        filename = selectedDocFile.filename;
+        fileData = selectedDocFile.fileData;
+        
+        if (docType === 'pdf' || docType === 'excel') {
+            content = selectedDocFile.extractedText || '';
+            const desc = document.getElementById('team-doc-description')?.value?.trim();
+            if (desc) {
+                const docLabel = docType === 'pdf' ? 'PDF 原文內容' : 'Excel 資料內容';
+                content = `【檔案備註說明】：${desc}\n\n【${docLabel}】：\n${content}`;
+            }
+        } else if (docType === 'image') {
+            content = document.getElementById('team-doc-description')?.value?.trim();
+            if (!content) {
+                showToast('請輸入圖片描述/備註，供 AI 行動教練閱讀學習', 'error');
+                return;
+            }
+        }
+    }
+    
+    const kbId = document.getElementById('team-doc-kb-select')?.value || 'general';
+    const payload = {
+        groupCode: enterpriseSession.groupCode,
+        managerId: enterpriseSession.memberId,
+        title,
+        content,
+        docType,
+        filename,
+        fileData,
+        kbId
+    };
+    
+    let ok = false;
+    let newDoc = null;
+    
+    if (enterpriseSession.offline) {
+        try {
+            const store = loadLocalEnterpriseStore();
+            const group = store.groups[normalizeEnterpriseCode(enterpriseSession.groupCode)];
+            if (!group) throw new Error('找不到群組');
+            if (!group.documents) group.documents = [];
+            
+            let fileUrl = null;
+            if (fileData) {
+                if (docType === 'image') {
+                    fileUrl = `data:image/png;base64,${fileData}`;
+                } else if (docType === 'pdf') {
+                    fileUrl = 'blob:local-pdf-file';
+                } else if (docType === 'excel') {
+                    fileUrl = 'blob:local-excel-file';
+                } else {
+                    fileUrl = `blob:local-${docType}-file`;
+                }
+            }
+            
+            newDoc = {
+                id: 'd_' + Date.now(),
+                title,
+                content,
+                docType,
+                fileUrl,
+                filename,
+                author: enterpriseSession.name,
+                createdAt: new Date().toISOString()
+            };
+            group.documents.unshift(newDoc);
+            saveLocalEnterpriseStore(store);
+            ok = true;
+        } catch (e) {
+            showToast('本機保存失敗: ' + e.message, 'error');
+        }
+    } else {
+        const res = await enterpriseFetch('POST', '/api/enterprise/group/document/add', payload);
+        if (res.ok) {
+            ok = true;
+            newDoc = res.data.document;
+            
+            // Sync with backend Python RAG pipeline if running
+            if (ragServiceActive && (docType === 'pdf' || docType === 'excel')) {
+                try {
+                    const apiKey = (localStorage.getItem('lumina_api_key') || '').trim();
+                    const byteCharacters = atob(fileData);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) {
+                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const fileBlob = new Blob([byteArray], { type: docType === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                    
+                    const formData = new FormData();
+                    formData.append('group_code', enterpriseSession.groupCode);
+                    formData.append('kb_id', kbId);
+                    formData.append('openai_api_key', apiKey);
+                    formData.append('deepseek_api_key', apiKey);
+                    formData.append('file', fileBlob, filename);
+                    
+                    await fetch(`${RAG_SERVICE_URL}/api/rag/document/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    console.log('[Lumina RAG] Document successfully indexed in RAG backend.');
+                } catch (ragErr) {
+                    console.warn('[Lumina RAG] Failed to index document in RAG service:', ragErr.message);
+                }
+            }
+        } else {
+            showToast('發布失敗: ' + res.error, 'error');
+        }
+    }
+    
+    if (ok) {
+        showToast('文件已成功發布', 'success');
+        const tEl = document.getElementById('team-doc-title');
+        const cEl = document.getElementById('team-doc-content');
+        const fInput = document.getElementById('team-doc-file');
+        const descEl = document.getElementById('team-doc-description');
+        if (tEl) tEl.value = '';
+        if (cEl) cEl.value = '';
+        if (fInput) fInput.value = '';
+        if (descEl) descEl.value = '';
+        
+        const textRadio = document.querySelector('input[name="team-doc-type"][value="text"]');
+        if (textRadio) {
+            textRadio.checked = true;
+            switchDocFormType('text');
+        }
+        
+        selectedDocFile = null;
+        toggleAddDocForm(false);
+        refreshEnterpriseData();
+    }
+}
+
+async function deleteTeamDocument(docId) {
+    if (!enterpriseSession) return;
+    if (!confirm('確定要刪除此文件嗎？刪除後將無法恢復，且 AI 也無法讀取該資料。')) return;
+    
+    const docs = enterpriseGroupData?.documents || [];
+    const docToDelete = docs.find(d => d.id === docId);
+    
+    const payload = {
+        groupCode: enterpriseSession.groupCode,
+        managerId: enterpriseSession.memberId,
+        documentId: docId
+    };
+    
+    let ok = false;
+    
+    if (enterpriseSession.offline) {
+        try {
+            const store = loadLocalEnterpriseStore();
+            const group = store.groups[normalizeEnterpriseCode(enterpriseSession.groupCode)];
+            if (!group) throw new Error('找不到群組');
+            if (group.documents) {
+                group.documents = group.documents.filter(d => d.id !== docId);
+            }
+            saveLocalEnterpriseStore(store);
+            ok = true;
+        } catch (e) {
+            showToast('本機刪除失敗: ' + e.message, 'error');
+        }
+    } else {
+        const res = await enterpriseFetch('POST', '/api/enterprise/group/document/delete', payload);
+        if (res.ok) {
+            ok = true;
+        } else {
+            showToast('刪除失敗: ' + res.error, 'error');
+        }
+    }
+    
+    if (ok) {
+        showToast('文件已成功刪除', 'success');
+        
+        // Sync document deletion with RAG backend
+        if (ragServiceActive && docToDelete && docToDelete.filename) {
+            try {
+                const apiKey = (localStorage.getItem('lumina_api_key') || '').trim();
+                const formData = new FormData();
+                formData.append('group_code', enterpriseSession.groupCode);
+                formData.append('kb_id', docToDelete.kbId || 'general');
+                formData.append('filename', docToDelete.filename);
+                formData.append('openai_api_key', apiKey);
+                formData.append('deepseek_api_key', apiKey);
+                
+                await fetch(`${RAG_SERVICE_URL}/api/rag/document/delete`, {
+                    method: 'POST',
+                    body: formData
+                });
+                console.log('[Lumina RAG] Document deleted from RAG backend index.');
+            } catch (ragErr) {
+                console.warn('[Lumina RAG] Failed to delete document from RAG service:', ragErr.message);
+            }
+        }
+        
+        refreshEnterpriseData();
+    }
+}
+
+function renderEnterpriseDocuments() {
+    if (!enterpriseSession || !enterpriseGroupData) return;
+    const docs = enterpriseGroupData.documents || [];
+    const isManager = enterpriseSession.role === 'manager';
+    
+    const addBtn = document.getElementById('team-add-doc-btn');
+    if (addBtn) addBtn.classList.toggle('hidden', !isManager);
+    
+    const listEl = document.getElementById('team-docs-list');
+    if (!listEl) return;
+    
+    if (docs.length === 0) {
+        listEl.innerHTML = `
+            <div class="empty-state py-8">
+                <div class="empty-state-icon bg-purple-500/10 text-purple-400" style="background-color: rgba(168, 85, 247, 0.1); color: rgb(192, 132, 252);"><i class="fa-solid fa-folder-open"></i></div>
+                <div class="text-sm text-slate-400">目前沒有知識庫文件</div>
+                <div class="text-xs text-slate-500 mt-1">${isManager ? '在上方點擊「新增文件」發布專案指南或新人資料' : '主管發布指南後將會在此顯示，且 AI 行動教練會自動學習'}</div>
+            </div>`;
+        return;
+    }
+    
+    function resolveDocFileUrl(fileUrl) {
+        if (!fileUrl) return '';
+        if (fileUrl.startsWith('data:image/')) return fileUrl;
+        if (fileUrl.startsWith('blob:')) return fileUrl;
+        if (fileUrl.startsWith('http:') || fileUrl.startsWith('https:')) {
+            return fileUrl;
+        }
+        if (fileUrl.startsWith('/uploads/')) {
+            return getEnterpriseBaseUrl() + fileUrl;
+        }
+        return '';
+    }
+    
+    listEl.innerHTML = docs.map(d => {
+        const type = d.docType || 'text';
+        const isText = type === 'text';
+        const isPdf = type === 'pdf';
+        const isImage = type === 'image';
+        const isExcel = type === 'excel';
+        
+        let typeBadge = '';
+        if (isPdf) {
+            typeBadge = '<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-red-500/20 text-red-300 border border-red-500/20"><i class="fa-solid fa-file-pdf mr-1"></i>PDF 文件</span>';
+        } else if (isExcel) {
+            typeBadge = '<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-green-500/20 text-green-300 border border-green-500/20"><i class="fa-solid fa-file-excel mr-1"></i>Excel 檔案</span>';
+        } else if (isImage) {
+            typeBadge = '<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/20"><i class="fa-solid fa-image mr-1"></i>圖片檔案</span>';
+        } else {
+            typeBadge = '<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/20"><i class="fa-solid fa-file-lines mr-1"></i>文字筆記</span>';
+        }
+
+        const kbLabels = {
+            general: '一般預設',
+            onboarding: '新人培訓',
+            specs: '開發規格',
+            meetings: '會議 SOP'
+        };
+        const kbName = kbLabels[d.kbId || 'general'] || '一般預設';
+        const kbBadge = `<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/20"><i class="fa-solid fa-tag mr-1"></i>${kbName}</span>`;
+        
+        return `
+        <div class="p-4 rounded-2xl border border-slate-800 bg-slate-950/40 hover:bg-slate-900/50 transition-colors">
+            <div class="flex items-start justify-between gap-3 mb-2">
+                <div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <h4 class="font-semibold text-sm text-slate-200">${escapeHtml(d.title)}</h4>
+                        ${typeBadge}
+                        ${kbBadge}
+                    </div>
+                    <div class="text-[10px] text-slate-500 mt-0.5">發布者：${escapeHtml(d.author || '主管')} · ${new Date(d.createdAt).toLocaleString('zh-TW')}</div>
+                </div>
+                ${isManager ? `
+                    <button onclick="deleteTeamDocument('${d.id}')" class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition-colors">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                ` : ''}
+            </div>
+            
+            ${isText ? `
+                <p class="text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">${escapeHtml(d.content)}</p>
+            ` : ''}
+            
+            ${isPdf ? `
+                <div class="mt-3 flex items-center gap-2">
+                    <a href="${resolveDocFileUrl(d.fileUrl)}" target="_blank" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-red-500/30 bg-red-500/5 text-red-400 text-xs hover:bg-red-500/15 transition-colors">
+                        <i class="fa-solid fa-file-pdf"></i>
+                        <span>開啟 PDF 檔案 (${escapeHtml(d.filename || '檢視文件')})</span>
+                    </a>
+                </div>
+                ${d.content ? `
+                    <div class="mt-3">
+                        <div class="text-[10px] text-slate-500 mb-1">擷取文字內容預覽 (已自動導入 AI 教練)：</div>
+                        <p class="text-[11px] text-slate-400 max-h-24 overflow-y-auto bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 leading-relaxed custom-scroll font-mono">${escapeHtml(d.content.slice(0, 500))}${d.content.length > 500 ? '...' : ''}</p>
+                    </div>
+                ` : ''}
+            ` : ''}
+            
+            ${isExcel ? `
+                <div class="mt-3 flex items-center gap-2">
+                    <a href="${resolveDocFileUrl(d.fileUrl)}" target="_blank" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-green-500/30 bg-green-500/5 text-green-400 text-xs hover:bg-green-500/15 transition-colors">
+                        <i class="fa-solid fa-file-excel"></i>
+                        <span>開啟 Excel 檔案 (${escapeHtml(d.filename || '檢視資料')})</span>
+                    </a>
+                </div>
+                ${d.content ? `
+                    <div class="mt-3">
+                        <div class="text-[10px] text-slate-500 mb-1">擷取試算表內容預覽 (已自動導入 AI 教練)：</div>
+                        <p class="text-[11px] text-slate-400 max-h-24 overflow-y-auto bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 leading-relaxed custom-scroll font-mono">${escapeHtml(d.content.slice(0, 500))}${d.content.length > 500 ? '...' : ''}</p>
+                    </div>
+                ` : ''}
+            ` : ''}
+            
+            ${isImage ? `
+                <div class="mt-3">
+                    <img src="${resolveDocFileUrl(d.fileUrl)}" class="max-h-48 rounded-xl border border-slate-800/80 object-contain hover:scale-[1.01] transition-transform cursor-pointer" onclick="window.open(this.src, '_blank')">
+                </div>
+                <p class="text-xs text-slate-400 mt-2.5 whitespace-pre-wrap leading-relaxed"><i class="fa-solid fa-circle-info mr-1 text-purple-400"></i>${escapeHtml(d.content)}</p>
+            ` : ''}
+        </div>
+    `;
+    }).join('');
 }
 
 function renderEnterpriseTaskRow(task, canToggle, syncedIds) {
@@ -4816,11 +5410,63 @@ function renderCoachAgentThread(thinking) {
     const thinkingLabel = thinking === 'deepseek' ? 'DeepSeek 回覆中'
         : thinking === 'offline' ? '離線引導中'
         : thinking ? '教練思考中' : '';
-    el.innerHTML = recent.map(m => `
-        <div class="coach-agent-msg coach-agent-msg-${m.role}">
-            ${m.role === 'coach' ? '<i class="fa-solid fa-bolt text-sky-400 text-[10px] mt-0.5"></i>' : ''}
-            <span>${escapeHtml(m.content)}</span>
-        </div>`).join('') + (thinkingLabel ? `<div class="coach-agent-thinking"><span class="thinking-dots">${thinkingLabel}</span></div>` : '');
+    
+    let html = '';
+    recent.forEach((m, idx) => {
+        const isLast = idx === recent.length - 1;
+        let displayContent = m.content;
+        const options = [];
+        
+        if (m.role === 'coach') {
+            displayContent = m.content.replace(/\[選項:\s*([^\]]+)\]/g, (match, optText) => {
+                options.push(optText.trim());
+                return '';
+            }).replace(/\n\s*\n/g, '\n').trim();
+        }
+        
+        let sourcesHtml = '';
+        if (m.sources && m.sources.length > 0) {
+            sourcesHtml = `
+                <div class="mt-2.5 pt-2 border-t border-slate-800/80 text-[10px] text-slate-500">
+                    <div class="font-medium text-slate-400 mb-1 flex items-center gap-1">
+                        <i class="fa-solid fa-list-check text-purple-400"></i>
+                        <span>資料來源引用：</span>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 mt-1">
+                        ${m.sources.map(s => `
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400">
+                                <span class="font-mono text-purple-400">[${s.ref_id}]</span> 
+                                <span>${escapeHtml(s.filename)}</span>
+                                <span class="text-[9px] text-slate-600">(${Math.round(s.score * 100)}% 關聯)</span>
+                            </span>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        html += `
+            <div class="coach-agent-msg coach-agent-msg-${m.role}">
+                ${m.role === 'coach' ? '<i class="fa-solid fa-bolt text-sky-400 text-[10px] mt-0.5"></i>' : ''}
+                <div class="flex-1">
+                    <span>${escapeHtml(displayContent)}</span>
+                    ${sourcesHtml}
+                    ${(isLast && options.length > 0 && !thinking) ? `
+                        <div class="coach-agent-options flex flex-wrap gap-2 mt-2">
+                            ${options.map(opt => `
+                                <button type="button" onclick="sendCoachAgentMessage(this.dataset.msg)" data-msg="${escapeHtml(opt)}" class="px-2.5 py-1 rounded-lg border border-sky-500/30 bg-sky-500/10 text-sky-300 text-[10px] font-medium hover:bg-sky-500/25 transition-colors cursor-pointer">${escapeHtml(opt)}</button>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                </div>
+            </div>`;
+    });
+    
+    if (thinkingLabel) {
+        html += `<div class="coach-agent-thinking"><span class="thinking-dots">${thinkingLabel}</span></div>`;
+    }
+    
+    el.innerHTML = html;
     el.scrollTop = el.scrollHeight;
 }
 
@@ -4968,7 +5614,7 @@ async function sendCoachAgentMessage(preset) {
         coachRequestInFlight = false;
     }
     
-    pushCoachAgentMessage('coach', result.reply);
+    pushCoachAgentMessage('coach', result.reply, result.sources);
     if (result.complete) {
         coachCompleteTaskFromAgent();
     } else if (result.advance) {
@@ -5007,12 +5653,21 @@ function buildCoachContextText(ctx) {
     const next = ctx.nextTask;
     const pendingList = tasks.filter(t => !t.completed && t.due <= getTodayISO()).slice(0, 5)
         .map(t => `- ${t.name}（${t.duration}分鐘・${getCategoryLabel(resolveCategory(t))}）`).join('\n');
-    return `用戶：${userProfile.name}（${userProfile.role}）
+    
+    let text = `用戶：${userProfile.name}（${userProfile.role}）
 今日完成率：${ctx.completionRate}%｜連續高效 ${userProfile.streak} 天｜高效時段 ${ctx.peakWindow}
 今日待辦 ${ctx.pendingCount} 項${ctx.overdueCount > 0 ? `（${ctx.overdueCount} 項逾期）` : ''}：
 ${pendingList || '（今日無待辦）'}
 ${next ? `系統推薦的今日第一步：「${next.name}」（${next.duration} 分鐘）` : '尚無推薦任務，建議先分解一個大目標'}
 ${ctx.activeGoals.length ? `進行中的大目標：${ctx.activeGoals.join('、')}` : ''}`;
+
+    if (enterpriseSession && enterpriseGroupData && enterpriseGroupData.documents && enterpriseGroupData.documents.length > 0) {
+        const docs = enterpriseGroupData.documents.slice(0, 10);
+        const docText = docs.map(d => `--- 文件名稱：${d.title} ---\n${d.content}`).join('\n\n');
+        text += `\n\n=== 團隊共享知識庫與新人資料 ===\n${docText}\n=================================\n注意：在回答時，若用戶的問題涉及此專案、流程或工作指南，請務必遵循並優先引用上方「團隊共享知識庫」的內容來進行回覆。`;
+    }
+    
+    return text;
 }
 
 function updateCoachContextBar() {
@@ -5413,6 +6068,9 @@ function setupKeyboardShortcuts() {
 
 // Initialize everything
 function initializeApp() {
+    if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
     try { initializeTailwind(); } catch (e) { console.warn('[Lumina] Tailwind init skipped', e); }
     try { setupManifest(); } catch (e) { console.warn('[Lumina] Manifest setup skipped', e); }
     try { registerServiceWorker(); } catch (e) { console.warn('[Lumina] Service worker skipped', e); }
@@ -5475,6 +6133,63 @@ function initializeApp() {
     // Make sure initial timeline hint
     console.log('%c[Lumina AI] 已成功初始化。使用者可立即使用所有功能。', 'color:#475569');
     
+    // RAG Health Checking and helper bindings
+    window.checkRagServiceHealth = async () => {
+        if (!enterpriseSession) {
+            document.getElementById('rag-kb-selector-wrap')?.classList.add('hidden');
+            return;
+        }
+        try {
+            const res = await fetch(`${RAG_SERVICE_URL}/health`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.service === 'lumina-rag-service') {
+                    if (!ragServiceActive) {
+                        ragServiceActive = true;
+                        console.log('[Lumina RAG] RAG 服務已連線，啟用智慧知識庫檢索。');
+                        document.getElementById('rag-kb-selector-wrap')?.classList.remove('hidden');
+                        window.renderRagKbCheckboxes();
+                    }
+                    return;
+                }
+            }
+        } catch (_) {}
+        
+        if (ragServiceActive) {
+            ragServiceActive = false;
+            console.log('[Lumina RAG] RAG 服務中斷，自動切回本地離線/純文字模式。');
+            document.getElementById('rag-kb-selector-wrap')?.classList.add('hidden');
+        }
+    };
+
+    window.renderRagKbCheckboxes = () => {
+        const container = document.getElementById('rag-kb-checkboxes');
+        if (!container) return;
+        const kbs = [
+            { id: 'general', label: '一般預設 (General)' },
+            { id: 'onboarding', label: '新人培訓 (Onboarding)' },
+            { id: 'specs', label: '開發規格 (Specs)' },
+            { id: 'meetings', label: '會議 SOP (Meetings)' }
+        ];
+        container.innerHTML = kbs.map(kb => {
+            const checked = checkedRagKbs.includes(kb.id) ? 'checked' : '';
+            return `
+                <label class="inline-flex items-center gap-1.5 cursor-pointer bg-slate-900 border border-slate-800 hover:border-slate-700/80 px-2 py-1 rounded-lg text-[10px] text-slate-300">
+                    <input type="checkbox" name="rag-kb" value="${kb.id}" ${checked} onchange="window.onRagKbCheckboxChange()" class="accent-purple-500 w-3 h-3">
+                    <span>${kb.label}</span>
+                </label>
+            `;
+        }).join('');
+    };
+
+    window.onRagKbCheckboxChange = () => {
+        const checkboxes = document.querySelectorAll('input[name="rag-kb"]:checked');
+        checkedRagKbs = Array.from(checkboxes).map(cb => cb.value);
+    };
+
+    window.checkRagServiceHealth();
+    setInterval(window.checkRagServiceHealth, 10000);
+
     // Bonus: pre-generate one nice decomposition if user goes there
     window.pregenerateExample = () => {
         document.getElementById('goal-input').value = "完成 Q3 產品路線圖並獲得團隊共識";
