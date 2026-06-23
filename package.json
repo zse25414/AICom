@@ -6,7 +6,7 @@
   "scripts": {
     "start": "http-server . -p 3456 -c-1 --cors",
     "api": "node api-proxy.js",
-    "rag": "py -3.12 rag_service/main.py",
+    "rag": "rag_service\\venv\\Scripts\\python.exe rag_service/main.py",
     "dev": "concurrently -n web,api,rag -c blue,magenta,green \"npm run start\" \"npm run api\" \"npm run rag\"",
     "test": "node test-init.js",
     "split-html": "node scripts/split-html.js"

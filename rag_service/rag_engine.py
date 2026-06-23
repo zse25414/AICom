@@ -9,11 +9,70 @@ from typing import List, Optional, Tuple
 
 import config  # noqa: F401 — set cache paths before heavy ML imports
 
+import math
+import re
 from llama_index.core import Document, Settings, SimpleDirectoryReader, StorageContext, VectorStoreIndex, load_index_from_storage
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import NodeWithScore, TextNode
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.retrievers.bm25 import BM25Retriever
+
+def tokenize(text: str) -> List[str]:
+    text = text.lower()
+    return re.findall(r'[a-zA-Z0-9]+|[\u4e00-\u9fff]', text)
+
+def retrieve_pure_python_bm25(docstore, query: str, top_k: int) -> List[NodeWithScore]:
+    docs = docstore.docs
+    if not docs:
+        return []
+        
+    query_tokens = tokenize(query)
+    if not query_tokens:
+        return []
+        
+    doc_tokens = {}
+    doc_lens = []
+    for doc_id, node in docs.items():
+        tokens = tokenize(node.text or "")
+        doc_tokens[doc_id] = tokens
+        doc_lens.append(len(tokens))
+        
+    avg_doc_len = sum(doc_lens) / len(doc_lens) if doc_lens else 1.0
+    
+    df = {}
+    for token in query_tokens:
+        df[token] = sum(1 for doc_id in docs if token in doc_tokens[doc_id])
+        
+    N = len(docs)
+    idf = {}
+    for token in query_tokens:
+        df_t = df[token]
+        idf[token] = math.log((N - df_t + 0.5) / (df_t + 0.5) + 1.0)
+        
+    k1 = 1.5
+    b = 0.75
+    
+    scores = []
+    for doc_id, node in docs.items():
+        tokens = doc_tokens[doc_id]
+        doc_len = len(tokens)
+        
+        tf = {}
+        for token in query_tokens:
+            tf[token] = tokens.count(token)
+            
+        score = 0.0
+        for token in query_tokens:
+            tf_t = tf[token]
+            if tf_t > 0:
+                numerator = tf_t * (k1 + 1)
+                denominator = tf_t + k1 * (1.0 - b + b * (doc_len / avg_doc_len))
+                score += idf[token] * (numerator / denominator)
+                
+        if score > 0:
+            scores.append(NodeWithScore(node=node, score=score))
+            
+    scores.sort(key=lambda x: x.score, reverse=True)
+    return scores[:top_k]
 
 from config import (
     BM25_TOP_K,
@@ -289,11 +348,8 @@ def _retrieve_from_index(index: VectorStoreIndex, query: str) -> List[NodeWithSc
             print(f"[Lumina RAG] 向量檢索失敗: {exc}")
 
     try:
-        bm25 = BM25Retriever.from_defaults(
-            docstore=index.docstore,
-            similarity_top_k=BM25_TOP_K,
-        )
-        result_lists.append(bm25.retrieve(query))
+        results = retrieve_pure_python_bm25(index.docstore, query, BM25_TOP_K)
+        result_lists.append(results)
     except Exception as exc:
         print(f"[Lumina RAG] BM25 檢索失敗: {exc}")
 
