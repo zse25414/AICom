@@ -505,7 +505,7 @@ function renderEnterpriseTaskRow(task, canToggle, syncedIds) {
     const synced = syncedIds ? syncedIds.has(task.id) : buildSyncedEnterpriseIdSet().has(task.id);
     return `
         <div class="task-row ${task.completed ? 'task-row-done' : ''}" data-team-task-id="${task.id}">
-            <input type="checkbox" ${task.completed ? 'checked' : ''} ${canToggle ? `onclick="event.stopPropagation()" onchange="toggleEnterpriseTask('${task.id}', this.checked)"` : 'disabled'}
+            <input type="checkbox" ${task.completed ? 'checked' : ''} ${canToggle ? `${luminaChange('toggleEnterpriseTask', [task.id, '__checked__'])} data-lumina-stop` : 'disabled'}
                    class="accent-indigo-500 w-4 h-4 cursor-pointer flex-shrink-0 rounded">
             <div class="flex-1 min-w-0">
                 <div class="font-medium text-sm ${task.completed ? 'line-through text-slate-400' : 'text-slate-200'}">${escapeHtml(task.title)}</div>
@@ -520,7 +520,7 @@ function renderEnterpriseTaskRow(task, canToggle, syncedIds) {
                 </div>
             </div>
             <div class="flex items-center gap-2 flex-shrink-0">
-                ${canToggle && !synced ? `<button onclick="syncEnterpriseTaskToPersonal('${task.id}')" class="text-[10px] px-2 py-1 rounded-lg border border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/10" title="同步到個人清單"><i class="fa-solid fa-arrow-down-to-bracket"></i></button>` : ''}
+                ${canToggle && !synced ? `<button ${luminaAction('syncEnterpriseTaskToPersonal', { arg: task.id })} class="text-[10px] px-2 py-1 rounded-lg border border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/10" title="同步到個人清單"><i class="fa-solid fa-arrow-down-to-bracket"></i></button>` : ''}
                 ${synced ? `<span class="text-[10px] text-slate-500">已同步</span>` : ''}
                 <span class="status-pill ${task.completed ? 'status-pill-done' : 'status-pill-pending'}">
                     ${task.completed ? '已完成' : '進行中'}

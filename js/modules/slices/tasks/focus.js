@@ -139,7 +139,7 @@ function renderFocusSessionPanel(task) {
                     <span id="focus-timer-display" class="focus-timer">--:--</span>
                     <span class="text-[10px] text-slate-500">步驟 ${cur + 1}/${steps.length}${hasCoachPlan ? ' · 教練方案' : ''}</span>
                 </div>
-                <button type="button" onclick="extendFocusTimer(5)" class="text-[10px] px-2 py-1 rounded-lg border border-slate-600 text-slate-400 hover:text-slate-300 hover:bg-slate-800">+5 分</button>
+                <button type="button" ${luminaAction('extendFocusTimer', { arg: 5, type: 'number' })} class="text-[10px] px-2 py-1 rounded-lg border border-slate-600 text-slate-400 hover:text-slate-300 hover:bg-slate-800">+5 分</button>
             </div>
             ${current ? `
             <div class="focus-first-step mb-3">
@@ -160,11 +160,11 @@ function renderFocusSessionPanel(task) {
                 }).join('')}
             </ol>
             <div class="flex flex-wrap gap-2 mt-4">
-                <button type="button" onclick="advanceFocusStep(${task.id})" class="text-sm px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-medium">
+                <button type="button" ${luminaAction('advanceFocusStep', { arg: task.id, type: 'number' })} class="text-sm px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-medium">
                     <i class="fa-solid fa-${isLastStep ? 'check' : 'forward-step'} mr-1"></i>${isLastStep ? '完成這件' : '完成這步'}
                 </button>
-                <button type="button" onclick="openCoachForTask(${task.id})" class="text-sm px-4 py-2 rounded-xl border border-sky-500/40 hover:bg-sky-500/10 text-sky-300">教練帶我做</button>
-                <button type="button" onclick="endFocusSession();refreshUI({dashboard:true,filters:false})" class="text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-400">暫停</button>
+                <button type="button" ${luminaAction('openCoachForTask', { arg: task.id, type: 'number' })} class="text-sm px-4 py-2 rounded-xl border border-sky-500/40 hover:bg-sky-500/10 text-sky-300">教練帶我做</button>
+                <button type="button" ${luminaAction('', { actions: [['endFocusSession'], ['refreshUI', { dashboard: true, filters: false }]] })} class="text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-400">暫停</button>
             </div>
         </div>`;
 }

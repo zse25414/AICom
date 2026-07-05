@@ -48,7 +48,7 @@ async function renderRagKbCheckboxes() {
         const checked = S.checkedRagKbs.includes(kb.id) ? 'checked' : '';
         return `
             <label class="inline-flex items-center gap-1.5 cursor-pointer bg-slate-900 border border-slate-800 hover:border-slate-700/80 px-2 py-1 rounded-lg text-[10px] text-slate-300">
-                <input type="checkbox" name="rag-kb" value="${kb.id}" ${checked} onchange="window.onRagKbCheckboxChange()" class="accent-purple-500 w-3 h-3">
+                <input type="checkbox" name="rag-kb" value="${kb.id}" ${checked} ${luminaChange('onRagKbCheckboxChange', [])} class="accent-purple-500 w-3 h-3">
                 <span>${escapeHtml(kb.label)}</span>
             </label>
         `;

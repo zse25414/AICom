@@ -4,6 +4,7 @@
     "theme/index.js",
     "dom/index.js",
     "utils/index.js",
+    "bridge/actions.js",
     "auth/index.js",
     "notifications/index.js",
     "rag/client.js",
@@ -21,7 +22,6 @@
     "ui/pwa.js",
     "enterprise/team.js",
     "rag/health.js",
-    "bridge/actions.js",
     "boot/init.js"
   ],
   "lazy": [

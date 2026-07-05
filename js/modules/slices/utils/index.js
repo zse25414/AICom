@@ -93,6 +93,11 @@ function isSafeHttpUrl(url) {
     }
 }
 
+function openSafeUrl(url) {
+    const href = String(url || '');
+    if (isSafeHttpUrl(href) || href.startsWith('blob:')) window.open(href, '_blank', 'noopener,noreferrer');
+}
+
 function clampText(value, max = C.TEXT_MAX_LEN) {
     return String(value ?? '').slice(0, max);
 }

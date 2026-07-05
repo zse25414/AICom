@@ -286,7 +286,7 @@ fs.writeFileSync(path.join(modulesDir, 'slices', 'manifest.json'), JSON.stringif
 fs.writeFileSync(
     path.join(root, 'js', 'main.js'),
     `/** Lumina ESM entry — bundles to js/lumina-app.js */
-import './modules/app.js';
+import './modules/generated/bundle.js';
 import { LuminaVirtual } from './modules/virtual/list.js';
 if (typeof window !== 'undefined') window.LuminaVirtual = LuminaVirtual;
 `

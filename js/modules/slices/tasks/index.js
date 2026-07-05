@@ -111,7 +111,7 @@ function renderCategoryFilters() {
     const html = chips.map(chip => {
         const count = counts[chip.id] || 0;
         const active = S.activeCategoryFilter === chip.id;
-        return `<button onclick="setCategoryFilter('${chip.id}')" class="filter-chip text-[10px] px-2.5 py-1 rounded-full border border-slate-700 ${chip.color} ${active ? 'active !border-indigo-500 !text-indigo-300' : 'hover:bg-slate-800'}">${chip.label}${count > 0 ? ` (${count})` : ''}</button>`;
+        return `<button ${luminaAction('setCategoryFilter', { arg: chip.id })} class="filter-chip text-[10px] px-2.5 py-1 rounded-full border border-slate-700 ${chip.color} ${active ? 'active !border-indigo-500 !text-indigo-300' : 'hover:bg-slate-800'}">${chip.label}${count > 0 ? ` (${count})` : ''}</button>`;
     }).join('');
     
     ['scheduler-category-filters', 'dashboard-category-filters'].forEach(id => {
@@ -141,7 +141,7 @@ function renderPersonalTaskRow(task, variant = 'scheduler') {
     const isDashboard = variant === 'dashboard';
     const checked = task.completed ? 'checked' : '';
     const dashFlag = isDashboard ? ', true' : '';
-    const onChange = `onchange="toggleTaskComplete(${task.id}, this${dashFlag})"`;
+    const onChange = luminaChange('toggleTaskComplete', [task.id, '__target__', ...(isDashboard ? [true] : [])]);
     
     if (isDashboard) {
         const isActive = !task.completed && task.id === S.todayFocusTaskId;
@@ -154,18 +154,17 @@ function renderPersonalTaskRow(task, variant = 'scheduler') {
             ? 'dashboard-task-row dashboard-task-row-done'
             : `dashboard-task-row task-card group${isActive ? ' dashboard-task-row-active' : ''}`;
         return `<div class="${rowClass} flex items-center justify-between px-4 py-3 bg-slate-950 border border-slate-700 rounded-2xl"
-            data-task-id="${task.id}" onclick="focusTodayTask(${task.id}, event)" role="button" tabindex="0"
-            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();focusTodayTask(${task.id},event)}">
+            data-task-id="${task.id}" ${luminaAction('focusTodayTask', { arg: task.id, type: 'number', passEvent: true })} ${luminaKeydown('focusTodayTask', { arg: task.id, type: 'number', passEvent: true })} role="button" tabindex="0">
             <div class="flex items-center gap-x-3 flex-1 min-w-0">
-                <input type="checkbox" ${checked} ${onChange} onclick="event.stopPropagation()" class="accent-indigo-500 w-4 h-4 cursor-pointer flex-shrink-0">
+                <input type="checkbox" ${checked} ${onChange} data-lumina-stop class="accent-indigo-500 w-4 h-4 cursor-pointer flex-shrink-0">
                 <div class="min-w-0 flex-1">
                     <div class="font-medium text-sm truncate ${task.completed ? 'line-through text-slate-500' : ''}">${escapeHtml(task.name)}</div>
                     <div class="text-[10px] text-slate-500 flex flex-wrap items-center gap-1">${queueLabel} ${task.duration} 分鐘 • <span class="cat-badge ${getCategoryColor(cat)}">${getCategoryLabel(cat)}</span> ${renderTaskBadges(task)}</div>
                 </div>
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">
-                ${!task.completed ? `<button type="button" onclick="event.stopPropagation();startTodayTask(${task.id})" class="task-row-start-btn ${isActive ? '' : 'hidden sm:inline-flex'}${isRunning ? ' task-row-start-btn-active' : ''}">${isRunning ? '進行中' : isActive ? '繼續' : '開始'}</button>` : ''}
-                <button type="button" onclick="event.stopPropagation();openTaskEdit(${task.id})" class="text-slate-400 hover:text-indigo-300 p-1.5 ${task.completed ? '' : 'opacity-70 hover:opacity-100'}" title="編輯"><i class="fa-solid fa-pen text-xs"></i></button>
+                ${!task.completed ? `<button type="button" ${luminaAction('startTodayTask', { arg: task.id, type: 'number', stop: true })} class="task-row-start-btn ${isActive ? '' : 'hidden sm:inline-flex'}${isRunning ? ' task-row-start-btn-active' : ''}">${isRunning ? '進行中' : isActive ? '繼續' : '開始'}</button>` : ''}
+                <button type="button" ${luminaAction('openTaskEdit', { arg: task.id, type: 'number', stop: true })} class="text-slate-400 hover:text-indigo-300 p-1.5 ${task.completed ? '' : 'opacity-70 hover:opacity-100'}" title="編輯"><i class="fa-solid fa-pen text-xs"></i></button>
             </div>
         </div>`;
     }
@@ -183,9 +182,9 @@ function renderPersonalTaskRow(task, variant = 'scheduler') {
             </div>
         </div>
         <div class="flex items-center gap-x-1 opacity-0 group-hover:opacity-100 transition-all">
-            <button onclick="openTaskEdit(${task.id})" class="text-slate-400 hover:text-indigo-300 p-1.5" title="編輯任務"><i class="fa-solid fa-pen text-xs"></i></button>
-            ${task.duration >= 60 && !task.completed ? `<button onclick="splitTask(${task.id})" class="text-indigo-400 hover:text-indigo-300 p-1.5" title="拆分任務"><i class="fa-solid fa-scissors text-xs"></i></button>` : ''}
-            <button onclick="deleteTask(${task.id}, event)" class="text-red-400 hover:text-red-500 p-1.5"><i class="fa-solid fa-trash text-xs"></i></button>
+            <button ${luminaAction('openTaskEdit', { arg: task.id, type: 'number' })} class="text-slate-400 hover:text-indigo-300 p-1.5" title="編輯任務"><i class="fa-solid fa-pen text-xs"></i></button>
+            ${task.duration >= 60 && !task.completed ? `<button ${luminaAction('splitTask', { arg: task.id, type: 'number' })} class="text-indigo-400 hover:text-indigo-300 p-1.5" title="拆分任務"><i class="fa-solid fa-scissors text-xs"></i></button>` : ''}
+            <button ${luminaAction('deleteTask', { arg: task.id, type: 'number', passEvent: true })} class="text-red-400 hover:text-red-500 p-1.5"><i class="fa-solid fa-trash text-xs"></i></button>
         </div>
     </div>`;
 }
@@ -447,8 +446,8 @@ function updateNextStepCard(stats) {
         el.innerHTML = `<div class="next-step-label">今日第一步</div>
                <div class="font-semibold text-lg">你有個大目標，但不知從哪開始？</div>
                <p class="text-sm text-slate-400 mt-1">輸入目標，AI 幫你拆解並推薦今天該做的第一件</p>
-               <button onclick="openDecomposeTab()" class="mt-3 text-sm px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">分解我的目標</button>
-               <button onclick="focusQuickAdd()" class="mt-2 text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-300">或直接新增任務</button>`;
+               <button ${luminaAction('openDecomposeTab')} class="mt-3 text-sm px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">分解我的目標</button>
+               <button ${luminaAction('focusQuickAdd')} class="mt-2 text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-300">或直接新增任務</button>`;
         return;
     }
     
@@ -458,7 +457,7 @@ function updateNextStepCard(stats) {
             el.innerHTML = `<div class="next-step-label">今日狀態</div>
                <div class="font-semibold text-emerald-300">🎉 今日任務已全部完成！</div>
                <p class="text-sm text-slate-400 mt-1">之後還有 ${futurePending.length} 項待辦，最近一項：<strong class="text-slate-300">${escapeHtml(next.name)}</strong>（${next.due}）</p>
-               <button onclick="showSection('scheduler')" class="mt-3 text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-300">查看全部任務</button>`;
+               <button ${luminaAction('showSection', { arg: 'scheduler' })} class="mt-3 text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-300">查看全部任務</button>`;
         } else {
             el.innerHTML = `<div class="next-step-label">今日狀態</div>
                <div class="font-semibold text-emerald-300">🎉 所有任務已完成！</div>
@@ -475,16 +474,16 @@ function updateNextStepCard(stats) {
     const inFocus = S.focusSession && S.focusSession.taskId === top.id;
     const actionButtons = inFocus ? '' : `
         <div class="flex flex-wrap gap-2 mt-3">
-            <button type="button" onclick="startTodayTask(${top.id})" class="text-sm px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">開始做這件</button>
-            <button type="button" onclick="openCoachForTask(${top.id})" class="text-sm px-4 py-2 rounded-xl border border-sky-500/40 hover:bg-sky-500/10 text-sky-300">教練帶我做</button>
-            ${queue.total > 1 ? `<button type="button" onclick="skipToNextTodayTask()" class="text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-300">先做下一項</button>` : ''}
+            <button type="button" ${luminaAction('startTodayTask', { arg: top.id, type: 'number' })} class="text-sm px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">開始做這件</button>
+            <button type="button" ${luminaAction('openCoachForTask', { arg: top.id, type: 'number' })} class="text-sm px-4 py-2 rounded-xl border border-sky-500/40 hover:bg-sky-500/10 text-sky-300">教練帶我做</button>
+            ${queue.total > 1 ? `<button type="button" ${luminaAction('skipToNextTodayTask')} class="text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-300">先做下一項</button>` : ''}
         </div>
         <p class="text-[10px] text-slate-500 mt-3">${S.taskCoachPlans.has(top.id) ? '已有教練方案，點開始會直接載入' : '開始做這件 → 專注模式；教練帶我做 → 完整方案與文件'}</p>`;
     el.classList.toggle('focus-session-active', !!inFocus);
     el.innerHTML = `
         <div class="next-step-label">${inFocus ? '專注執行中' : '今日進行中'} <span class="text-slate-500 font-normal">（${queueText}）</span></div>
         <div class="flex items-start gap-3 mt-1">
-            <input type="checkbox" ${top.completed ? 'checked' : ''} onchange="toggleTaskComplete(${top.id}, this, true)" onclick="event.stopPropagation()"
+            <input type="checkbox" ${top.completed ? 'checked' : ''} ${luminaChange('toggleTaskComplete', [top.id, '__target__', true])} data-lumina-stop
                 class="accent-indigo-500 w-5 h-5 cursor-pointer flex-shrink-0 mt-1" aria-label="標記完成">
             <div class="flex-1 min-w-0">
                 <div class="font-semibold text-lg leading-snug">${escapeHtml(top.name)}</div>

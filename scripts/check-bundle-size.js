@@ -6,9 +6,9 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const limits = {
-    'js/lumina-app.js': 200 * 1024,
-    'js/chunks/lumina-coach.js': 100 * 1024,
-    'js/chunks/lumina-enterprise-docs.js': 35 * 1024
+    'js/lumina-app.js': 165 * 1024,
+    'js/chunks/lumina-coach.js': 80 * 1024,
+    'js/chunks/lumina-enterprise-docs.js': 25 * 1024
 };
 
 const failures = [];

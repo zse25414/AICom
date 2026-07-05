@@ -408,7 +408,7 @@ function renderCoachAgentThread(thinking) {
                     ${(isLast && options.length > 0 && !thinking) ? `
                         <div class="coach-agent-options flex flex-wrap gap-2 mt-3">
                             ${options.map(opt => `
-                                <button type="button" onclick="sendCoachAgentMessage(this.dataset.msg)" data-msg="${escapeHtml(opt)}" class="coach-agent-option-btn">${escapeHtml(opt)}</button>
+                                <button type="button" ${luminaAction('sendCoachAgentMessage', { argFrom: 'dataset.msg' })} data-msg="${escapeHtml(opt)}" class="coach-agent-option-btn">${escapeHtml(opt)}</button>
                             `).join('')}
                         </div>
                     ` : ''}
@@ -430,7 +430,7 @@ function renderCoachEmptyState(container) {
             <div class="coach-empty-icon"><i class="fa-solid fa-route"></i></div>
             <div class="coach-empty-title">尚無今日待辦</div>
             <div class="coach-empty-desc">分解一個大目標後，教練會帶你從第一步開始做</div>
-            <button type="button" onclick="openDecomposeTab()" class="coach-empty-btn"><i class="fa-solid fa-magic mr-1"></i> 分解目標</button>
+            <button type="button" ${luminaAction('openDecomposeTab')} class="coach-empty-btn"><i class="fa-solid fa-magic mr-1"></i> 分解目標</button>
         </div>`;
 }
 
@@ -458,7 +458,7 @@ function renderCoachAgentView() {
                 <div class="coach-agent-task-badge">${escapeHtml(task.name)}</div>
                 <div class="coach-agent-ready-meta">${task.duration} 分鐘 · ${steps.length} 步驟</div>
                 <p class="coach-agent-ready-desc">教練會一步一步帶你做完，不用自己規劃或填表。</p>
-                <button type="button" onclick="coachBeginGuidedSession()" class="coach-agent-start-btn">
+                <button type="button" ${luminaAction('coachBeginGuidedSession')} class="coach-agent-start-btn">
                     <i class="fa-solid fa-play"></i> 教練帶我做
                 </button>
                 <div class="coach-agent-preview">
@@ -485,11 +485,11 @@ function renderCoachAgentView() {
                     }).join('')}
                 </div>
                 <div class="coach-agent-actions">
-                    <button type="button" onclick="${isLast ? 'coachCompleteTaskFromAgent()' : 'coachAdvanceStepFromAgent()'}" class="coach-agent-btn-primary">
+                    <button type="button" ${luminaAction(isLast ? 'coachCompleteTaskFromAgent' : 'coachAdvanceStepFromAgent')} class="coach-agent-btn-primary">
                         <i class="fa-solid fa-${isLast ? 'check' : 'forward-step'} mr-1"></i>${isLast ? '完成這件' : '完成這步'}
                     </button>
-                    <button type="button" onclick="sendCoachAgentMessage('卡住了')" class="coach-agent-btn-secondary">卡住了</button>
-                    <button type="button" onclick="coachPauseSession()" class="coach-agent-btn-ghost">暫停</button>
+                    <button type="button" ${luminaAction('sendCoachAgentMessage', { arg: '卡住了' })} class="coach-agent-btn-secondary">卡住了</button>
+                    <button type="button" ${luminaAction('coachPauseSession')} class="coach-agent-btn-ghost">暫停</button>
                 </div>
             </div>`;
         tickFocusTimer();
@@ -641,11 +641,11 @@ function getCoachReadinessChecks() {
     const hasTeam = !!S.enterpriseSession;
     const teamOnline = hasTeam && !S.enterpriseSession.offline;
     return [
-        { id: 'login', label: '已登入', ok: isLoggedIn(), action: "showAuthOverlay('login')" },
-        { id: 'team', label: '已加入團隊', ok: teamOnline, action: "showSection('team')" },
+        { id: 'login', label: '已登入', ok: isLoggedIn(), action: 'showAuthOverlay', actionArg: 'login' },
+        { id: 'team', label: '已加入團隊', ok: teamOnline, action: 'showSection', actionArg: 'team' },
         { id: 'rag', label: 'RAG 服務', ok: S.ragServiceActive, action: null },
         { id: 'kb', label: '已選知識庫', ok: S.ragServiceActive && S.checkedRagKbs.length > 0, action: null },
-        { id: 'api', label: 'AI 連線', ok: isApiReady(), action: "showSection('settings')" }
+        { id: 'api', label: 'AI 連線', ok: isApiReady(), action: 'showSection', actionArg: 'settings' }
     ];
 }
 
@@ -665,7 +665,7 @@ function renderCoachReadinessBar() {
             ${checks.map(c => `
                 <button type="button"
                     class="coach-readiness-chip ${c.ok ? 'ok' : 'missing'}"
-                    ${!c.ok && c.action ? `onclick="${c.action}"` : 'disabled'}>
+                    ${!c.ok && c.action ? luminaAction(c.action, { arg: c.actionArg }) : 'disabled'}>
                     <i class="fa-solid fa-${c.ok ? 'check' : 'circle-exclamation'}"></i>
                     <span>${escapeHtml(c.label)}</span>
                 </button>
@@ -680,16 +680,16 @@ function renderCoachQuickActions() {
     const actions = [];
     if (ctx.nextTask) {
         if (!S.focusSession?.coachActive) {
-            actions.push({ label: '教練帶我做', fn: 'coachBeginGuidedSession()' });
+            actions.push({ label: '教練帶我做', action: 'coachBeginGuidedSession' });
         }
-        actions.push({ label: '卡住了', fn: "sendCoachAgentMessage('卡住了')" });
-        actions.push({ label: '完成這步', fn: "sendCoachAgentMessage('完成這步')" });
-        actions.push({ label: '換簡單點', fn: "sendCoachAgentMessage('太難了，換簡單一點')" });
+        actions.push({ label: '卡住了', action: 'sendCoachAgentMessage', arg: '卡住了' });
+        actions.push({ label: '完成這步', action: 'sendCoachAgentMessage', arg: '完成這步' });
+        actions.push({ label: '換簡單點', action: 'sendCoachAgentMessage', arg: '太難了，換簡單一點' });
     } else {
-        actions.push({ label: '分解目標', fn: 'openDecomposeTab()' });
+        actions.push({ label: '分解目標', action: 'openDecomposeTab' });
     }
     container.innerHTML = actions.map(a =>
-        `<button type="button" onclick="${a.fn}" class="coach-quick-btn">${escapeHtml(a.label)}</button>`
+        `<button type="button" ${luminaAction(a.action, a.arg !== undefined ? { arg: a.arg } : {})} class="coach-quick-btn">${escapeHtml(a.label)}</button>`
     ).join('');
 }
 

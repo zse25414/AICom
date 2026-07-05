@@ -402,7 +402,7 @@ function renderCoachPlan(plan, planId) {
             <div class="coach-plan-section-title"><i class="fa-solid fa-list-check"></i> 完成檢核</div>
             <ul class="coach-checklist-interactive">${plan.checklist.map((c, i) => `
                 <li><label class="coach-check-item">
-                    <input type="checkbox" ${plan.checklistDone?.[i] ? 'checked' : ''} onchange="toggleCoachChecklistItem('${escapeHtml(planId)}', ${i}, this.checked)">
+                    <input type="checkbox" ${plan.checklistDone?.[i] ? 'checked' : ''} ${luminaChange('toggleCoachChecklistItem', [planId, i, '__checked__'])}>
                     <span>${escapeHtml(c)}</span>
                 </label></li>`).join('')}</ul>
         </div>` : '';
@@ -432,10 +432,10 @@ function renderCoachPlan(plan, planId) {
                 ${tipsHtml}
             </div>
             <div class="coach-action-bar">
-                <button type="button" class="coach-action-btn coach-action-btn-success" onclick="startCoachPlan('${planId}')"><i class="fa-solid fa-play"></i> 照此開始</button>
-                <button type="button" class="coach-action-btn coach-action-btn-primary" onclick="copyCoachPlan('${planId}')"><i class="fa-solid fa-copy"></i> 複製已填內容</button>
-                <button type="button" class="coach-action-btn" onclick="applyCoachStepsAsTasks('${planId}')"><i class="fa-solid fa-plus"></i> 加入子步驟</button>
-                <button type="button" class="coach-action-btn opacity-70" onclick="downloadCoachDocument('${planId}')"><i class="fa-solid fa-file-export"></i> 匯出 .md</button>
+                <button type="button" class="coach-action-btn coach-action-btn-success" ${luminaAction('startCoachPlan', { arg: planId })}><i class="fa-solid fa-play"></i> 照此開始</button>
+                <button type="button" class="coach-action-btn coach-action-btn-primary" ${luminaAction('copyCoachPlan', { arg: planId })}><i class="fa-solid fa-copy"></i> 複製已填內容</button>
+                <button type="button" class="coach-action-btn" ${luminaAction('applyCoachStepsAsTasks', { arg: planId })}><i class="fa-solid fa-plus"></i> 加入子步驟</button>
+                <button type="button" class="coach-action-btn opacity-70" ${luminaAction('downloadCoachDocument', { arg: planId })}><i class="fa-solid fa-file-export"></i> 匯出 .md</button>
             </div>
         </div>`;
 }

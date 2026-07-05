@@ -269,7 +269,7 @@ function renderNotificationPanel() {
         const iconCls = isComplete ? 'notif-item-icon-completed' : 'notif-item-icon-assigned';
         const icon = isComplete ? 'fa-check' : (note.type === 'task_assigned_confirm' ? 'fa-share' : 'fa-paper-plane');
         return `
-            <div class="notif-item ${note.read ? '' : 'unread'}" onclick="handleTeamNotificationClick('${note.id}')" role="button" tabindex="0">
+            <div class="notif-item ${note.read ? '' : 'unread'}" ${luminaAction('handleTeamNotificationClick', { arg: note.id })} role="button" tabindex="0">
                 <div class="notif-item-icon ${iconCls}"><i class="fa-solid ${icon}"></i></div>
                 <div class="min-w-0 flex-1">
                     <div class="notif-item-title">${escapeHtml(note.title)}</div>

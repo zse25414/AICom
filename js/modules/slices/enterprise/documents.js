@@ -510,7 +510,7 @@ function renderEnterpriseDocuments() {
                     <div class="text-[10px] text-slate-500 mt-0.5">發布者：${escapeHtml(d.author || '主管')} · ${new Date(d.createdAt).toLocaleString('zh-TW')}</div>
                 </div>
                 ${isManager ? `
-                    <button onclick="deleteTeamDocument('${d.id}')" class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition-colors">
+                    <button ${luminaAction('deleteTeamDocument', { arg: d.id })} class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition-colors">
                         <i class="fa-solid fa-trash-can"></i>
                     </button>
                 ` : ''}
@@ -552,7 +552,7 @@ function renderEnterpriseDocuments() {
             
             ${isImage ? `
                 <div class="mt-3">
-                    <img src="${resolveDocFileUrl(d.fileUrl)}" class="max-h-48 rounded-xl border border-slate-800/80 object-contain hover:scale-[1.01] transition-transform cursor-pointer" onclick="window.open(this.src, '_blank')">
+                    <img src="${resolveDocFileUrl(d.fileUrl)}" class="max-h-48 rounded-xl border border-slate-800/80 object-contain hover:scale-[1.01] transition-transform cursor-pointer" ${luminaAction('openSafeUrl', { argFrom: 'src' })}>
                 </div>
                 <p class="text-xs text-slate-400 mt-2.5 whitespace-pre-wrap leading-relaxed"><i class="fa-solid fa-circle-info mr-1 text-purple-400"></i>${escapeHtml(d.content)}</p>
             ` : ''}

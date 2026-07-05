@@ -116,7 +116,7 @@ function optimizeSchedule(silent = false, force = false) {
                     <span class="cat-badge ${getCategoryColor(r.category)}">${getCategoryLabel(r.category)}</span>
                     <span class="text-slate-500 font-mono">${r.duration}m</span>
                 </div>
-                ${r.duration >= 45 ? `<button onclick="splitTask(${r.id})" class="text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded-lg border border-indigo-500/30 flex-shrink-0 ml-2"><i class="fa-solid fa-scissors text-[10px]"></i> 拆分</button>` : ''}
+                ${r.duration >= 45 ? `<button ${luminaAction('splitTask', { arg: r.id, type: 'number' })} class="text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded-lg border border-indigo-500/30 flex-shrink-0 ml-2"><i class="fa-solid fa-scissors text-[10px]"></i> 拆分</button>` : ''}
             </div>
         `).join('');
         

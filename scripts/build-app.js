@@ -44,7 +44,10 @@ export const __exports = { ${fns.join(', ')} };
 export function registerChunkGlobals() {
     const fns = { ${fns.join(', ')} };
     for (const [key, val] of Object.entries(fns)) {
-        if (typeof val === 'function') window[key] = val;
+        if (typeof val === 'function') {
+            window[key] = val;
+            window.registerLuminaAction?.(key, val);
+        }
     }
 }
 registerChunkGlobals();
@@ -94,25 +97,46 @@ const LAZY_TEST_EXPORTS = [
     'clearApiKey', 'mergeTasksArrays', 'toggleDashStats'
 ];
 
-function collectHtmlActionNames(htmlPath) {
-    const html = fs.readFileSync(htmlPath, 'utf8');
+function collectActionNamesFromSource(text) {
     const names = new Set();
-    for (const m of html.matchAll(/data-lumina-action="(\w+)"/g)) names.add(m[1]);
-    for (const m of html.matchAll(/data-lumina-dismiss="(\w+)"/g)) names.add(m[1]);
-    for (const m of html.matchAll(/data-lumina-submit="(\w+)"/g)) names.add(m[1]);
-    for (const m of html.matchAll(/data-lumina-actions='([^']+)'/g)) {
+    for (const m of text.matchAll(/data-lumina-action="(\w+)"/g)) names.add(m[1]);
+    for (const m of text.matchAll(/data-lumina-dismiss="(\w+)"/g)) names.add(m[1]);
+    for (const m of text.matchAll(/data-lumina-submit="(\w+)"/g)) names.add(m[1]);
+    for (const m of text.matchAll(/data-lumina-change="(\w+)"/g)) names.add(m[1]);
+    for (const m of text.matchAll(/data-lumina-keydown="(\w+)"/g)) names.add(m[1]);
+    for (const m of text.matchAll(/luminaAction\(\s*'(\w+)'/g)) names.add(m[1]);
+    for (const m of text.matchAll(/luminaAction\(\s*"(\w+)"/g)) names.add(m[1]);
+    for (const m of text.matchAll(/luminaAction\(\s*(\w+)/g)) names.add(m[1]);
+    for (const m of text.matchAll(/luminaChange\(\s*'(\w+)'/g)) names.add(m[1]);
+    for (const m of text.matchAll(/data-lumina-actions='([^']+)'/g)) {
         try {
             JSON.parse(m[1]).forEach(([n]) => names.add(n));
         } catch (_) {}
     }
+    for (const m of text.matchAll(/actions:\s*\[([^\]]+)\]/g)) {
+        for (const n of m[1].matchAll(/'(\w+)'/g)) names.add(n[1]);
+    }
     return names;
 }
 
-function collectLazyWindowExports(coreFns) {
-    const names = collectHtmlActionNames(path.join(root, 'lumina-ai.html'));
+function collectAllActionNames(manifest) {
+    const names = new Set();
+    collectActionNamesFromSource(fs.readFileSync(path.join(root, 'lumina-ai.html'), 'utf8')).forEach((n) => names.add(n));
+    for (const rel of manifest.core) {
+        const file = path.join(slicesDir, rel);
+        if (fs.existsSync(file)) {
+            collectActionNamesFromSource(fs.readFileSync(file, 'utf8')).forEach((n) => names.add(n));
+        }
+    }
+    return names;
+}
+
+function collectLazyWindowExports(coreFns, manifest) {
+    const names = collectAllActionNames(manifest);
     LAZY_TEST_EXPORTS.forEach((n) => names.add(n));
     const coreSet = new Set(coreFns);
-    return [...names].filter((n) => coreSet.has(n)).sort();
+    const reserved = new Set(['true', 'false', 'isLast', 'undefined', 'null']);
+    return [...names].filter((n) => coreSet.has(n) && !reserved.has(n)).sort();
 }
 
 async function build() {
@@ -188,7 +212,8 @@ ${coreCode}
 
 ${lazyBridge}
 ${patchNav}
-${collectLazyWindowExports(coreFns).map((n) => `window['${n}'] = ${n};`).join('\n')}
+${collectLazyWindowExports(coreFns, manifest).map((n) => `registerLuminaAction('${n}', ${n});`).join('\n')}
+${LAZY_TEST_EXPORTS.filter((n) => coreFns.includes(n)).map((n) => `window['${n}'] = ${n};`).join('\n')}
 window.initializeApp = initializeApp;
 window.onload = () => initializeApp();
 window.lumina = () => triggerConfetti();

@@ -75,10 +75,12 @@ function runTests() {
   try {
     let delegationHits = 0;
     const origToggle = window.toggleDashStats;
-    window.toggleDashStats = function () {
+    const spyToggle = function () {
       delegationHits++;
       return origToggle?.apply(this, arguments);
     };
+    window.toggleDashStats = spyToggle;
+    window.registerLuminaAction?.('toggleDashStats', spyToggle);
     const delegateBtn = window.document.querySelector('[data-lumina-action="toggleDashStats"]');
     if (!delegateBtn) {
       errors.push({ type: 'delegation', message: 'toggleDashStats button missing data-lumina-action' });
