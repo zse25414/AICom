@@ -63,11 +63,13 @@ function registerServiceWorker() {
     if (!('serviceWorker' in navigator) || window.location.protocol === 'file:') return;
     
     const swCode = `
-        const CACHE = 'lumina-v8';
+        const CACHE = 'lumina-v9';
         const origin = '${window.location.origin}';
         const LOCAL_ASSETS = [
             origin + '/lumina-ai.html',
             origin + '/js/lumina-app.js',
+            origin + '/js/chunks/lumina-coach.js',
+            origin + '/js/chunks/lumina-enterprise-docs.js',
             origin + '/css/lumina.css',
             origin + '/css/tailwind.build.css'
         ];

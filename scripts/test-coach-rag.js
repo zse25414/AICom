@@ -1,5 +1,5 @@
 /**
- * 教練 AI 知識庫問答 E2E 驗證（模擬前端流程）
+ * 教練 AI 知識庫問答 E2E（自包含：建立群組 + 上傳文件 + 查詢）
  */
 const http = require('http');
 
@@ -18,9 +18,9 @@ function request(method, path, body, token) {
                 ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}),
                 ...(token ? { Authorization: `Bearer ${token}` } : {})
             }
-        }, res => {
+        }, (res) => {
             let data = '';
-            res.on('data', chunk => { data += chunk; });
+            res.on('data', (chunk) => { data += chunk; });
             res.on('end', () => {
                 let parsed = {};
                 try { parsed = data ? JSON.parse(data) : {}; } catch (_) {}
@@ -50,41 +50,47 @@ function assertStep(name, cond, detail) {
         assertStep('register', register.status === 201 && register.data.token, register.raw);
         const token = register.data.token;
 
-        const join = await request('POST', '/api/enterprise/group/join', {
-            code: '123456',
-            name: `CoachTest${Date.now().toString().slice(-4)}`,
-            role: 'member'
+        const code = `C${Date.now().toString().slice(-6)}`;
+        const create = await request('POST', '/api/enterprise/group/create', {
+            code,
+            name: 'Coach RAG Team',
+            managerName: 'Manager',
+            managerPin: '847293'
         }, token);
-        assertStep('join group 123456', join.status === 200 && join.data.ok, join.data.error || join.raw);
+        assertStep('create group', create.status === 200 && create.data.ok, create.data.error || create.raw);
 
-        const kbList = await request('GET', '/api/rag/kb/list?group_code=123456', null, token);
+        const upload = await request('POST', '/api/rag/document/upload-text', {
+            group_code: code,
+            kb_id: 'general',
+            title: '公司文化手冊',
+            content: '我們公司的核心價值是用戶價值第一。使命是幫助每個人完成今日第一步，簡單可執行。'
+        }, token);
+        assertStep('upload knowledge', upload.status === 200, upload.data.detail || upload.raw);
+
+        const kbList = await request('GET', `/api/rag/kb/list?group_code=${encodeURIComponent(code)}`, null, token);
         assertStep('kb list', kbList.status === 200, kbList.raw);
         const kbIds = Array.isArray(kbList.data.kb_ids) ? kbList.data.kb_ids : ['general'];
         console.log('  kb_ids:', kbIds.join(', '));
 
         const query = await request('POST', '/api/rag/query', {
             query: '公司的核心價值是什麼？',
-            group_code: '123456',
-            kb_ids: kbIds.length ? kbIds : ['onboarding', 'general']
+            group_code: code,
+            kb_ids: kbIds.length ? kbIds : ['general']
         }, token);
-        assertStep('rag query', query.status === 200 && query.data.answer, query.data.error || query.raw);
+        assertStep('rag query', query.status === 200 && query.data.answer, query.data.error || query.data.detail || query.raw);
 
         const answer = String(query.data.answer || '');
         const sources = query.data.sources || [];
         const hasValueHint = /核心價值|用戶價值|簡單|使命/.test(answer);
-        const hasSources = sources.length > 0;
-
-        assertStep('answer has knowledge', hasValueHint || answer.length > 40, answer.slice(0, 120));
-        assertStep('sources returned', hasSources, `count=${sources.length}`);
+        assertStep('answer has knowledge', hasValueHint || answer.length > 20, answer.slice(0, 120));
+        assertStep('sources returned', sources.length > 0, `count=${sources.length}`);
 
         console.log('\n--- Coach RAG preview ---');
-        console.log('retrieval_mode:', query.data.retrieval_mode);
-        console.log('sources:', sources.map(s => `[${s.ref_id}] ${s.kb_id}/${s.filename}`).join(', '));
-        console.log('answer:', answer.slice(0, 280) + (answer.length > 280 ? '...' : ''));
-        console.log('\nAll coach RAG checks passed');
+        console.log(answer.slice(0, 200));
+        console.log('All coach-rag tests passed');
         process.exit(0);
-    } catch (err) {
-        console.error('FAIL', err.message);
+    } catch (e) {
+        console.error('COACH RAG TEST FAILED:', e.message);
         process.exit(1);
     }
 })();

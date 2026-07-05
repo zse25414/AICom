@@ -193,7 +193,10 @@ export function registerAllGlobals() {
         if (typeof val === 'function') window[key] = val;
     }
     window.initializeApp = initializeApp;
-    window.onload = () => initializeApp();
+    window.onload = () => initializeApp().catch((e) => {
+        console.error('[Lumina] Fatal init', e);
+        if (typeof showToast === 'function') showToast('應用程式啟動失敗，請重新整理', 'error');
+    });
     window.lumina = () => triggerConfetti();
 }
 registerAllGlobals();
@@ -215,7 +218,10 @@ ${patchNav}
 ${collectLazyWindowExports(coreFns, manifest).map((n) => `registerLuminaAction('${n}', ${n});`).join('\n')}
 ${LAZY_TEST_EXPORTS.filter((n) => coreFns.includes(n)).map((n) => `window['${n}'] = ${n};`).join('\n')}
 window.initializeApp = initializeApp;
-window.onload = () => initializeApp();
+window.onload = () => initializeApp().catch((e) => {
+    console.error('[Lumina] Fatal init', e);
+    if (typeof showToast === 'function') showToast('應用程式啟動失敗，請重新整理', 'error');
+});
 window.lumina = () => triggerConfetti();
 `
         );

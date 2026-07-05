@@ -18,7 +18,6 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run build
       - run: npm test
 
   integration-test:
@@ -26,11 +25,13 @@ jobs:
     needs: unit-test
     env:
       CI: 'true'
-      JWT_SECRET: lumina-ci-jwt-secret
+      JWT_SECRET: lumina-ci-jwt-secret-long-enough-for-hs256
       PIN_SALT: lumina-ci-pin-salt
       RAG_API_KEY: lumina-ci-rag-key
+      DEEPSEEK_API_KEY: sk-ci-placeholder
       API_PORT: '3001'
-      READY_TIMEOUT_SEC: '45'
+      READY_TIMEOUT_SEC: '90'
+      REQUIRE_ENTERPRISE_AUTH: '1'
     steps:
       - uses: actions/checkout@v4
 
@@ -39,8 +40,23 @@ jobs:
           node-version: '20'
           cache: npm
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - run: npm ci
-      - run: npm run build:app:lazy
+      - run: npm run build
+
+      - name: Install RAG dependencies
+        run: pip install -r rag_service/requirements.txt
+
+      - name: Start RAG service
+        run: |
+          cd rag_service
+          RAG_API_KEY=$RAG_API_KEY RAG_HOST=127.0.0.1 python main.py &
+          cd ..
+        env:
+          RAG_API_KEY: ${{ env.RAG_API_KEY }}
 
       - name: Start API proxy
         run: node api-proxy.js &
@@ -48,7 +64,19 @@ jobs:
       - name: Wait for API readiness
         run: node scripts/check-ready.js --wait
 
-      - name: Integration tests
+      - name: Auth tests
+        run: node scripts/test-auth.js
+
+      - name: Enterprise tests
+        run: node scripts/test-enterprise.js
+
+      - name: Security API tests (HTTP)
+        run: SECURITY_HTTP_TESTS=1 node scripts/test-security-api.js
+
+      - name: Coach RAG tests
+        run: node scripts/test-coach-rag.js
+
+      - name: Integration suite
         run: node scripts/test-integration.js
 
       - name: Post-test readiness gate

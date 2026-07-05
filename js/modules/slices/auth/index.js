@@ -249,7 +249,7 @@ async function loadUserDataFromServer() {
                 ...serverData,
                 tasks: mergeTasksArrays(serverData.tasks, localTasks),
                 dailyHistory: { ...(serverData.dailyHistory || {}), ...S.dailyHistory },
-                trackedFocusByDay: { ...(serverData.S.trackedFocusByDay || {}), ...S.trackedFocusByDay }
+                trackedFocusByDay: { ...(serverData.trackedFocusByDay || {}), ...S.trackedFocusByDay }
             });
             await syncUserDataToServer({ immediate: true });
         } else if (hasServer) {

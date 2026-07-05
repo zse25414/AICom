@@ -57,7 +57,7 @@ function assertStep(name, cond, detail) {
             code: groupCode,
             name: '測試團隊',
             managerName: '主管A',
-            managerPin: '1234'
+            managerPin: '847293'
         }, token);
         assertStep('create group', create.status === 200 && create.data.member?.role === 'manager', create.raw);
         const managerId = create.data.member.id;

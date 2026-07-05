@@ -56,7 +56,14 @@ async function invokeLuminaAction(name, event, args = []) {
     }
     const passEvent = args.length === 1 && args[0] === '__event__';
     const callArgs = passEvent ? [event] : args;
-    return await fn(...callArgs);
+    try {
+        return await fn(...callArgs);
+    } catch (err) {
+        console.error('[Lumina] action failed:', name, err);
+        if (typeof showToast === 'function') {
+            showToast('操作失敗，請稍後再試', 'error');
+        }
+    }
 }
 
 async function runLuminaActionsFromElement(el, event) {

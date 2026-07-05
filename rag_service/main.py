@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 
-from config import ALLOWED_ORIGINS, HOST, PORT, RAG_API_KEY, SERVICE_VERSION
+from config import ALLOWED_ORIGINS, HOST, IS_PRODUCTION, PORT, RAG_API_KEY, SERVICE_VERSION
 from rag_engine import (
     build_sources,
     configure_embedding,
@@ -45,7 +45,9 @@ class RagApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path == "/health":
             return await call_next(request)
-        if RAG_API_KEY:
+        if IS_PRODUCTION or RAG_API_KEY:
+            if not RAG_API_KEY:
+                raise HTTPException(status_code=503, detail="RAG API key not configured")
             provided = request.headers.get("X-RAG-API-Key", "").strip()
             if provided != RAG_API_KEY:
                 raise HTTPException(status_code=401, detail="Invalid or missing RAG API key")

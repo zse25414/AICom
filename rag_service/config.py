@@ -41,3 +41,7 @@ MIN_RELEVANCE_SCORE = float(os.getenv("RAG_MIN_RELEVANCE_SCORE", "0.01"))
 
 SERVICE_VERSION = "2.0"
 RAG_API_KEY = os.getenv("RAG_API_KEY", "").strip()
+IS_PRODUCTION = os.getenv("NODE_ENV") == "production" or os.getenv("LUMINA_ENFORCE_SECRETS") == "1"
+
+if IS_PRODUCTION and not RAG_API_KEY:
+    raise SystemExit("[RAG] 生產環境必須設定 RAG_API_KEY")

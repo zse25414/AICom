@@ -1,6 +1,6 @@
-# Lumina 本機 / 小型部署
+# Lumina 本機開發 — 請勿直接用於生產（生產請用 docker-compose.prod.yml）
 #   docker compose up          # web + api
-#   docker compose --profile full up   # 含 RAG（首次建置較久）
+#   docker compose --profile full up   # 含 RAG（僅本機；RAG 不對外暴露）
 
 services:
   api:
@@ -41,10 +41,11 @@ services:
     build:
       context: ./rag_service
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       RAG_HOST: 0.0.0.0
+      RAG_API_KEY: ${RAG_API_KEY:-lumina-dev-rag-key}
       EMBEDDING_PROVIDER: local
     volumes:
       - ./rag_service/storage:/app/storage

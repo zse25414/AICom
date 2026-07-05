@@ -21,6 +21,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
+const bcrypt = require('bcryptjs');
 const { loadEnvFile } = require('./lib/env');
 const { initDb, ensureIndexes, getDatabaseStats } = require('./lib/db');
 const {
@@ -77,6 +78,11 @@ const RATE_LIMIT_MAX = 120;
 const AUTH_RATE_LIMIT_MAX = 20;
 const PIN_MAX_ATTEMPTS = 5;
 const PIN_LOCK_MS = 15 * 60 * 1000;
+const AI_RATE_LIMIT_MAX = 30;
+const AI_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const ALLOWED_UPLOAD_EXT = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.xlsx', '.xls', '.csv']);
+const WEAK_PINS = new Set(['0000', '1234', '1111', '9999', '4321', '1212', 'password', 'admin']);
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -90,6 +96,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3456,h
 const rateBuckets = new Map();
 const authRateBuckets = new Map();
 const pinAttemptBuckets = new Map();
+const aiRateBuckets = new Map();
 
 function enforceProductionSecrets() {
     if (!IS_PRODUCTION) return;
@@ -97,19 +104,41 @@ function enforceProductionSecrets() {
     if (getJwtConfig().usingDefaultSecret) missing.push('JWT_SECRET');
     if (PIN_SALT === 'lumina-pin-salt-change-in-production') missing.push('PIN_SALT');
     if (!RAG_API_KEY) missing.push('RAG_API_KEY');
+    if (!API_KEY) missing.push('DEEPSEEK_API_KEY');
     if (missing.length) {
         console.error('[Lumina API] 生產環境缺少必要密鑰設定:', missing.join(', '));
         process.exit(1);
     }
 }
 
+function isValidManagerPin(pin) {
+    const p = String(pin || '').trim();
+    if (p.length < 4 || p.length > 32) return false;
+    if (WEAK_PINS.has(p.toLowerCase())) return false;
+    return true;
+}
+
 function hashPin(pin) {
-    return crypto.createHash('sha256').update(PIN_SALT + ':' + String(pin)).digest('hex');
+    return bcrypt.hashSync(String(pin), 10);
+}
+
+function verifyLegacyPinHash(pin, hash) {
+    return crypto.createHash('sha256').update(PIN_SALT + ':' + String(pin)).digest('hex') === hash;
+}
+
+function verifyPinHash(pin, hash) {
+    if (!hash) return false;
+    if (String(hash).startsWith('$2')) return bcrypt.compareSync(String(pin), hash);
+    return verifyLegacyPinHash(pin, hash);
 }
 
 function verifyManagerPin(group, pin) {
     if (group.managerPinHash) {
-        return hashPin(pin) === group.managerPinHash;
+        const ok = verifyPinHash(pin, group.managerPinHash);
+        if (ok && !String(group.managerPinHash).startsWith('$2')) {
+            group.managerPinHash = hashPin(pin);
+        }
+        return ok;
     }
     if (group.managerPin !== undefined) {
         return String(pin) === String(group.managerPin);
@@ -217,18 +246,29 @@ function readBody(req) {
     });
 }
 
+function securityHeaders() {
+    return {
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'strict-origin-when-cross-origin',
+        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        ...(IS_PRODUCTION ? { 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains' } : {})
+    };
+}
+
 function sendJson(res, status, data) {
     const body = JSON.stringify(data);
+    const baseHeaders = { 'Content-Type': 'application/json', ...securityHeaders() };
     const encoding = String(res._req?.headers['accept-encoding'] || '');
     if (body.length > 256 && encoding.includes('gzip')) {
         zlib.gzip(body, (err, compressed) => {
             if (err) {
-                res.writeHead(status, { 'Content-Type': 'application/json' });
+                res.writeHead(status, baseHeaders);
                 res.end(body);
                 return;
             }
             res.writeHead(status, {
-                'Content-Type': 'application/json',
+                ...baseHeaders,
                 'Content-Encoding': 'gzip',
                 'Vary': 'Accept-Encoding'
             });
@@ -236,8 +276,37 @@ function sendJson(res, status, data) {
         });
         return;
     }
-    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.writeHead(status, baseHeaders);
     res.end(body);
+}
+
+function sanitizeChatBody(body) {
+    if (!body || typeof body !== 'object') return null;
+    if (!Array.isArray(body.messages) || body.messages.length === 0 || body.messages.length > 50) return null;
+    const messages = body.messages.map((m) => {
+        if (!m || typeof m !== 'object') return null;
+        const role = ['system', 'user', 'assistant'].includes(m.role) ? m.role : 'user';
+        const content = clampText(m.content, 16000);
+        if (!content) return null;
+        return { role, content };
+    }).filter(Boolean);
+    if (!messages.length) return null;
+    const out = {
+        model: ['deepseek-chat', 'deepseek-reasoner'].includes(body.model) ? body.model : 'deepseek-chat',
+        messages
+    };
+    if (typeof body.temperature === 'number') {
+        out.temperature = Math.min(2, Math.max(0, body.temperature));
+    }
+    if (typeof body.max_tokens === 'number') {
+        out.max_tokens = Math.min(8192, Math.max(1, Math.floor(body.max_tokens)));
+    }
+    return out;
+}
+
+function checkAiRateLimit(userId) {
+    const key = userId || 'anonymous';
+    return checkRateLimitBucket(aiRateBuckets, key, AI_RATE_LIMIT_MAX);
 }
 
 function prepareStore(store) {
@@ -292,8 +361,7 @@ function parseQuery(req) {
 }
 
 async function getAuthFromRequest(req) {
-    const query = parseQuery(req);
-    const token = parseBearerToken(req) || query.get('token');
+    const token = parseBearerToken(req);
     if (!token) return null;
     const payload = verifyToken(token);
     if (!payload?.userId) return null;
@@ -512,13 +580,16 @@ async function handleEnterprise(req, res, urlPath, method) {
             const code = normalizeCode(body.code);
             const name = clampText(body.name, 80) || '未命名團隊';
             const managerName = clampText(body.managerName, 80);
-            const managerPin = clampText(body.managerPin, 32) || '0000';
+            const managerPin = clampText(body.managerPin, 32);
 
             if (!code || code.length < 4) {
                 return sendJson(res, 400, { error: '群組代碼至少 4 個字元' });
             }
             if (!managerName) {
                 return sendJson(res, 400, { error: '請輸入主管名稱' });
+            }
+            if (!isValidManagerPin(managerPin)) {
+                return sendJson(res, 400, { error: '請設定 4–32 位主管 PIN，且不可使用常見弱密碼' });
             }
             if (store.groups[code]) {
                 return sendJson(res, 409, { error: '此群組代碼已存在' });
@@ -688,8 +759,15 @@ async function handleEnterprise(req, res, urlPath, method) {
             if ((docType === 'pdf' || docType === 'image' || docType === 'excel') && body.fileData && body.filename) {
                 try {
                     const fileBuffer = Buffer.from(body.fileData, 'base64');
-                    const ext = path.extname(body.filename) || (docType === 'pdf' ? '.pdf' : docType === 'excel' ? '.xlsx' : '.png');
-                    const uniqueFilename = `${uid()}-${path.basename(body.filename, ext)}${ext}`;
+                    const ext = (path.extname(body.filename) || (docType === 'pdf' ? '.pdf' : docType === 'excel' ? '.xlsx' : '.png')).toLowerCase();
+                    if (!ALLOWED_UPLOAD_EXT.has(ext)) {
+                        return sendJson(res, 400, { error: '不支援的檔案類型' });
+                    }
+                    if (fileBuffer.length > MAX_UPLOAD_BYTES) {
+                        return sendJson(res, 400, { error: '檔案過大（上限 5MB）' });
+                    }
+                    const safeBase = path.basename(body.filename, ext).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+                    const uniqueFilename = `${uid()}-${safeBase}${ext}`;
                     const filePath = path.join(UPLOADS_DIR, uniqueFilename);
                     fs.writeFileSync(filePath, fileBuffer);
                     fileUrl = `/uploads/${uniqueFilename}`;
@@ -1128,6 +1206,11 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && urlPath === '/api/rag/query') {
+                const aiUserId = aiAuth.user?.id || getClientIp(req);
+                if (!checkAiRateLimit(aiUserId)) {
+                    sendJson(res, 429, { error: 'AI 請求過於頻繁，請稍後再試' });
+                    return;
+                }
                 const body = await readBody(req);
                 const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
                 if (!access.ok) {
@@ -1232,8 +1315,18 @@ const server = http.createServer(async (req, res) => {
             sendJson(res, 500, { error: 'Missing DEEPSEEK_API_KEY environment variable' });
             return;
         }
+        const aiUserId = aiAuth.user?.id || getClientIp(req);
+        if (!checkAiRateLimit(aiUserId)) {
+            sendJson(res, 429, { error: 'AI 請求過於頻繁，請稍後再試' });
+            return;
+        }
         try {
-            const body = await readBody(req);
+            const rawBody = await readBody(req);
+            const body = sanitizeChatBody(rawBody);
+            if (!body) {
+                sendJson(res, 400, { error: '無效的 AI 請求格式' });
+                return;
+            }
             const response = await fetch(DEEPSEEK_URL, {
                 method: 'POST',
                 headers: {

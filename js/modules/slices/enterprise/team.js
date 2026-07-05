@@ -47,7 +47,7 @@ async function enterpriseLocalCreate(body) {
     store.groups[code] = {
         code,
         name: clampText(body.name || '未命名團隊', 80),
-        managerPinHash: await hashPin(body.managerPin || '0000'),
+        managerPinHash: await hashPin(body.managerPin),
         members: [{
             id: managerId,
             name: clampText(body.managerName, 80),
@@ -212,10 +212,12 @@ async function createEnterpriseGroup() {
     const name = document.getElementById('team-create-name').value.trim();
     const code = normalizeEnterpriseCode(document.getElementById('team-create-code').value);
     const managerName = document.getElementById('team-create-manager').value.trim();
-    const managerPin = document.getElementById('team-create-pin').value.trim() || '0000';
+    const managerPin = document.getElementById('team-create-pin').value.trim();
     
     if (!code || code.length < 4) return showToast('群組代碼至少 4 個字元', 'error');
     if (!managerName) return showToast('請輸入主管名稱', 'error');
+    if (!managerPin || managerPin.length < 4) return showToast('請設定至少 4 位主管 PIN', 'error');
+    if (['0000', '1234', '1111'].includes(managerPin)) return showToast('PIN 過於簡單，請更換', 'error');
     
     const payload = { name, code, managerName, managerPin };
     let result;

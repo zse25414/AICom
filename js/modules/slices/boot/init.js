@@ -79,5 +79,4 @@ async function initializeApp() {
     console.log('%c[Lumina AI] 已成功初始化。使用者可立即使用所有功能。', 'color:#475569');
 
     setupRagHealthMonitoring();
-    window.pregenerateExample = pregenerateExample;
 }
