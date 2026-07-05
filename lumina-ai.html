@@ -9,11 +9,14 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Lumina">
     <title>光流 AI Lumina • 大目標 → 今日第一步</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com">
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com">
+    <link rel="stylesheet" href="css/tailwind.build.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" media="print" onload="this.media='all'">
+    <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"></noscript>
     <link rel="stylesheet" href="css/lumina.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body class="bg-slate-950 text-slate-200">
     <div class="ambient-orb ambient-orb-1"></div>
@@ -30,7 +33,7 @@
         <div class="max-w-7xl mx-auto px-4 sm:px-6">
             <div class="flex items-center justify-between gap-3" style="height: var(--nav-height)">
                 <!-- Logo -->
-                <button onclick="showSection('dashboard')" class="flex items-center gap-x-3 flex-shrink-0 group" aria-label="回到儀表板">
+                <button data-lumina-action="showSection" data-lumina-arg="dashboard" class="flex items-center gap-x-3 flex-shrink-0 group" aria-label="回到儀表板">
                     <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg glow group-hover:scale-105 transition-transform">
                         <i class="fa-solid fa-bolt text-white text-xl"></i>
                     </div>
@@ -42,31 +45,31 @@
                 
                 <!-- Desktop Nav -->
                 <div class="hidden md:flex items-center nav-pill-group text-sm flex-shrink min-w-0">
-                    <button onclick="showSection('dashboard')" class="nav-link px-4 py-2 text-sm font-medium flex items-center gap-x-1.5 active" id="nav-dashboard" aria-current="page">
+                    <button data-lumina-action="showSection" data-lumina-arg="dashboard" class="nav-link px-4 py-2 text-sm font-medium flex items-center gap-x-1.5 active" id="nav-dashboard" aria-current="page">
                         <i class="fa-solid fa-sun w-3.5 text-[11px]"></i><span>今日</span>
                     </button>
-                    <button onclick="showSection('scheduler')" class="nav-link px-4 py-2 text-sm font-medium flex items-center gap-x-1.5" id="nav-scheduler">
+                    <button data-lumina-action="showSection" data-lumina-arg="scheduler" class="nav-link px-4 py-2 text-sm font-medium flex items-center gap-x-1.5" id="nav-scheduler">
                         <i class="fa-solid fa-list-check w-3.5 text-[11px]"></i><span>任務</span>
                     </button>
-                    <button onclick="showSection('coach')" class="nav-link px-4 py-2 text-sm font-medium flex items-center gap-x-1.5" id="nav-coach">
+                    <button data-lumina-action="showSection" data-lumina-arg="coach" class="nav-link px-4 py-2 text-sm font-medium flex items-center gap-x-1.5" id="nav-coach">
                         <i class="fa-solid fa-bolt w-3.5 text-[11px]"></i><span>教練</span>
                     </button>
                     <div class="relative" id="nav-more-wrap">
-                        <button onclick="toggleNavMore()" class="nav-link px-4 py-2 text-sm font-medium flex items-center gap-x-1.5" id="nav-more-btn" aria-expanded="false" aria-haspopup="true">
+                        <button data-lumina-action="toggleNavMore" class="nav-link px-4 py-2 text-sm font-medium flex items-center gap-x-1.5" id="nav-more-btn" aria-expanded="false" aria-haspopup="true">
                             <i class="fa-solid fa-table-cells w-3.5 text-[11px]"></i><span>更多</span>
                         </button>
                         <div id="nav-more-menu" class="nav-dropdown hidden" role="menu">
-                            <button onclick="navigateFromMore('guide')" class="nav-dropdown-item" id="nav-dropdown-guide" role="menuitem">
+                            <button data-lumina-action="navigateFromMore" data-lumina-arg="guide" class="nav-dropdown-item" id="nav-dropdown-guide" role="menuitem">
                                 <i class="fa-solid fa-book w-4 text-sky-400"></i><span>使用指南</span>
                             </button>
                             <div class="px-3 py-1.5 text-[10px] text-slate-500 uppercase tracking-wider">進階功能</div>
-                            <button onclick="navigateFromMore('insights')" class="nav-dropdown-item" id="nav-dropdown-insights" role="menuitem">
+                            <button data-lumina-action="navigateFromMore" data-lumina-arg="insights" class="nav-dropdown-item" id="nav-dropdown-insights" role="menuitem">
                                 <i class="fa-solid fa-chart-line w-4 text-emerald-400"></i><span>數據洞察</span>
                             </button>
-                            <button onclick="navigateFromMore('team')" class="nav-dropdown-item" id="nav-dropdown-team" role="menuitem">
+                            <button data-lumina-action="navigateFromMore" data-lumina-arg="team" class="nav-dropdown-item" id="nav-dropdown-team" role="menuitem">
                                 <i class="fa-solid fa-users w-4 text-indigo-400"></i><span>團隊模式</span>
                             </button>
-                            <button onclick="navigateFromMore('settings')" class="nav-dropdown-item" id="nav-dropdown-settings" role="menuitem">
+                            <button data-lumina-action="navigateFromMore" data-lumina-arg="settings" class="nav-dropdown-item" id="nav-dropdown-settings" role="menuitem">
                                 <i class="fa-solid fa-gear w-4 text-slate-400"></i><span>設定</span>
                             </button>
                         </div>
@@ -76,7 +79,7 @@
                 <!-- Right side -->
                 <div class="flex items-center gap-x-1.5 sm:gap-x-2">
                     <div class="relative hidden" id="notif-wrap">
-                        <button type="button" onclick="toggleNotificationPanel(event)" id="notif-bell-btn" class="notif-bell-btn" aria-label="團隊通知" aria-expanded="false">
+                        <button type="button" data-lumina-action="toggleNotificationPanel" data-lumina-pass-event id="notif-bell-btn" class="notif-bell-btn" aria-label="團隊通知" aria-expanded="false">
                             <i class="fa-solid fa-bell text-sm"></i>
                             <span id="notif-badge" class="notif-badge hidden">0</span>
                         </button>
@@ -84,20 +87,20 @@
                             <div class="notif-panel-header">
                                 <span class="text-sm font-semibold text-slate-200">團隊通知</span>
                                 <div class="flex items-center gap-2">
-                                    <button type="button" onclick="markAllTeamNotificationsRead()" class="text-[10px] text-indigo-400 hover:text-indigo-300">全部已讀</button>
-                                    <button type="button" onclick="closeNotificationPanel()" class="text-slate-500 hover:text-slate-300 text-xs"><i class="fa-solid fa-xmark"></i></button>
+                                    <button type="button" data-lumina-stop data-lumina-action="markAllTeamNotificationsRead" class="text-[10px] text-indigo-400 hover:text-indigo-300">全部已讀</button>
+                                    <button type="button" data-lumina-stop data-lumina-action="closeNotificationPanel" class="text-slate-500 hover:text-slate-300 text-xs" aria-label="關閉通知面板"><i class="fa-solid fa-xmark"></i></button>
                                 </div>
                             </div>
                             <div id="notif-panel-list" class="notif-panel-list custom-scroll"></div>
                             <div class="px-3 py-2 border-t border-slate-800 text-center">
-                                <button type="button" onclick="navigateFromMore('team');closeNotificationPanel()" class="text-[10px] text-slate-400 hover:text-indigo-300">通知設定 →</button>
+                                <button type="button" data-lumina-actions='[["navigateFromMore","team"],["closeNotificationPanel"]]' class="text-[10px] text-slate-400 hover:text-indigo-300">通知設定 →</button>
                             </div>
                         </div>
                     </div>
-                    <button onclick="quickStartToday()" class="btn-cta hidden lg:inline-flex" aria-label="取得今日第一步">
+                    <button data-lumina-action="quickStartToday" class="btn-cta hidden lg:inline-flex" aria-label="取得今日第一步">
                         <i class="fa-solid fa-forward-step text-[10px]"></i><span>今日第一步</span>
                     </button>
-                    <button onclick="openUserMenu()" class="flex items-center gap-x-2 rounded-xl pl-1 pr-2 py-1 hover:bg-slate-800/60 transition-colors" aria-label="個人設定">
+                    <button data-lumina-action="openUserMenu" class="flex items-center gap-x-2 rounded-xl pl-1 pr-2 py-1 hover:bg-slate-800/60 transition-colors" aria-label="個人設定">
                         <div id="user-avatar" class="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-400 to-purple-400 flex items-center justify-center text-xs font-bold ring-2 ring-offset-2 ring-offset-slate-950 ring-indigo-500/30">AC</div>
                         <div class="text-left hidden xl:block">
                             <div class="text-sm font-medium leading-tight" id="user-name">Alex Chen</div>
@@ -122,23 +125,23 @@
             <div id="next-step-card" class="next-step-card"></div>
             
             <div class="quick-actions">
-                <button onclick="openDecomposeTab()" class="quick-action-btn">
+                <button data-lumina-action="openDecomposeTab" class="quick-action-btn">
                     <i class="fa-solid fa-wand-magic-sparkles"></i><span>分解目標</span>
                 </button>
-                <button onclick="quickStartToday()" class="quick-action-btn">
+                <button data-lumina-action="quickStartToday" class="quick-action-btn">
                     <i class="fa-solid fa-forward-step"></i><span>今日第一步</span>
                 </button>
-                <button onclick="openCoachForNextTask()" class="quick-action-btn">
+                <button data-lumina-action="openCoachForNextTask" class="quick-action-btn">
                     <i class="fa-solid fa-bolt"></i><span>行動教練</span>
                 </button>
-                <button onclick="focusQuickAdd()" class="quick-action-btn">
+                <button data-lumina-action="focusQuickAdd" class="quick-action-btn">
                     <i class="fa-solid fa-plus"></i><span>新增任務</span>
                 </button>
             </div>
             
             <div id="active-goals-panel" class="hidden mb-5 space-y-2"></div>
             
-            <button onclick="toggleDashStats()" class="dash-toggle-btn" id="dash-stats-toggle">
+            <button data-lumina-action="toggleDashStats" class="dash-toggle-btn" id="dash-stats-toggle">
                 <i class="fa-solid fa-chart-simple"></i><span>查看數據摘要</span>
                 <i class="fa-solid fa-chevron-down text-[10px]" id="dash-stats-chevron"></i>
             </button>
@@ -165,7 +168,7 @@
                 <div class="stat-card bg-slate-900 border border-slate-800 rounded-3xl p-5">
                     <div class="flex justify-between items-start">
                         <div>
-                            <div class="text-xs font-medium text-slate-500 tracking-wider">專注時間</div>
+                            <div class="text-xs font-medium text-slate-500 tracking-wider">專注時間 <span class="text-[9px] text-slate-600">(計時器)</span></div>
                             <div class="mt-3 flex items-baseline">
                                 <span class="text-5xl font-semibold tabular-nums" id="focus-time">4.5</span>
                                 <span class="text-slate-400 ml-1.5">小時</span>
@@ -200,10 +203,10 @@
                 <div class="stat-card bg-slate-900 border border-slate-800 rounded-3xl p-5">
                     <div class="flex justify-between items-start">
                         <div>
-                            <div class="text-xs font-medium text-slate-500 tracking-wider">本週洞察</div>
+                            <div class="text-xs font-medium text-slate-500 tracking-wider">設定的高效時段</div>
                             <div class="mt-3">
                                 <span class="text-xl font-semibold" id="dash-peak-time">上午 10-12 點</span><br>
-                                <span class="text-emerald-400 text-sm" id="dash-peak-hint">是你最高效時段</span>
+                                <span class="text-emerald-400 text-sm" id="dash-peak-hint">可在設定頁調整</span>
                             </div>
                         </div>
                         <div class="w-11 h-11 rounded-2xl bg-purple-500/10 flex items-center justify-center">
@@ -219,13 +222,13 @@
                         <div class="font-semibold text-base">今日待辦佇列</div>
                         <div class="text-[10px] text-slate-500 mt-0.5">點選任務切換焦點 · 勾選完成自動跳到下一項</div>
                     </div>
-                    <button onclick="showSection('scheduler')" class="text-xs text-indigo-400 hover:text-indigo-300">全部任務 →</button>
+                    <button data-lumina-action="showSection" data-lumina-arg="scheduler" class="text-xs text-indigo-400 hover:text-indigo-300">全部任務 →</button>
                 </div>
                 <div class="flex gap-2 mb-4">
                     <input id="quick-task-input" type="text" placeholder="輸入任務，按 Enter 新增…" 
                            class="flex-1 form-input focus-ring"
                            onkeypress="if (event.key === 'Enter') quickAddTask()">
-                    <button onclick="quickAddTask()" class="px-4 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium flex-shrink-0">新增</button>
+                    <button data-lumina-action="quickAddTask" class="px-4 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium flex-shrink-0">新增</button>
                 </div>
                 <div id="dashboard-category-filters" class="flex flex-wrap gap-1.5 mb-3"></div>
                 <div class="space-y-2" id="today-focus-list"></div>
@@ -239,17 +242,17 @@
                     <h2 class="page-header-title">目標拆解與任務</h2>
                     <p class="page-header-desc">先把大目標拆開，再讓 AI 排出今日第一步</p>
                 </div>
-                <button id="scheduler-optimize-btn" onclick="optimizeSchedule()" 
+                <button id="scheduler-optimize-btn" data-lumina-action="optimizeSchedule" 
                         class="self-start md:self-auto px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-semibold flex items-center gap-x-2 text-sm active:scale-[0.985] transition-all shadow-lg shadow-indigo-500/20">
-                    <i class="fa-solid fa-brain"></i><span>AI 優化排程</span>
+                    <i class="fa-solid fa-brain"></i><span>智能排程</span>
                 </button>
             </div>
             
             <div class="scheduler-tabs">
-                <button onclick="switchSchedulerTab('tasks')" id="sched-tab-tasks" class="scheduler-tab active">
+                <button data-lumina-action="switchSchedulerTab" data-lumina-arg="tasks" id="sched-tab-tasks" class="scheduler-tab active">
                     <i class="fa-solid fa-list-check mr-1.5"></i>任務清單
                 </button>
-                <button onclick="switchSchedulerTab('decompose')" id="sched-tab-decompose" class="scheduler-tab">
+                <button data-lumina-action="switchSchedulerTab" data-lumina-arg="decompose" id="sched-tab-decompose" class="scheduler-tab">
                     <i class="fa-solid fa-magic mr-1.5"></i>目標分解
                 </button>
             </div>
@@ -301,7 +304,7 @@
                             <input id="task-due" type="date" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring">
                         </div>
                         
-                        <button onclick="addTaskToList()" 
+                        <button data-lumina-action="addTaskToList" 
                                 class="mt-2 w-full py-3 bg-emerald-500 hover:bg-emerald-600 transition-colors rounded-2xl font-medium text-sm flex items-center justify-center gap-x-2">
                             <i class="fa-solid fa-plus"></i>
                             <span>加入今日任務清單</span>
@@ -313,7 +316,7 @@
                 <div class="lg:col-span-7 panel-card p-6">
                     <div class="flex justify-between mb-3">
                         <div class="font-semibold">今日待辦清單 <span id="task-count" class="text-xs text-slate-400 font-normal">(8 項)</span></div>
-                        <button onclick="clearAllTasks()" class="text-xs text-red-400 hover:text-red-300 flex items-center gap-x-1">
+                        <button data-lumina-action="clearAllTasks" class="text-xs text-red-400 hover:text-red-300 flex items-center gap-x-1">
                             <i class="fa-solid fa-trash text-xs"></i> <span>清空</span>
                         </button>
                     </div>
@@ -329,8 +332,8 @@
                 <div class="lg:col-span-12 panel-card panel-card-accent-indigo p-6 mt-2">
                     <div class="flex items-center justify-between mb-5">
                         <div class="font-semibold flex items-center gap-x-2">
-                            <span>今日 AI 優化時間軸</span>
-                            <span class="px-2.5 py-px text-[10px] rounded bg-indigo-500/10 text-indigo-400">已根據能量曲線調整</span>
+                            <span>今日智能時間軸</span>
+                            <span class="px-2.5 py-px text-[10px] rounded bg-indigo-500/10 text-indigo-400">依能量曲線與時段容量</span>
                         </div>
                         <div class="text-xs text-slate-400">總預估： <span id="total-scheduled-time" class="font-mono text-emerald-400">6h 15m</span></div>
                     </div>
@@ -355,12 +358,12 @@
                                   class="form-input resize-y min-h-[90px] focus-ring"></textarea>
                     </div>
                     <div class="flex flex-wrap gap-2 mb-4">
-                        <div onclick="useExampleGoal(0)" class="chip-suggestion">季度 OKR 報告</div>
-                        <div onclick="useExampleGoal(1)" class="chip-suggestion">客戶提案</div>
-                        <div onclick="useExampleGoal(2)" class="chip-suggestion">學新技能</div>
-                        <div onclick="useExampleGoal(3)" class="chip-suggestion">Side Project</div>
+                        <div data-lumina-action="useExampleGoal" data-lumina-arg="0" data-lumina-arg-type="number" class="chip-suggestion">季度 OKR 報告</div>
+                        <div data-lumina-action="useExampleGoal" data-lumina-arg="1" data-lumina-arg-type="number" class="chip-suggestion">客戶提案</div>
+                        <div data-lumina-action="useExampleGoal" data-lumina-arg="2" data-lumina-arg-type="number" class="chip-suggestion">學新技能</div>
+                        <div data-lumina-action="useExampleGoal" data-lumina-arg="3" data-lumina-arg-type="number" class="chip-suggestion">Side Project</div>
                     </div>
-                    <button onclick="decomposeGoal()" 
+                    <button data-lumina-action="decomposeGoal" 
                             class="w-full py-3.5 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 font-semibold flex items-center justify-center gap-x-2 text-sm shadow-lg shadow-purple-500/20">
                         <i class="fa-solid fa-wand-magic-sparkles"></i><span>AI 分解目標</span>
                     </button>
@@ -369,13 +372,13 @@
                     <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
                         <div class="font-semibold">執行藍圖已生成</div>
                         <div class="flex flex-wrap gap-2">
-                            <button onclick="addFirstStepToToday()" class="text-xs px-3 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">
+                            <button data-lumina-action="addFirstStepToToday" class="text-xs px-3 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">
                                 <i class="fa-solid fa-forward-step mr-1"></i>只加入今日第一步
                             </button>
-                            <button onclick="addDecomposedToScheduler()" class="text-xs px-3 py-2 rounded-xl border border-slate-600 hover:bg-slate-800">
+                            <button data-lumina-action="addDecomposedToScheduler" class="text-xs px-3 py-2 rounded-xl border border-slate-600 hover:bg-slate-800">
                                 <i class="fa-solid fa-plus mr-1"></i>加入全部步驟
                             </button>
-                            <button onclick="copyPlanToClipboard()" class="text-xs px-3 py-2 rounded-xl border border-slate-600 hover:bg-slate-800">
+                            <button data-lumina-action="copyPlanToClipboard" class="text-xs px-3 py-2 rounded-xl border border-slate-600 hover:bg-slate-800">
                                 <i class="fa-solid fa-copy mr-1"></i>複製
                             </button>
                         </div>
@@ -400,6 +403,7 @@
 
                 <div class="coach-agent-shell bg-slate-900 border border-slate-700 rounded-3xl overflow-hidden shadow-2xl">
                     <div id="coach-context-bar" class="coach-context-bar"></div>
+                    <div id="coach-readiness-bar" class="coach-readiness-bar hidden"></div>
                     <div class="coach-agent-body">
                         <div id="coach-workspace" class="coach-agent-workspace custom-scroll"></div>
                         <div class="coach-chat-panel">
@@ -423,7 +427,7 @@
                                     <textarea id="chat-input" rows="2" placeholder="跟教練說：卡住了、做完了、換個做法…"
                                               class="coach-chat-input focus-ring"
                                               onkeydown="if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendCoachAgentMessage(); }"></textarea>
-                                    <button type="button" onclick="sendCoachAgentMessage()"
+                                    <button type="button" data-lumina-action="sendCoachAgentMessage"
                                             class="coach-chat-send-btn" aria-label="送出訊息">
                                         <i class="fa-solid fa-paper-plane"></i>
                                         <span class="hidden sm:inline">送出</span>
@@ -448,7 +452,7 @@
                         <h2 class="page-header-title">數據洞察與成長</h2>
                         <p class="page-header-desc">進階功能 — 檢視長期節奏，調整下週的今日第一步策略</p>
                     </div>
-                    <button onclick="recalculateInsights()" class="self-start md:self-auto text-sm flex items-center gap-x-2 px-4 py-2.5 rounded-xl border border-slate-600 hover:bg-slate-800/80 transition-colors">
+                    <button data-lumina-action="recalculateInsights" class="self-start md:self-auto text-sm flex items-center gap-x-2 px-4 py-2.5 rounded-xl border border-slate-600 hover:bg-slate-800/80 transition-colors">
                         <i class="fa-solid fa-sync-alt"></i><span>更新洞察</span>
                     </button>
                 </div>
@@ -480,9 +484,9 @@
                             <div class="flex gap-x-3">
                                 <div class="text-emerald-400 mt-0.5"><i class="fa-solid fa-arrow-trend-up text-xl"></i></div>
                                 <div class="flex-1">
-                                    <div class="font-semibold">最高效時段</div>
+                                    <div class="font-semibold">設定的高效時段</div>
                                     <div class="text-2xl mt-1 font-semibold tabular-nums" id="insight-peak-time">10:00 - 12:30</div>
-                                    <div class="text-xs text-emerald-400 mt-1" id="insight-peak-desc">這段時間你的產出比平均高 41%</div>
+                                    <div class="text-xs text-emerald-400 mt-1" id="insight-peak-desc">依你在設定頁指定的工作節奏</div>
                                 </div>
                             </div>
                         </div>
@@ -560,7 +564,7 @@
                                 <label for="team-join-pin">主管金鑰</label>
                                 <input id="team-join-pin" type="password" placeholder="輸入金鑰" class="form-input focus-ring">
                             </div>
-                            <button onclick="joinEnterpriseGroup()" class="btn-team bg-indigo-500 hover:bg-indigo-600 text-white shadow-lg shadow-indigo-500/20">
+                            <button data-lumina-action="joinEnterpriseGroup" class="btn-team bg-indigo-500 hover:bg-indigo-600 text-white shadow-lg shadow-indigo-500/20">
                                 <i class="fa-solid fa-arrow-right-to-bracket mr-1.5"></i>加入群組
                             </button>
                         </div>
@@ -593,7 +597,7 @@
                                 <label for="team-create-manager">主管顯示名稱</label>
                                 <input id="team-create-manager" type="text" placeholder="你的名字" class="form-input focus-ring">
                             </div>
-                            <button onclick="createEnterpriseGroup()" class="btn-team bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/20">
+                            <button data-lumina-action="createEnterpriseGroup" class="btn-team bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg shadow-emerald-500/20">
                                 <i class="fa-solid fa-plus mr-1.5"></i>建立群組
                             </button>
                         </div>
@@ -607,6 +611,10 @@
                 
                 <!-- Workspace -->
                 <div id="team-workspace" class="hidden space-y-5 mt-4">
+                    <div id="team-offline-banner" class="team-offline-banner hidden" role="status">
+                        <i class="fa-solid fa-cloud-arrow-down"></i>
+                        <span>目前為<strong>離線模式</strong>，變更僅存於本機。請啟動 API 並登入以同步團隊資料。</span>
+                    </div>
                     <div class="panel-card team-banner rounded-3xl p-5 sm:p-6">
                         <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                             <div class="flex items-start gap-4">
@@ -624,9 +632,9 @@
                             </div>
                             <div class="flex flex-wrap gap-2 items-center lg:justify-end">
                                 <span id="team-sync-status" class="text-[10px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-500">同步中…</span>
-                                <button onclick="copyGroupCode()" class="text-xs px-3.5 py-2 rounded-xl border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10 transition-colors"><i class="fa-solid fa-copy mr-1"></i>複製代碼</button>
-                                <button onclick="refreshEnterpriseData()" class="text-xs px-3.5 py-2 rounded-xl border border-slate-600 hover:bg-slate-800/80 transition-colors"><i class="fa-solid fa-sync-alt mr-1"></i>同步</button>
-                                <button onclick="leaveEnterpriseGroup()" class="text-xs px-3.5 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors">離開</button>
+                                <button data-lumina-action="copyGroupCode" class="text-xs px-3.5 py-2 rounded-xl border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10 transition-colors"><i class="fa-solid fa-copy mr-1"></i>複製代碼</button>
+                                <button data-lumina-action="refreshEnterpriseData" class="text-xs px-3.5 py-2 rounded-xl border border-slate-600 hover:bg-slate-800/80 transition-colors"><i class="fa-solid fa-sync-alt mr-1"></i>同步</button>
+                                <button data-lumina-action="leaveEnterpriseGroup" class="text-xs px-3.5 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors">離開</button>
                             </div>
                         </div>
                     </div>
@@ -682,7 +690,7 @@
                                 <input id="team-assign-duration" type="number" value="45" class="form-input focus-ring">
                             </div>
                         </div>
-                        <button onclick="assignEnterpriseTask()" class="btn-team mt-5 bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/20">
+                        <button data-lumina-action="assignEnterpriseTask" class="btn-team mt-5 bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/20">
                             <i class="fa-solid fa-paper-plane mr-1.5"></i>指派任務
                         </button>
                     </div>
@@ -738,7 +746,7 @@
                                     <div class="text-xs text-slate-500 mt-0.5">共享專案資料、新人培訓指引與開發文檔</div>
                                 </div>
                             </div>
-                            <button id="team-add-doc-btn" onclick="toggleAddDocForm()" class="hidden text-xs px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-medium">
+                            <button id="team-add-doc-btn" data-lumina-action="toggleAddDocForm" class="hidden text-xs px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-medium">
                                 <i class="fa-solid fa-plus mr-1"></i>新增文件
                             </button>
                         </div>
@@ -796,15 +804,15 @@
                                 </div>
                                 <div id="team-doc-file-description-area">
                                     <label id="team-doc-desc-label" class="text-xs text-slate-400 block mb-1">檔案描述 / AI 輔助備註</label>
-                                    <textarea id="team-doc-description" rows="3" placeholder="輸入此檔案的說明（例如：圖片內容介紹、PDF 補充摘要），供 AI 教練學習..." class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring resize-y"></textarea>
+                                    <textarea id="team-doc-description" rows="3" placeholder="輸入此檔案的說明（圖片需手動描述，暫不支援自動 OCR；PDF/Excel 會自動擷取文字）" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring resize-y"></textarea>
                                 </div>
                             </div>
                             
                             <div class="flex gap-2 pt-2">
-                                <button onclick="saveTeamDocument()" class="flex-1 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium flex items-center justify-center gap-2">
+                                <button data-lumina-action="saveTeamDocument" class="flex-1 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium flex items-center justify-center gap-2">
                                     <i class="fa-solid fa-cloud-arrow-up"></i><span>發布</span>
                                 </button>
-                                <button onclick="toggleAddDocForm(false)" class="px-4 py-2.5 rounded-xl border border-slate-600 text-sm text-slate-400 hover:text-slate-200">取消</button>
+                                <button data-lumina-action="toggleAddDocForm" data-lumina-arg="false" data-lumina-arg-type="boolean" class="px-4 py-2.5 rounded-xl border border-slate-600 text-sm text-slate-400 hover:text-slate-200">取消</button>
                             </div>
                         </div>
 
@@ -875,9 +883,9 @@
                 </div>
                 
                 <div class="flex flex-wrap justify-center gap-2 mb-8">
-                    <button onclick="showGuideTab('solutions')" id="guide-tab-solutions" class="guide-tab active text-sm px-5 py-2 rounded-2xl border border-slate-700 text-slate-300">解決了什麼</button>
-                    <button onclick="showGuideTab('manual')" id="guide-tab-manual" class="guide-tab text-sm px-5 py-2 rounded-2xl border border-slate-700 text-slate-300">操作手則</button>
-                    <button onclick="showGuideTab('workflow')" id="guide-tab-workflow" class="guide-tab text-sm px-5 py-2 rounded-2xl border border-slate-700 text-slate-300">建議流程</button>
+                    <button data-lumina-action="showGuideTab" data-lumina-arg="solutions" id="guide-tab-solutions" class="guide-tab active text-sm px-5 py-2 rounded-2xl border border-slate-700 text-slate-300">解決了什麼</button>
+                    <button data-lumina-action="showGuideTab" data-lumina-arg="manual" id="guide-tab-manual" class="guide-tab text-sm px-5 py-2 rounded-2xl border border-slate-700 text-slate-300">操作手則</button>
+                    <button data-lumina-action="showGuideTab" data-lumina-arg="workflow" id="guide-tab-workflow" class="guide-tab text-sm px-5 py-2 rounded-2xl border border-slate-700 text-slate-300">建議流程</button>
                 </div>
                 
                 <!-- 解決了什麼 -->
@@ -1062,10 +1070,10 @@
                     </div>
                     
                     <div class="flex flex-wrap gap-3 justify-center">
-                        <button onclick="quickStartToday()" class="px-6 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white font-semibold text-sm flex items-center gap-x-2">
+                        <button data-lumina-action="quickStartToday" class="px-6 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white font-semibold text-sm flex items-center gap-x-2">
                             <i class="fa-solid fa-play"></i><span>立即啟動今日模式</span>
                         </button>
-                        <button onclick="openDecomposeTab()" class="px-6 py-3 rounded-2xl border border-slate-700 hover:bg-slate-800 text-sm">
+                        <button data-lumina-action="openDecomposeTab" class="px-6 py-3 rounded-2xl border border-slate-700 hover:bg-slate-800 text-sm">
                             開始分解目標
                         </button>
                     </div>
@@ -1095,15 +1103,15 @@
                                     <div class="text-xs text-slate-500 truncate" id="settings-account-email">user@example.com</div>
                                 </div>
                             </div>
-                            <button type="button" onclick="handleLogout()" class="w-full text-sm px-4 py-2.5 rounded-2xl border border-slate-700 hover:bg-slate-800 text-slate-300 flex items-center justify-center gap-x-2">
+                            <button type="button" data-lumina-action="handleLogout" class="w-full text-sm px-4 py-2.5 rounded-2xl border border-slate-700 hover:bg-slate-800 text-slate-300 flex items-center justify-center gap-x-2">
                                 <i class="fa-solid fa-right-from-bracket"></i><span>登出</span>
                             </button>
                         </div>
                         <div id="settings-account-guest" class="space-y-3">
-                            <p class="text-xs text-slate-400">註冊帳號後，任務、設定與統計會同步至 MongoDB，可在不同裝置登入使用。</p>
+                            <p class="text-xs text-slate-400">註冊帳號後，任務、專注時間與統計會同步至雲端，可在不同裝置登入使用（需啟動後端 API）。</p>
                             <div class="flex gap-2">
-                                <button type="button" onclick="showAuthOverlay('login')" class="flex-1 text-sm px-4 py-2.5 rounded-2xl border border-slate-700 hover:bg-slate-800">登入</button>
-                                <button type="button" onclick="showAuthOverlay('register')" class="flex-1 text-sm px-4 py-2.5 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">註冊</button>
+                                <button type="button" data-lumina-action="showAuthOverlay" data-lumina-arg="login" class="flex-1 text-sm px-4 py-2.5 rounded-2xl border border-slate-700 hover:bg-slate-800">登入</button>
+                                <button type="button" data-lumina-action="showAuthOverlay" data-lumina-arg="register" class="flex-1 text-sm px-4 py-2.5 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">註冊</button>
                             </div>
                         </div>
                     </div>
@@ -1171,6 +1179,29 @@
                         </div>
                     </div>
                     
+                    <!-- Service Status -->
+                    <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6" id="settings-service-card">
+                        <div class="font-semibold mb-4 flex items-center justify-between gap-x-2">
+                            <span class="flex items-center gap-x-2"><i class="fa-solid fa-signal text-emerald-400"></i><span>服務連線狀態</span></span>
+                            <button type="button" data-lumina-action="refreshServiceStatus" class="text-[10px] px-2.5 py-1 rounded-lg border border-slate-600 hover:bg-slate-800 text-slate-400">重新檢查</button>
+                        </div>
+                        <div id="service-status-panel" class="space-y-2 text-sm">
+                            <div class="flex items-center justify-between py-2 px-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                                <span class="text-slate-400">後端 API</span>
+                                <span id="status-api" class="service-status-dot service-status-pending">檢查中…</span>
+                            </div>
+                            <div class="flex items-center justify-between py-2 px-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                                <span class="text-slate-400">RAG 知識庫</span>
+                                <span id="status-rag" class="service-status-dot service-status-pending">檢查中…</span>
+                            </div>
+                            <div class="flex items-center justify-between py-2 px-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                                <span class="text-slate-400">帳號雲端同步</span>
+                                <span id="status-sync" class="service-status-dot service-status-pending">檢查中…</span>
+                            </div>
+                        </div>
+                        <p class="text-[10px] text-slate-500 mt-3">團隊模式需 API；教練 RAG 需 API + RAG 服務。執行 <code class="text-indigo-300">npm run dev</code> 啟動全部。</p>
+                    </div>
+                    
                     <!-- DeepSeek API -->
                     <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6">
                         <div class="font-semibold mb-4 flex items-center gap-x-2">
@@ -1194,7 +1225,7 @@
                                 <input id="settings-api-key" type="password" placeholder="sk-..." autocomplete="off"
                                        class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring font-mono">
                                 <div class="text-[10px] text-amber-400/80 mt-1.5">⚠️ Key 只存在你的瀏覽器 localStorage，教練與 RAG 知識庫查詢會使用此 Key。請勿分享或公開貼出。</div>
-                                <button type="button" onclick="clearApiKey()" class="mt-2 text-[10px] px-3 py-1.5 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10">
+                                <button type="button" data-lumina-action="clearApiKey" class="mt-2 text-[10px] px-3 py-1.5 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10">
                                     清除已儲存的 API Key
                                 </button>
                             </div>
@@ -1217,7 +1248,7 @@
                                     <option value="deepseek-reasoner">deepseek-reasoner（深度推理）</option>
                                 </select>
                             </div>
-                            <button type="button" onclick="testApiConnection()" class="w-full text-sm px-4 py-2.5 rounded-2xl border border-violet-500/40 text-violet-300 hover:bg-violet-500/10 flex items-center justify-center gap-x-2">
+                            <button type="button" data-lumina-action="testApiConnection" class="w-full text-sm px-4 py-2.5 rounded-2xl border border-violet-500/40 text-violet-300 hover:bg-violet-500/10 flex items-center justify-center gap-x-2">
                                 <i class="fa-solid fa-plug"></i><span>測試 API 連線</span>
                             </button>
                         </div>
@@ -1230,7 +1261,7 @@
                         </div>
                         <div class="space-y-3">
                             <div id="pwa-status" class="text-xs text-slate-400">檢查安裝狀態中...</div>
-                            <button id="pwa-install-btn" onclick="promptInstall()" class="hidden w-full text-sm px-4 py-2.5 rounded-2xl bg-sky-500 hover:bg-sky-600 text-white font-medium flex items-center justify-center gap-x-2">
+                            <button id="pwa-install-btn" data-lumina-action="promptInstall" class="hidden w-full text-sm px-4 py-2.5 rounded-2xl bg-sky-500 hover:bg-sky-600 text-white font-medium flex items-center justify-center gap-x-2">
                                 <i class="fa-solid fa-download"></i><span>安裝到主畫面</span>
                             </button>
                             <div class="text-[10px] text-slate-500">首次連線後會自動快取資源，離線時仍可使用核心功能（需透過瀏覽器開啟，非直接雙擊檔案）</div>
@@ -1243,24 +1274,24 @@
                             <i class="fa-solid fa-database text-purple-400"></i><span>資料管理</span>
                         </div>
                         <div class="flex flex-wrap gap-3">
-                            <button onclick="exportData()" class="text-xs px-4 py-2 rounded-2xl border border-slate-700 hover:bg-slate-800 flex items-center gap-x-2">
+                            <button data-lumina-action="exportData" class="text-xs px-4 py-2 rounded-2xl border border-slate-700 hover:bg-slate-800 flex items-center gap-x-2">
                                 <i class="fa-solid fa-download"></i><span>匯出資料</span>
                             </button>
                             <label class="text-xs px-4 py-2 rounded-2xl border border-slate-700 hover:bg-slate-800 flex items-center gap-x-2 cursor-pointer">
                                 <i class="fa-solid fa-upload"></i><span>匯入資料</span>
                                 <input type="file" accept=".json" class="hidden" onchange="importData(event)">
                             </label>
-                            <button onclick="resetAllData()" class="text-xs px-4 py-2 rounded-2xl border border-red-500/30 text-red-400 hover:bg-red-500/10 flex items-center gap-x-2">
+                            <button data-lumina-action="resetAllData" class="text-xs px-4 py-2 rounded-2xl border border-red-500/30 text-red-400 hover:bg-red-500/10 flex items-center gap-x-2">
                                 <i class="fa-solid fa-redo"></i><span>重置所有資料</span>
                             </button>
                         </div>
                     </div>
                     
                     <div class="flex gap-3">
-                        <button onclick="saveSettings()" class="flex-1 py-3.5 rounded-2xl bg-indigo-500 hover:bg-indigo-600 font-semibold text-sm transition-colors">
+                        <button data-lumina-action="saveSettings" class="flex-1 py-3.5 rounded-2xl bg-indigo-500 hover:bg-indigo-600 font-semibold text-sm transition-colors">
                             儲存設定
                         </button>
-                        <button onclick="showSection('dashboard')" class="px-6 py-3.5 rounded-2xl border border-slate-700 hover:bg-slate-800 text-sm">
+                        <button data-lumina-action="showSection" data-lumina-arg="dashboard" class="px-6 py-3.5 rounded-2xl border border-slate-700 hover:bg-slate-800 text-sm">
                             返回
                         </button>
                     </div>
@@ -1273,40 +1304,40 @@
     <!-- Mobile Bottom Nav -->
     <nav class="md:hidden fixed bottom-0 left-0 right-0 z-50 mobile-nav bg-slate-900/95 backdrop-blur-xl border-t border-slate-800">
         <div class="flex items-center justify-around h-16 px-2">
-            <button onclick="showSection('dashboard')" class="mobile-nav-btn active flex flex-col items-center gap-0.5 text-[10px] min-w-[4rem] text-indigo-400" id="mob-nav-dashboard">
+            <button data-lumina-action="showSection" data-lumina-arg="dashboard" class="mobile-nav-btn active flex flex-col items-center gap-0.5 text-[10px] min-w-[4rem] text-indigo-400" id="mob-nav-dashboard">
                 <i class="fa-solid fa-sun text-lg"></i><span>今日</span>
             </button>
-            <button onclick="showSection('scheduler')" class="mobile-nav-btn flex flex-col items-center gap-0.5 text-[10px] min-w-[4rem] text-slate-400" id="mob-nav-scheduler">
+            <button data-lumina-action="showSection" data-lumina-arg="scheduler" class="mobile-nav-btn flex flex-col items-center gap-0.5 text-[10px] min-w-[4rem] text-slate-400" id="mob-nav-scheduler">
                 <i class="fa-solid fa-list-check text-lg"></i><span>任務</span>
             </button>
-            <button onclick="showSection('coach')" class="mobile-nav-btn flex flex-col items-center gap-0.5 text-[10px] min-w-[4rem] text-slate-400" id="mob-nav-coach">
+            <button data-lumina-action="showSection" data-lumina-arg="coach" class="mobile-nav-btn flex flex-col items-center gap-0.5 text-[10px] min-w-[4rem] text-slate-400" id="mob-nav-coach">
                 <i class="fa-solid fa-bolt text-lg"></i><span>教練</span>
             </button>
-            <button onclick="toggleMobileMore()" class="mobile-nav-btn flex flex-col items-center gap-0.5 text-[10px] min-w-[4rem] text-slate-400" id="mob-nav-more">
+            <button data-lumina-action="toggleMobileMore" class="mobile-nav-btn flex flex-col items-center gap-0.5 text-[10px] min-w-[4rem] text-slate-400" id="mob-nav-more">
                 <i class="fa-solid fa-table-cells text-lg"></i><span>更多</span>
             </button>
         </div>
     </nav>
     
     <!-- Mobile More Sheet -->
-    <div id="mobile-more-sheet" class="mobile-more-sheet hidden" onclick="if(event.target===this)closeMobileMore()">
-        <div class="mobile-more-panel" onclick="event.stopPropagation()">
+    <div id="mobile-more-sheet" class="mobile-more-sheet hidden" data-lumina-dismiss="closeMobileMore">
+        <div class="mobile-more-panel" data-lumina-stop>
             <div class="text-sm font-semibold mb-4 text-center">更多功能</div>
             <div class="mobile-more-grid">
-                <button onclick="openDecomposeTab(); closeMobileMore()" class="mobile-more-item"><i class="fa-solid fa-magic text-purple-400"></i><span>目標分解</span></button>
-                <button onclick="navigateFromMobileMore('insights')" class="mobile-more-item"><i class="fa-solid fa-chart-line text-emerald-400"></i><span>數據洞察</span></button>
-                <button onclick="navigateFromMobileMore('team')" class="mobile-more-item"><i class="fa-solid fa-users text-indigo-400"></i><span>團隊模式</span></button>
-                <button onclick="navigateFromMobileMore('guide')" class="mobile-more-item"><i class="fa-solid fa-book text-sky-400"></i><span>使用指南</span></button>
-                <button onclick="navigateFromMobileMore('settings')" class="mobile-more-item"><i class="fa-solid fa-gear text-slate-400"></i><span>設定</span></button>
-                <button onclick="quickStartToday(); closeMobileMore()" class="mobile-more-item"><i class="fa-solid fa-forward-step text-amber-400"></i><span>今日第一步</span></button>
+                <button data-lumina-actions='[["openDecomposeTab"],["closeMobileMore"]]' class="mobile-more-item"><i class="fa-solid fa-magic text-purple-400"></i><span>目標分解</span></button>
+                <button data-lumina-action="navigateFromMobileMore" data-lumina-arg="insights" class="mobile-more-item"><i class="fa-solid fa-chart-line text-emerald-400"></i><span>數據洞察</span></button>
+                <button data-lumina-action="navigateFromMobileMore" data-lumina-arg="team" class="mobile-more-item"><i class="fa-solid fa-users text-indigo-400"></i><span>團隊模式</span></button>
+                <button data-lumina-action="navigateFromMobileMore" data-lumina-arg="guide" class="mobile-more-item"><i class="fa-solid fa-book text-sky-400"></i><span>使用指南</span></button>
+                <button data-lumina-action="navigateFromMobileMore" data-lumina-arg="settings" class="mobile-more-item"><i class="fa-solid fa-gear text-slate-400"></i><span>設定</span></button>
+                <button data-lumina-actions='[["quickStartToday"],["closeMobileMore"]]' class="mobile-more-item"><i class="fa-solid fa-forward-step text-amber-400"></i><span>今日第一步</span></button>
             </div>
-            <button onclick="closeMobileMore()" class="w-full mt-4 py-3 text-sm text-slate-500">關閉</button>
+            <button data-lumina-action="closeMobileMore" class="w-full mt-4 py-3 text-sm text-slate-500">關閉</button>
         </div>
     </div>
     
     <!-- Task Edit Modal -->
-    <div id="task-edit-modal" class="edit-modal hidden" role="dialog" aria-labelledby="task-edit-title" onclick="if(event.target===this)closeTaskEdit()">
-        <div class="edit-modal-card" onclick="event.stopPropagation()">
+    <div id="task-edit-modal" class="edit-modal hidden" role="dialog" aria-labelledby="task-edit-title" data-lumina-dismiss="closeTaskEdit">
+        <div class="edit-modal-card" data-lumina-stop>
             <h3 id="task-edit-title" class="font-semibold text-lg mb-4">編輯任務</h3>
             <div class="space-y-3">
                 <div>
@@ -1347,15 +1378,15 @@
                 </div>
             </div>
             <div class="flex gap-2 mt-5">
-                <button onclick="closeTaskEdit()" class="flex-1 py-2.5 rounded-xl text-sm text-slate-400 hover:text-slate-200 border border-slate-700">取消</button>
-                <button onclick="saveTaskEdit()" class="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium">儲存</button>
+                <button data-lumina-action="closeTaskEdit" class="flex-1 py-2.5 rounded-xl text-sm text-slate-400 hover:text-slate-200 border border-slate-700">取消</button>
+                <button data-lumina-action="saveTaskEdit" class="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium">儲存</button>
             </div>
         </div>
     </div>
     
     <!-- Onboarding -->
-    <div id="onboarding-overlay" class="onboarding-overlay hidden" role="dialog" aria-labelledby="onboarding-title" onclick="if(event.target===this)skipOnboarding()">
-        <div class="onboarding-card" onclick="event.stopPropagation()">
+    <div id="onboarding-overlay" class="onboarding-overlay hidden" role="dialog" aria-labelledby="onboarding-title" data-lumina-dismiss="skipOnboarding">
+        <div class="onboarding-card" data-lumina-stop>
             <div class="onboarding-steps" id="onboarding-dots">
                 <div class="onboarding-dot active"></div>
                 <div class="onboarding-dot"></div>
@@ -1365,25 +1396,25 @@
             <h3 id="onboarding-title" class="font-semibold text-lg mb-2">新增第一個任務</h3>
             <p id="onboarding-desc" class="text-sm text-slate-400 mb-5 leading-relaxed">在今日頁輸入任務名稱，按 Enter 即可加入待辦清單。</p>
             <div class="flex gap-2">
-                <button onclick="skipOnboarding()" class="flex-1 py-2.5 rounded-xl text-sm text-slate-500 hover:text-slate-300">略過</button>
-                <button onclick="nextOnboardingStep()" id="onboarding-next-btn" class="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium">下一步</button>
+                <button data-lumina-action="skipOnboarding" class="flex-1 py-2.5 rounded-xl text-sm text-slate-500 hover:text-slate-300">略過</button>
+                <button data-lumina-action="nextOnboardingStep" id="onboarding-next-btn" class="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium">下一步</button>
             </div>
         </div>
     </div>
     
     <!-- Auth: Register / Login -->
     <div id="auth-overlay" class="auth-overlay hidden" role="dialog" aria-labelledby="auth-title" aria-modal="true">
-        <div class="auth-card" onclick="event.stopPropagation()">
+        <div class="auth-card" data-lumina-stop>
             <div class="auth-logo"><i class="fa-solid fa-bolt"></i></div>
             <h2 id="auth-title" class="text-xl font-semibold text-center tracking-tight">歡迎來到 Lumina</h2>
             <p class="text-sm text-slate-400 text-center mt-1.5 mb-5">大目標拆成小步，從今日第一步開始</p>
             
             <div class="auth-tabs" role="tablist">
-                <button type="button" id="auth-tab-login" class="auth-tab" role="tab" aria-selected="false" onclick="switchAuthTab('login')">登入</button>
-                <button type="button" id="auth-tab-register" class="auth-tab active" role="tab" aria-selected="true" onclick="switchAuthTab('register')">註冊</button>
+                <button type="button" id="auth-tab-login" class="auth-tab" role="tab" aria-selected="false" data-lumina-action="switchAuthTab" data-lumina-arg="login">登入</button>
+                <button type="button" id="auth-tab-register" class="auth-tab active" role="tab" aria-selected="true" data-lumina-action="switchAuthTab" data-lumina-arg="register">註冊</button>
             </div>
             
-            <form id="auth-register-form" class="auth-form-panel active" onsubmit="handleRegister(event)" novalidate>
+            <form id="auth-register-form" class="auth-form-panel active" data-lumina-submit="handleRegister" novalidate>
                 <div class="space-y-3.5">
                     <div>
                         <label class="text-xs text-slate-400 block mb-1.5" for="auth-reg-name">顯示名稱</label>
@@ -1410,7 +1441,7 @@
                 </div>
             </form>
             
-            <form id="auth-login-form" class="auth-form-panel" onsubmit="handleLogin(event)" novalidate>
+            <form id="auth-login-form" class="auth-form-panel" data-lumina-submit="handleLogin" novalidate>
                 <div class="space-y-3.5">
                     <div>
                         <label class="text-xs text-slate-400 block mb-1.5" for="auth-login-email">電子郵件</label>
@@ -1425,7 +1456,10 @@
                 </div>
             </form>
             
-            <p class="text-[10px] text-slate-500 text-center mt-4 leading-relaxed">帳號資料僅儲存在你的瀏覽器本機，不會上傳至外部伺服器。</p>
+            <button type="button" data-lumina-action="dismissAuthAsGuest" class="auth-guest-btn w-full mt-4 text-sm px-4 py-2.5 rounded-2xl border border-slate-700 hover:bg-slate-800 text-slate-400">
+                先以訪客試用
+            </button>
+            <p class="text-[10px] text-slate-500 text-center mt-4 leading-relaxed">訪客模式資料保存在本機；註冊後可同步至雲端（需啟動後端 API）。</p>
         </div>
     </div>
     

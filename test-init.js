@@ -1,11 +1,18 @@
 const fs = require('fs');
 const { JSDOM } = require('jsdom');
 
-let html = fs.readFileSync('lumina-ai.html', 'utf8');
-const appJs = fs.readFileSync('js/lumina-app.js', 'utf8');
-// Strip external scripts; inline app bundle for JSDOM
-html = html.replace(/<script src="[^"]+"><\/script>\s*/g, '');
-html = html.replace('</body>', `<script>${appJs}</script>\n</body>`);
+function inlineAppScripts(html) {
+  html = html.replace(/<script src="[^"]+"><\/script>\s*/g, '');
+  const scripts = [fs.readFileSync('js/lumina-app.js', 'utf8')];
+  for (const chunk of ['lumina-coach.js', 'lumina-enterprise-docs.js']) {
+    const path = `js/chunks/${chunk}`;
+    if (fs.existsSync(path)) scripts.push(fs.readFileSync(path, 'utf8'));
+  }
+  const tags = scripts.map(s => `<script>${s}</script>`).join('\n');
+  return html.replace('</body>', `${tags}\n</body>`);
+}
+
+let html = inlineAppScripts(fs.readFileSync('lumina-ai.html', 'utf8'));
 
 const dom = new JSDOM(html, {
   runScripts: 'dangerously',
@@ -19,8 +26,6 @@ const errors = [];
 window.addEventListener('error', (e) => {
   errors.push({ type: 'error', message: e.message, stack: e.error?.stack });
 });
-
-window.tailwind = { config: {} };
 
 const store = {};
 window.localStorage.getItem = (k) => (k in store ? store[k] : null);
@@ -51,6 +56,9 @@ window.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,test
 window.URL.createObjectURL = () => 'blob:mock';
 window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
 window.scrollTo = () => {};
+window.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+window.cancelAnimationFrame = (id) => clearTimeout(id);
+window.requestIdleCallback = (cb) => setTimeout(cb, 0);
 
 function runTests() {
   if (typeof window.initializeApp !== 'function') {
@@ -64,6 +72,26 @@ function runTests() {
     errors.push({ type: 'init', message: e.message, stack: e.stack });
   }
 
+  try {
+    let delegationHits = 0;
+    const origToggle = window.toggleDashStats;
+    window.toggleDashStats = function () {
+      delegationHits++;
+      return origToggle?.apply(this, arguments);
+    };
+    const delegateBtn = window.document.querySelector('[data-lumina-action="toggleDashStats"]');
+    if (!delegateBtn) {
+      errors.push({ type: 'delegation', message: 'toggleDashStats button missing data-lumina-action' });
+    } else {
+      delegateBtn.click();
+      if (delegationHits !== 1) {
+        errors.push({ type: 'delegation', message: `expected 1 delegated click, got ${delegationHits}` });
+      }
+    }
+  } catch (e) {
+    errors.push({ type: 'delegation', message: e.message, stack: e.stack });
+  }
+
   const navTests = ['dashboard', 'scheduler', 'coach', 'insights', 'team', 'guide', 'settings'];
   for (const section of navTests) {
     try {
@@ -75,7 +103,7 @@ function runTests() {
 
   try {
     window.renderTaskList();
-    window.optimizeSchedule(true);
+    window.optimizeSchedule(true, true);
     window.openDecomposeTab();
     window.decomposeGoal?.();
   } catch (e) {

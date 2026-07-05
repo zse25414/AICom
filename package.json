@@ -6,9 +6,28 @@
   "scripts": {
     "start": "http-server . -p 3456 -c-1 --cors",
     "api": "node api-proxy.js",
-    "rag": "rag_service\\venv\\Scripts\\python.exe rag_service/main.py",
+    "rag": "node scripts/run-rag.js",
+    "rag:setup": "node scripts/setup-rag.js",
     "dev": "concurrently -n web,api,rag -c blue,magenta,green \"npm run start\" \"npm run api\" \"npm run rag\"",
-    "test": "node test-init.js",
+    "dev:all": "node scripts/dev-all.js",
+    "split:app": "node scripts/split-app.js",
+    "migrate:modules": "node scripts/migrate-to-modules.js",
+    "reorganize:slices": "node scripts/reorganize-slices.js",
+    "build:app": "node scripts/build-app.js",
+    "build:app:lazy": "node scripts/build-app-lazy.js",
+    "build:tailwind": "tailwindcss -i ./css/tailwind-input.css -o ./css/tailwind.build.css --minify",
+    "build": "npm run build:tailwind && npm run build:app",
+    "prestart": "npm run build:tailwind && npm run build:app:lazy",
+    "predev": "npm run build",
+    "test": "npm run build:app:lazy && node scripts/check-bundle-size.js && node test-init.js && node check-security.js && node check-unsafe.js && node scripts/test-register.js",
+    "test:smoke": "node test-init.js",
+    "test:security": "node check-security.js",
+    "test:unsafe": "node check-unsafe.js",
+    "test:register": "node scripts/test-register.js",
+    "test:ready": "node scripts/check-ready.js",
+    "test:enterprise": "node scripts/test-enterprise.js",
+    "test:coach-rag": "node scripts/test-coach-rag.js",
+    "test:integration": "node scripts/test-integration.js",
     "split-html": "node scripts/split-html.js"
   },
   "dependencies": {
@@ -17,7 +36,9 @@
   },
   "devDependencies": {
     "concurrently": "^9.2.0",
+    "esbuild": "^0.28.1",
     "http-server": "^14.1.1",
-    "jsdom": "^26.1.0"
+    "jsdom": "^26.1.0",
+    "tailwindcss": "^3.4.17"
   }
 }

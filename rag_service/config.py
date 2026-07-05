@@ -40,3 +40,4 @@ FUSION_TOP_K = int(os.getenv("RAG_FUSION_TOP_K", "5"))
 MIN_RELEVANCE_SCORE = float(os.getenv("RAG_MIN_RELEVANCE_SCORE", "0.01"))
 
 SERVICE_VERSION = "2.0"
+RAG_API_KEY = os.getenv("RAG_API_KEY", "").strip()

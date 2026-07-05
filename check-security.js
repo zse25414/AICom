@@ -1,17 +1,35 @@
 const fs = require('fs');
 const { JSDOM } = require('jsdom');
 
-let html = fs.readFileSync('lumina-ai.html', 'utf8');
-html = html.replace(/<script src="[^"]+"><\/script>\s*/g, '');
+function inlineAppScripts(html) {
+    html = html.replace(/<script src="[^"]+"><\/script>\s*/g, '');
+    const scripts = [fs.readFileSync('js/lumina-app.js', 'utf8')];
+    for (const chunk of ['lumina-coach.js', 'lumina-enterprise-docs.js']) {
+        const path = `js/chunks/${chunk}`;
+        if (fs.existsSync(path)) scripts.push(fs.readFileSync(path, 'utf8'));
+    }
+    const tags = scripts.map(s => `<script>${s}</script>`).join('\n');
+    return html.replace('</body>', `${tags}\n</body>`);
+}
+
+let html = inlineAppScripts(fs.readFileSync('lumina-ai.html', 'utf8'));
 
 const dom = new JSDOM(html, {
     runScripts: 'dangerously',
-    url: 'http://localhost:3456/lumina-ai.html'
+    url: 'http://localhost:3456/lumina-ai.html',
+    pretendToBeVisual: true
 });
 
 const { window } = dom;
-window.tailwind = { config: {} };
+
 window.localStorage = {
+    _data: {},
+    getItem(k) { return k in this._data ? this._data[k] : null; },
+    setItem(k, v) { this._data[k] = String(v); },
+    removeItem(k) { delete this._data[k]; },
+    clear() { this._data = {}; }
+};
+window.sessionStorage = {
     _data: {},
     getItem(k) { return k in this._data ? this._data[k] : null; },
     setItem(k, v) { this._data[k] = String(v); },
@@ -25,6 +43,9 @@ window.HTMLCanvasElement.prototype.getContext = () => null;
 window.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,test';
 window.URL.createObjectURL = () => 'blob:mock';
 window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+window.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+window.cancelAnimationFrame = (id) => clearTimeout(id);
+window.requestIdleCallback = (cb) => setTimeout(cb, 0);
 
 const tests = [];
 
@@ -41,6 +62,13 @@ setTimeout(() => {
     assert('isSafeHttpUrl rejects data', !window.isSafeHttpUrl('data:text/html,<script>alert(1)</script>'));
     assert('recalculateInsights exists', typeof window.recalculateInsights === 'function');
     assert('clearApiKey exists', typeof window.clearApiKey === 'function');
+    assert('mergeTasksArrays prefers newer updatedAt', (() => {
+        const merged = window.mergeTasksArrays(
+            [{ id: 1, name: 'server', updatedAt: '2026-01-01T00:00:00.000Z' }],
+            [{ id: 1, name: 'local', updatedAt: '2026-06-01T00:00:00.000Z' }]
+        );
+        return merged.length === 1 && merged[0].name === 'local';
+    })());
 
     const failed = tests.filter(t => !t.ok);
     if (failed.length) {
@@ -50,4 +78,4 @@ setTimeout(() => {
     }
     console.log('All security checks passed (' + tests.length + ')');
     process.exit(0);
-}, 100);
+}, 150);

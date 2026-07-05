@@ -8,11 +8,12 @@ import config  # noqa: F401 — set cache paths before heavy ML imports
 from typing import List, Optional
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 
-from config import ALLOWED_ORIGINS, HOST, PORT, SERVICE_VERSION
+from config import ALLOWED_ORIGINS, HOST, PORT, RAG_API_KEY, SERVICE_VERSION
 from rag_engine import (
     build_sources,
     configure_embedding,
@@ -36,8 +37,22 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-RAG-API-Key"],
 )
+
+
+class RagApiKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/health":
+            return await call_next(request)
+        if RAG_API_KEY:
+            provided = request.headers.get("X-RAG-API-Key", "").strip()
+            if provided != RAG_API_KEY:
+                raise HTTPException(status_code=401, detail="Invalid or missing RAG API key")
+        return await call_next(request)
+
+
+app.add_middleware(RagApiKeyMiddleware)
 
 
 class QueryRequest(BaseModel):

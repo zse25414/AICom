@@ -20,6 +20,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { loadEnvFile } = require('./lib/env');
 const { initDb, ensureIndexes, getDatabaseStats } = require('./lib/db');
 const {
@@ -64,11 +65,18 @@ const PORT = process.env.PORT || 3001;
 const API_KEY = process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
 const RAG_SERVICE_URL = process.env.RAG_SERVICE_URL || 'http://127.0.0.1:8000';
+const RAG_API_KEY = (process.env.RAG_API_KEY || '').trim();
+const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.LUMINA_ENFORCE_SECRETS === '1';
+const REQUIRE_ENTERPRISE_AUTH = IS_PRODUCTION || process.env.REQUIRE_ENTERPRISE_AUTH === '1';
+const ALLOW_ANONYMOUS_AI = !IS_PRODUCTION && process.env.ALLOW_ANONYMOUS_AI === '1';
 const DATA_FILE = path.join(__dirname, 'enterprise-data.json');
 const PIN_SALT = process.env.PIN_SALT || 'lumina-pin-salt-change-in-production';
 const MAX_BODY_BYTES = 6 * 1024 * 1024; // 6 MB to support file uploads
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 120;
+const AUTH_RATE_LIMIT_MAX = 20;
+const PIN_MAX_ATTEMPTS = 5;
+const PIN_LOCK_MS = 15 * 60 * 1000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -80,6 +88,20 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3456,h
     .filter(Boolean);
 
 const rateBuckets = new Map();
+const authRateBuckets = new Map();
+const pinAttemptBuckets = new Map();
+
+function enforceProductionSecrets() {
+    if (!IS_PRODUCTION) return;
+    const missing = [];
+    if (getJwtConfig().usingDefaultSecret) missing.push('JWT_SECRET');
+    if (PIN_SALT === 'lumina-pin-salt-change-in-production') missing.push('PIN_SALT');
+    if (!RAG_API_KEY) missing.push('RAG_API_KEY');
+    if (missing.length) {
+        console.error('[Lumina API] 生產環境缺少必要密鑰設定:', missing.join(', '));
+        process.exit(1);
+    }
+}
 
 function hashPin(pin) {
     return crypto.createHash('sha256').update(PIN_SALT + ':' + String(pin)).digest('hex');
@@ -112,16 +134,51 @@ function getClientIp(req) {
     return req.socket.remoteAddress || 'unknown';
 }
 
-function checkRateLimit(req) {
-    const ip = getClientIp(req);
+function checkRateLimitBucket(map, key, max) {
     const now = Date.now();
-    let bucket = rateBuckets.get(ip);
+    let bucket = map.get(key);
     if (!bucket || now - bucket.start > RATE_LIMIT_WINDOW_MS) {
         bucket = { start: now, count: 0 };
-        rateBuckets.set(ip, bucket);
+        map.set(key, bucket);
     }
     bucket.count++;
-    return bucket.count <= RATE_LIMIT_MAX;
+    return bucket.count <= max;
+}
+
+function checkRateLimit(req) {
+    return checkRateLimitBucket(rateBuckets, getClientIp(req), RATE_LIMIT_MAX);
+}
+
+function checkAuthRateLimit(req) {
+    return checkRateLimitBucket(authRateBuckets, 'auth:' + getClientIp(req), AUTH_RATE_LIMIT_MAX);
+}
+
+function getPinAttemptKey(code, ip) {
+    return `${normalizeCode(code)}:${ip}`;
+}
+
+function isPinLocked(code, ip) {
+    const bucket = pinAttemptBuckets.get(getPinAttemptKey(code, ip));
+    return bucket?.lockedUntil && bucket.lockedUntil > Date.now();
+}
+
+function recordPinFailure(code, ip) {
+    const key = getPinAttemptKey(code, ip);
+    const now = Date.now();
+    let bucket = pinAttemptBuckets.get(key);
+    if (!bucket || (bucket.lockedUntil && bucket.lockedUntil <= now)) {
+        bucket = { count: 0, lockedUntil: 0 };
+    }
+    bucket.count++;
+    if (bucket.count >= PIN_MAX_ATTEMPTS) {
+        bucket.lockedUntil = now + PIN_LOCK_MS;
+        bucket.count = 0;
+    }
+    pinAttemptBuckets.set(key, bucket);
+}
+
+function clearPinFailures(code, ip) {
+    pinAttemptBuckets.delete(getPinAttemptKey(code, ip));
 }
 
 function setCors(req, res) {
@@ -161,8 +218,26 @@ function readBody(req) {
 }
 
 function sendJson(res, status, data) {
+    const body = JSON.stringify(data);
+    const encoding = String(res._req?.headers['accept-encoding'] || '');
+    if (body.length > 256 && encoding.includes('gzip')) {
+        zlib.gzip(body, (err, compressed) => {
+            if (err) {
+                res.writeHead(status, { 'Content-Type': 'application/json' });
+                res.end(body);
+                return;
+            }
+            res.writeHead(status, {
+                'Content-Type': 'application/json',
+                'Content-Encoding': 'gzip',
+                'Vary': 'Accept-Encoding'
+            });
+            res.end(compressed);
+        });
+        return;
+    }
     res.writeHead(status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(data));
+    res.end(body);
 }
 
 function prepareStore(store) {
@@ -216,26 +291,148 @@ function parseQuery(req) {
     return new URLSearchParams((req.url || '').slice(idx + 1));
 }
 
-async function getOptionalAuth(req) {
-    const token = parseBearerToken(req);
+async function getAuthFromRequest(req) {
+    const query = parseQuery(req);
+    const token = parseBearerToken(req) || query.get('token');
     if (!token) return null;
     const payload = verifyToken(token);
     if (!payload?.userId) return null;
     return findUserById(payload.userId);
 }
 
+async function getOptionalAuth(req) {
+    return getAuthFromRequest(req);
+}
+
 async function requireAuth(req) {
-    const user = await getOptionalAuth(req);
+    const user = await getAuthFromRequest(req);
     if (!user) return null;
     return user;
 }
 
-function serveUploadFile(req, res, urlPath) {
+async function requireAiAuth(req) {
+    if (ALLOW_ANONYMOUS_AI) return { ok: true, user: null };
+    const user = await getAuthFromRequest(req);
+    if (!user) return { ok: false, status: 401, error: '請先登入才能使用 AI 功能' };
+    return { ok: true, user };
+}
+
+async function assertEnterpriseMember(group, memberId, authUser, options = {}) {
+    const { bind = true, store = null } = options;
+    if (!group || !memberId) {
+        return { ok: false, status: 403, error: '無效的成員或身份驗證失敗' };
+    }
+    const member = group.members.find(m => m.id === memberId);
+    if (!member) {
+        return { ok: false, status: 403, error: '無效的成員或身份驗證失敗' };
+    }
+
+    if (REQUIRE_ENTERPRISE_AUTH) {
+        if (!authUser?.id) {
+            return { ok: false, status: 401, error: '請先登入才能使用團隊功能' };
+        }
+        if (member.userId && member.userId !== authUser.id) {
+            return { ok: false, status: 403, error: '此成員已綁定其他帳號' };
+        }
+        if (!member.userId && bind) {
+            member.userId = authUser.id;
+            if (store) await saveStore(store);
+        }
+        return { ok: true, member };
+    }
+
+    if (member.userId) {
+        if (!authUser?.id || authUser.id !== member.userId) {
+            return { ok: false, status: 403, error: '無效的成員或身份驗證失敗' };
+        }
+    } else if (authUser?.id && bind) {
+        member.userId = authUser.id;
+        if (store) await saveStore(store);
+    }
+    return { ok: true, member };
+}
+
+async function assertRagGroupAccess(groupCode, authUser) {
+    const code = normalizeCode(groupCode);
+    if (!code) return { ok: false, status: 400, error: '缺少 group_code' };
+
+    const store = prepareStore(await loadStore());
+    const group = getGroup(store, code);
+    if (!group) return { ok: false, status: 404, error: '找不到群組' };
+
+    if (ALLOW_ANONYMOUS_AI && !REQUIRE_ENTERPRISE_AUTH) {
+        return { ok: true, group };
+    }
+
+    if (!authUser?.id) {
+        return { ok: false, status: 401, error: '請先登入才能使用知識庫' };
+    }
+
+    const member = group.members.find(m => m.userId === authUser.id);
+    if (!member) {
+        return { ok: false, status: 403, error: '你不是此群組成員' };
+    }
+    return { ok: true, group, member };
+}
+
+async function canAccessUpload(authUser, filename) {
+    if (!authUser?.id) return false;
+    const store = prepareStore(await loadStore());
+    for (const group of Object.values(store.groups || {})) {
+        const owned = (group.documents || []).some(d => {
+            if (!d.fileUrl) return false;
+            return path.basename(d.fileUrl) === filename;
+        });
+        if (owned) {
+            return group.members.some(m => m.userId === authUser.id);
+        }
+    }
+    return false;
+}
+
+function buildRagHeaders(extra = {}) {
+    const headers = { ...extra };
+    if (RAG_API_KEY) headers['X-RAG-API-Key'] = RAG_API_KEY;
+    return headers;
+}
+
+async function proxyRagJson(path, body) {
+    const response = await fetch(`${RAG_SERVICE_URL}${path}`, {
+        method: 'POST',
+        headers: buildRagHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body)
+    });
+    const text = await response.text();
+    return { status: response.status, text };
+}
+
+async function proxyRagGet(path) {
+    const response = await fetch(`${RAG_SERVICE_URL}${path}`, {
+        method: 'GET',
+        headers: buildRagHeaders()
+    });
+    const text = await response.text();
+    return { status: response.status, text };
+}
+
+async function serveUploadFile(req, res, urlPath) {
+    const authUser = await getAuthFromRequest(req);
+    if (!authUser) {
+        sendJson(res, 401, { error: '請先登入才能存取檔案' });
+        return true;
+    }
+
     const baseName = path.basename(urlPath);
     if (!baseName || baseName.includes('..')) {
         sendJson(res, 400, { error: '無效的檔案路徑' });
         return true;
     }
+
+    if (!(await canAccessUpload(authUser, baseName))) {
+        sendJson(res, 403, { error: '無權存取此檔案' });
+        return true;
+    }
+
     const filePath = path.join(UPLOADS_DIR, baseName);
     if (!filePath.startsWith(UPLOADS_DIR) || !fs.existsSync(filePath)) {
         sendJson(res, 404, { error: '找不到檔案' });
@@ -252,6 +449,26 @@ function serveUploadFile(req, res, urlPath) {
     res.writeHead(200, { 'Content-Type': mime });
     fs.createReadStream(filePath).pipe(res);
     return true;
+}
+
+async function getReadiness() {
+    const checks = { store: false, auth: false, rag: false };
+    try {
+        await loadStore();
+        checks.store = true;
+    } catch (_) {}
+    try {
+        checks.auth = !!getAuthBackend();
+    } catch (_) {}
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2000);
+        const response = await fetch(`${RAG_SERVICE_URL}/health`, { signal: controller.signal });
+        clearTimeout(timer);
+        checks.rag = response.ok;
+    } catch (_) {}
+    const ready = checks.store && checks.auth;
+    return { ready, checks };
 }
 
 async function handleUserData(req, res, urlPath, method) {
@@ -340,6 +557,7 @@ async function handleEnterprise(req, res, urlPath, method) {
             const name = clampText(body.name, 80);
             const role = body.role === 'manager' ? 'manager' : 'member';
             const pin = clampText(body.pin, 32);
+            const clientIp = getClientIp(req);
 
             const group = getGroup(store, code);
             if (!group) {
@@ -348,15 +566,37 @@ async function handleEnterprise(req, res, urlPath, method) {
             if (!name) {
                 return sendJson(res, 400, { error: '請輸入你的名稱' });
             }
-            if (role === 'manager' && !verifyManagerPin(group, pin)) {
-                return sendJson(res, 403, { error: '主管金鑰錯誤' });
+            if (role === 'manager') {
+                if (isPinLocked(code, clientIp)) {
+                    return sendJson(res, 429, { error: '主管金鑰嘗試次數過多，請 15 分鐘後再試' });
+                }
+                if (!verifyManagerPin(group, pin)) {
+                    recordPinFailure(code, clientIp);
+                    return sendJson(res, 403, { error: '主管金鑰錯誤' });
+                }
+                clearPinFailures(code, clientIp);
             }
 
             migrateGroupPin(group);
 
             const authUser = await getOptionalAuth(req);
+            if (authUser) {
+                const byUser = group.members.find(m => m.userId === authUser.id);
+                if (byUser) {
+                    await saveStore(store);
+                    return sendJson(res, 200, {
+                        ok: true,
+                        group: { code: group.code, name: group.name },
+                        member: byUser
+                    });
+                }
+            }
+
             const existing = group.members.find(m => m.name.toLowerCase() === name.toLowerCase());
             if (existing) {
+                if (existing.userId && authUser?.id && existing.userId !== authUser.id) {
+                    return sendJson(res, 403, { error: '此名稱已綁定其他帳號，請使用已註冊帳號登入' });
+                }
                 if (authUser?.id && !existing.userId) {
                     existing.userId = authUser.id;
                 }
@@ -395,19 +635,26 @@ async function handleEnterprise(req, res, urlPath, method) {
         ensureNotifications(group);
         const query = parseQuery(req);
         const memberId = query.get('memberId');
+        if (!memberId) {
+            return sendJson(res, 403, { error: '需要有效的 memberId 才能讀取群組資料' });
+        }
+        const authUser = await getOptionalAuth(req);
+        const memberCheck = await assertEnterpriseMember(group, memberId, authUser, { store });
+        if (!memberCheck.ok) {
+            return sendJson(res, memberCheck.status, { error: memberCheck.error });
+        }
         const payload = {
             code: group.code,
             name: group.name,
             members: group.members,
             tasks: group.tasks,
-            documents: group.documents || []
-        };
-        if (memberId) {
-            payload.notifications = group.notifications
+            documents: group.documents || [],
+            notifications: group.notifications
                 .filter(n => n.recipientId === memberId)
-                .slice(0, 50);
-            payload.unreadCount = payload.notifications.filter(n => !n.read).length;
-        }
+                .slice(0, 50),
+            unreadCount: group.notifications
+                .filter(n => n.recipientId === memberId && !n.read).length
+        };
         sendJson(res, 200, { ok: true, group: payload });
         return;
     }
@@ -423,8 +670,12 @@ async function handleEnterprise(req, res, urlPath, method) {
             const group = getGroup(store, code);
             if (!group) return sendJson(res, 404, { error: '找不到群組' });
 
-            const manager = group.members.find(m => m.id === managerId && m.role === 'manager');
-            if (!manager) return sendJson(res, 403, { error: '僅主管可管理知識庫' });
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, managerId, authUser, { store });
+            if (!memberCheck.ok || memberCheck.member.role !== 'manager') {
+                return sendJson(res, memberCheck.status || 403, { error: memberCheck.error || '僅主管可管理知識庫' });
+            }
+            const manager = memberCheck.member;
 
             if (docType === 'text' && (!title || !content)) {
                 return sendJson(res, 400, { error: '請輸入標題與內容' });
@@ -475,8 +726,11 @@ async function handleEnterprise(req, res, urlPath, method) {
             const group = getGroup(store, code);
             if (!group) return sendJson(res, 404, { error: '找不到群組' });
 
-            const manager = group.members.find(m => m.id === managerId && m.role === 'manager');
-            if (!manager) return sendJson(res, 403, { error: '僅主管可管理知識庫' });
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, managerId, authUser, { store });
+            if (!memberCheck.ok || memberCheck.member.role !== 'manager') {
+                return sendJson(res, memberCheck.status || 403, { error: memberCheck.error || '僅主管可管理知識庫' });
+            }
 
             if (!group.documents) group.documents = [];
             const index = group.documents.findIndex(d => d.id === docId);
@@ -512,8 +766,12 @@ async function handleEnterprise(req, res, urlPath, method) {
             const group = getGroup(store, code);
             if (!group) return sendJson(res, 404, { error: '找不到群組' });
 
-            const manager = group.members.find(m => m.id === managerId && m.role === 'manager');
-            if (!manager) return sendJson(res, 403, { error: '僅主管可指派任務' });
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, managerId, authUser, { store });
+            if (!memberCheck.ok || memberCheck.member.role !== 'manager') {
+                return sendJson(res, memberCheck.status || 403, { error: memberCheck.error || '僅主管可指派任務' });
+            }
+            const manager = memberCheck.member;
 
             const assignee = group.members.find(m => m.id === assigneeId);
             if (!assignee) return sendJson(res, 404, { error: '找不到成員' });
@@ -576,8 +834,12 @@ async function handleEnterprise(req, res, urlPath, method) {
             const task = group.tasks.find(t => t.id === taskMatch[1]);
             if (!task) return sendJson(res, 404, { error: '找不到任務' });
 
-            const member = group.members.find(m => m.id === memberId);
-            if (!member) return sendJson(res, 403, { error: '無效的成員' });
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, memberId, authUser, { store });
+            if (!memberCheck.ok) {
+                return sendJson(res, memberCheck.status, { error: memberCheck.error });
+            }
+            const member = memberCheck.member;
 
             const canEdit = member.role === 'manager' || task.assigneeId === memberId;
             if (!canEdit) return sendJson(res, 403, { error: '無權限更新此任務' });
@@ -626,8 +888,10 @@ async function handleEnterprise(req, res, urlPath, method) {
         const memberId = query.get('memberId');
         const group = getGroup(store, code);
         if (!group) return sendJson(res, 404, { error: '找不到群組' });
-        if (!memberId || !group.members.some(m => m.id === memberId)) {
-            return sendJson(res, 403, { error: '無效的成員' });
+        const authUser = await getOptionalAuth(req);
+        const memberCheck = await assertEnterpriseMember(group, memberId, authUser, { store });
+        if (!memberCheck.ok) {
+            return sendJson(res, memberCheck.status, { error: memberCheck.error });
         }
         ensureNotifications(group);
         const notifications = group.notifications
@@ -644,8 +908,10 @@ async function handleEnterprise(req, res, urlPath, method) {
             const memberId = body.memberId;
             const group = getGroup(store, code);
             if (!group) return sendJson(res, 404, { error: '找不到群組' });
-            if (!memberId || !group.members.some(m => m.id === memberId)) {
-                return sendJson(res, 403, { error: '無效的成員' });
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, memberId, authUser, { store });
+            if (!memberCheck.ok) {
+                return sendJson(res, memberCheck.status, { error: memberCheck.error });
             }
             ensureNotifications(group);
             const ids = Array.isArray(body.ids) ? body.ids : [];
@@ -666,6 +932,10 @@ async function handleEnterprise(req, res, urlPath, method) {
 }
 
 async function handleAuth(req, res, urlPath, method) {
+    if (!checkAuthRateLimit(req)) {
+        return sendJson(res, 429, { error: '認證請求過於頻繁，請稍後再試' });
+    }
+
     if (method === 'POST' && urlPath === '/api/auth/register') {
         const body = await readBody(req);
         const name = clampAuthText(body.name, 40);
@@ -704,10 +974,10 @@ async function handleAuth(req, res, urlPath, method) {
         if (!password) return sendJson(res, 400, { error: '請輸入密碼' });
 
         const user = await findUserByEmail(email);
-        if (!user) return sendJson(res, 401, { error: '找不到此帳號，請先註冊' });
+        if (!user) return sendJson(res, 401, { error: '電子郵件或密碼錯誤' });
 
         const valid = await verifyPassword(password, user.passwordHash);
-        if (!valid) return sendJson(res, 401, { error: '密碼錯誤，請再試一次' });
+        if (!valid) return sendJson(res, 401, { error: '電子郵件或密碼錯誤' });
 
         await ensureUserData(user.id);
         const token = signToken({ userId: user.id, email: user.email });
@@ -747,7 +1017,20 @@ async function handleAuth(req, res, urlPath, method) {
     return sendJson(res, 404, { error: 'Auth route not found' });
 }
 
+function attachRequestLogging(req, res, urlPath) {
+    const requestId = crypto.randomBytes(4).toString('hex');
+    const startMs = Date.now();
+    res.setHeader('X-Request-Id', requestId);
+    res.on('finish', () => {
+        if (urlPath === '/health' || urlPath === '/ready') return;
+        console.log(`[req:${requestId}] ${req.method} ${urlPath} ${res.statusCode} ${Date.now() - startMs}ms`);
+    });
+}
+
 const server = http.createServer(async (req, res) => {
+    res._req = req;
+    const urlPath = (req.url || '').split('?')[0];
+    attachRequestLogging(req, res, urlPath);
     setCors(req, res);
 
     if (req.method === 'OPTIONS') {
@@ -760,8 +1043,6 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 429, { error: '請求過於頻繁，請稍後再試' });
         return;
     }
-
-    const urlPath = (req.url || '').split('?')[0];
 
     if (req.method === 'GET' && urlPath === '/health') {
         const dbStats = await getDatabaseStats();
@@ -779,8 +1060,18 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    if (req.method === 'GET' && urlPath === '/ready') {
+        const { ready, checks } = await getReadiness();
+        sendJson(res, ready ? 200 : 503, {
+            ok: ready,
+            service: 'lumina-api-proxy',
+            checks
+        });
+        return;
+    }
+
     if (req.method === 'GET' && urlPath.startsWith('/uploads/')) {
-        serveUploadFile(req, res, urlPath);
+        await serveUploadFile(req, res, urlPath);
         return;
     }
 
@@ -814,29 +1105,129 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    if (req.method === 'POST' && urlPath === '/api/rag/query') {
+    if (urlPath.startsWith('/api/rag/')) {
         try {
-            const body = await readBody(req);
-            if (!body.deepseek_api_key && !body.openai_api_key && API_KEY) {
-                body.deepseek_api_key = API_KEY;
-                body.api_base = body.api_base || 'https://api.deepseek.com/v1';
+            const aiAuth = await requireAiAuth(req);
+            if (!aiAuth.ok) {
+                sendJson(res, aiAuth.status, { error: aiAuth.error });
+                return;
             }
-            const response = await fetch(`${RAG_SERVICE_URL}/api/rag/query`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            const text = await response.text();
-            res.writeHead(response.status, { 'Content-Type': 'application/json' });
-            res.end(text);
+
+            if (req.method === 'GET' && urlPath === '/api/rag/kb/list') {
+                const query = parseQuery(req);
+                const groupCode = query.get('group_code') || query.get('groupCode') || '';
+                const access = await assertRagGroupAccess(groupCode, aiAuth.user);
+                if (!access.ok) {
+                    sendJson(res, access.status, { error: access.error });
+                    return;
+                }
+                const proxied = await proxyRagGet(`/api/rag/kb/list?group_code=${encodeURIComponent(groupCode)}`);
+                res.writeHead(proxied.status, { 'Content-Type': 'application/json' });
+                res.end(proxied.text);
+                return;
+            }
+
+            if (req.method === 'POST' && urlPath === '/api/rag/query') {
+                const body = await readBody(req);
+                const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
+                if (!access.ok) {
+                    sendJson(res, access.status, { error: access.error });
+                    return;
+                }
+                if (!body.deepseek_api_key && !body.openai_api_key && API_KEY) {
+                    body.deepseek_api_key = API_KEY;
+                    body.api_base = body.api_base || 'https://api.deepseek.com/v1';
+                }
+                const proxied = await proxyRagJson('/api/rag/query', body);
+                res.writeHead(proxied.status, { 'Content-Type': 'application/json' });
+                res.end(proxied.text);
+                return;
+            }
+
+            if (req.method === 'POST' && urlPath === '/api/rag/document/upload-text') {
+                const body = await readBody(req);
+                const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
+                if (!access.ok) {
+                    sendJson(res, access.status, { error: access.error });
+                    return;
+                }
+                const proxied = await proxyRagJson('/api/rag/document/upload-text', body);
+                res.writeHead(proxied.status, { 'Content-Type': 'application/json' });
+                res.end(proxied.text);
+                return;
+            }
+
+            if (req.method === 'POST' && urlPath === '/api/rag/document/upload') {
+                const body = await readBody(req);
+                const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
+                if (!access.ok) {
+                    sendJson(res, access.status, { error: access.error });
+                    return;
+                }
+                if (!body.file_base64 || !body.filename) {
+                    sendJson(res, 400, { error: '缺少 file_base64 或 filename' });
+                    return;
+                }
+                const fileBuffer = Buffer.from(body.file_base64, 'base64');
+                const boundary = 'lumina-rag-' + crypto.randomBytes(8).toString('hex');
+                const parts = [
+                    `--${boundary}\r\nContent-Disposition: form-data; name="group_code"\r\n\r\n${body.group_code || ''}\r\n`,
+                    `--${boundary}\r\nContent-Disposition: form-data; name="kb_id"\r\n\r\n${body.kb_id || 'general'}\r\n`,
+                    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${body.filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+                    fileBuffer,
+                    `\r\n--${boundary}--\r\n`
+                ];
+                const payload = Buffer.concat(parts.map(p => (Buffer.isBuffer(p) ? p : Buffer.from(p, 'utf8'))));
+                const response = await fetch(`${RAG_SERVICE_URL}/api/rag/document/upload`, {
+                    method: 'POST',
+                    headers: buildRagHeaders({
+                        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                        'Content-Length': String(payload.length)
+                    }),
+                    body: payload
+                });
+                const text = await response.text();
+                res.writeHead(response.status, { 'Content-Type': 'application/json' });
+                res.end(text);
+                return;
+            }
+
+            if (req.method === 'POST' && urlPath === '/api/rag/document/delete') {
+                const body = await readBody(req);
+                const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
+                if (!access.ok) {
+                    sendJson(res, access.status, { error: access.error });
+                    return;
+                }
+                const form = new URLSearchParams();
+                form.set('group_code', body.group_code || '');
+                form.set('kb_id', body.kb_id || 'general');
+                form.set('filename', body.filename || '');
+                const response = await fetch(`${RAG_SERVICE_URL}/api/rag/document/delete`, {
+                    method: 'POST',
+                    headers: buildRagHeaders({ 'Content-Type': 'application/x-www-form-urlencoded' }),
+                    body: form.toString()
+                });
+                const text = await response.text();
+                res.writeHead(response.status, { 'Content-Type': 'application/json' });
+                res.end(text);
+                return;
+            }
+
+            sendJson(res, 404, { error: 'RAG route not found' });
         } catch (err) {
             const status = err.message === 'Request body too large' ? 413 : 500;
-            sendJson(res, status, { error: err.message || 'RAG 查詢代理失敗' });
+            sendJson(res, status, { error: err.message || 'RAG 代理失敗' });
         }
         return;
     }
 
     if (req.method === 'POST' && urlPath === '/api/chat') {
+        const aiAuth = await requireAiAuth(req);
+        if (!aiAuth.ok) {
+            sendJson(res, aiAuth.status, { error: aiAuth.error });
+            return;
+        }
         if (!API_KEY) {
             sendJson(res, 500, { error: 'Missing DEEPSEEK_API_KEY environment variable' });
             return;
@@ -864,6 +1255,8 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 404, { error: 'Not found' });
 });
 
+enforceProductionSecrets();
+
 initDb().then(async connected => {
     await ensureIndexes();
     await initStore();
@@ -881,7 +1274,8 @@ initDb().then(async connected => {
         console.log(`  GET  /api/user/data               → 取得個人資料`);
         console.log(`  PUT  /api/user/data               → 儲存個人資料`);
         console.log(`  PATCH /api/user/data              → 合併個人資料`);
-        console.log(`  GET  /uploads/:file               → 團隊上傳檔案`);
+        console.log(`  GET  /ready                       → 就緒檢查（store + auth + RAG）`);
+        console.log(`  GET  /uploads/:file               → 團隊上傳檔案（需 JWT）`);
         console.log(`  POST /api/enterprise/group/create → 建立群組`);
         console.log(`  POST /api/enterprise/group/join   → 加入群組`);
         console.log(`  GET  /api/enterprise/group/:code  → 群組資料`);
@@ -903,8 +1297,20 @@ initDb().then(async connected => {
         if (getJwtConfig().usingDefaultSecret) {
             console.warn('  ⚠️  Using default JWT_SECRET — set JWT_SECRET env in production');
         }
+        if (!RAG_API_KEY) {
+            console.warn('  ⚠️  RAG_API_KEY not set — RAG service should only listen on localhost');
+        }
+        if (IS_PRODUCTION) {
+            console.log('  Production secret enforcement: enabled');
+        }
+        if (REQUIRE_ENTERPRISE_AUTH) {
+            console.log('  Enterprise auth: required (memberId + JWT binding)');
+        }
+        if (ALLOW_ANONYMOUS_AI) {
+            console.warn('  ⚠️  ALLOW_ANONYMOUS_AI=1 — /api/chat 與 /api/rag 允許匿名（僅限開發）');
+        }
     });
 }).catch(err => {
-    console.error('[Lumina API] 儲存層初始化失敗:', err.message);
+    console.error('[Lumina API] 啟動失敗:', err.message);
     process.exit(1);
 });

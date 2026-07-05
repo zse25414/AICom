@@ -1,0 +1,56 @@
+# Lumina 本機 / 小型部署
+#   docker compose up          # web + api
+#   docker compose --profile full up   # 含 RAG（首次建置較久）
+
+services:
+  api:
+    image: node:20-bookworm-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: sh -c "npm ci && node api-proxy.js"
+    ports:
+      - "3001:3001"
+    environment:
+      MONGODB_URI: ""
+      JWT_SECRET: ${JWT_SECRET:-lumina-dev-jwt-secret}
+      PIN_SALT: ${PIN_SALT:-lumina-dev-pin-salt}
+      RAG_API_KEY: ${RAG_API_KEY:-lumina-dev-rag-key}
+      RAG_SERVICE_URL: http://rag:8000
+      ALLOWED_ORIGINS: http://localhost:3456,http://127.0.0.1:3456
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-ready.js"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    image: node:20-bookworm-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: sh -c "npm ci && npm run build && npx http-server . -p 3456 -c-1 --cors"
+    ports:
+      - "3456:3456"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  rag:
+    profiles: ["full"]
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      RAG_HOST: 0.0.0.0
+      EMBEDDING_PROVIDER: local
+    volumes:
+      - ./rag_service/storage:/app/storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s

@@ -1,4 +1,5 @@
 node_modules/
+css/tailwind.build.css
 enterprise-data.json
 auth-users.json
 user-data.json
@@ -6,6 +7,7 @@ uploads/
 rag_service/storage/
 rag_service/.cache/
 rag_service/__pycache__/
+rag_service/venv/
 terminals/
 mcps/
 .env
@@ -14,3 +16,5 @@ mcps/
 .DS_Store
 Thumbs.db
 agent-tools/
+js/modules/generated/
+js/chunks/
