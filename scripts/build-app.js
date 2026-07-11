@@ -64,21 +64,40 @@ function generateLazyStubs(lazyGroups) {
         lines.push(`const __lazy_${chunk.replace(/-/g, '_')} = ${JSON.stringify(fns)};`);
         lines.push(`function __loadChunk_${chunk.replace(/-/g, '_')}() {`);
         lines.push(`  if (__luminaChunkCache['${chunk}']) return __luminaChunkCache['${chunk}'];`);
+        // Already registered (e.g. preloaded script tag)
+        lines.push(`  if (window.__luminaChunks && window.__luminaChunks['${chunk}']) {`);
+        lines.push(`    return (__luminaChunkCache['${chunk}'] = Promise.resolve(window.__luminaChunks['${chunk}']));`);
+        lines.push(`  }`);
         lines.push(`  __luminaChunkCache['${chunk}'] = new Promise((resolve, reject) => {`);
         lines.push(`    const s = document.createElement('script');`);
-        lines.push(`    s.src = 'js/chunks/lumina-${chunk}.js';`);
-        lines.push(`    s.onload = () => resolve(window.__luminaChunks['${chunk}']);`);
-        lines.push(`    s.onerror = () => reject(new Error('Failed to load ${chunk} chunk'));`);
+        // Absolute-from-origin path so load works from any page URL depth
+        lines.push(`    s.src = (window.location && window.location.origin ? window.location.origin : '') + '/js/chunks/lumina-${chunk}.js';`);
+        lines.push(`    s.async = true;`);
+        lines.push(`    s.onload = () => {`);
+        lines.push(`      const mod = window.__luminaChunks && window.__luminaChunks['${chunk}'];`);
+        lines.push(`      if (!mod) { reject(new Error('Failed to register ${chunk} chunk')); return; }`);
+        lines.push(`      resolve(mod);`);
+        lines.push(`    };`);
+        lines.push(`    s.onerror = () => {`);
+        lines.push(`      delete __luminaChunkCache['${chunk}'];`);
+        lines.push(`      reject(new Error('Failed to load ${chunk} chunk'));`);
+        lines.push(`    };`);
         lines.push(`    document.head.appendChild(s);`);
         lines.push(`  });`);
         lines.push(`  return __luminaChunkCache['${chunk}'];`);
         lines.push('}');
         for (const fn of fns) {
             lines.push(`if (typeof window['${fn}'] !== 'function') {`);
-            lines.push(`  window['${fn}'] = async function(...args) {`);
+            lines.push(`  window['${fn}'] = async function __luminaLazyStub_${fn}(...args) {`);
             lines.push(`    await __loadChunk_${chunk.replace(/-/g, '_')}();`);
-            lines.push(`    return window['${fn}']?.(...args);`);
+            lines.push(`    const real = window['${fn}'];`);
+            // Guard against infinite recursion if chunk failed to replace the stub
+            lines.push(`    if (typeof real !== 'function' || real === __luminaLazyStub_${fn}) {`);
+            lines.push(`      throw new Error('Chunk ${chunk} did not register ${fn}');`);
+            lines.push(`    }`);
+            lines.push(`    return real.apply(this, args);`);
             lines.push(`  };`);
+            lines.push(`  if (typeof registerLuminaAction === 'function') registerLuminaAction('${fn}', window['${fn}']);`);
             lines.push('}');
         }
     }
@@ -215,6 +234,17 @@ ${coreCode}
 
 ${lazyBridge}
 ${patchNav}
+// Expose ALL core fns on window so lazy IIFE chunks can call free globals
+// (getCoachTask, isApiReady, callDeepSeek, showToast, …) without re-bundling state.
+(function registerCoreGlobalsForLazyChunks() {
+    const fns = { ${coreFns.join(', ')} };
+    for (const [key, val] of Object.entries(fns)) {
+        if (typeof val === 'function') {
+            window[key] = val;
+            if (typeof registerLuminaAction === 'function') registerLuminaAction(key, val);
+        }
+    }
+})();
 ${collectLazyWindowExports(coreFns, manifest).map((n) => `registerLuminaAction('${n}', ${n});`).join('\n')}
 ${LAZY_TEST_EXPORTS.filter((n) => coreFns.includes(n)).map((n) => `window['${n}'] = ${n};`).join('\n')}
 window.initializeApp = initializeApp;

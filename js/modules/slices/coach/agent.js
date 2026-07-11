@@ -955,7 +955,7 @@ function renderCoachAgentView() {
         return;
     }
     
-    const session = S.focusSession?.taskId === task.id ? focusSession : null;
+    const session = S.focusSession?.taskId === task.id ? S.focusSession : null;
     const steps = session?.steps || getStepsForTask(task);
     const isActive = !!session?.coachActive;
     const cur = isActive ? Math.min(session.currentStep || 0, steps.length - 1) : 0;
