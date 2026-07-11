@@ -83,6 +83,11 @@ jobs:
         env:
           REQUIRE_ENTERPRISE_AUTH: '1'
 
+      - name: W2-F document versions contract
+        run: node scripts/test-w2-versions.js
+        env:
+          REQUIRE_ENTERPRISE_AUTH: '1'
+
       - name: Coach RAG tests
         run: node scripts/test-coach-rag.js
 
