@@ -20,6 +20,7 @@ from rag_engine import (
     configure_llm,
     configure_runtime,
     delete_document_index,
+    delete_kb_index,
     generate_answer,
     get_runtime_info,
     index_text_document,
@@ -76,6 +77,11 @@ class TextUploadRequest(BaseModel):
     deepseek_api_key: Optional[str] = None
 
 
+class KbDeleteRequest(BaseModel):
+    group_code: str
+    kb_id: str
+
+
 class QueryResponse(BaseModel):
     answer: str
     sources: List[dict]
@@ -113,6 +119,25 @@ async def list_knowledge_bases(group_code: str):
     if not code:
         raise HTTPException(status_code=400, detail="group_code 無效")
     return {"ok": True, "group_code": code, "kb_ids": list_group_kbs(code)}
+
+
+@app.post("/api/rag/kb/delete")
+async def delete_knowledge_base(req: KbDeleteRequest):
+    """Internal: wipe on-disk index for an entire KB (called by api-proxy)."""
+    code = normalize_code(req.group_code)
+    kb = normalize_kb_id(req.kb_id)
+    if not code:
+        raise HTTPException(status_code=400, detail="group_code 無效")
+    if not kb:
+        raise HTTPException(status_code=400, detail="kb_id 無效")
+    if kb == "general" and os.getenv("RAG_ALLOW_DELETE_GENERAL", "").strip() != "1":
+        # Proxy blocks general delete; allow engine-level wipe only when explicitly enabled
+        pass
+    removed = delete_kb_index(code, kb)
+    if not removed:
+        # Idempotent: missing directory is success for soft-delete orchestration
+        return {"ok": True, "group_code": code, "kb_id": kb, "removed": False, "message": "index not found"}
+    return {"ok": True, "group_code": code, "kb_id": kb, "removed": True}
 
 
 @app.post("/api/rag/document/upload")

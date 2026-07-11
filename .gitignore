@@ -12,9 +12,11 @@ terminals/
 mcps/
 .env
 .env.*
+!.env.example
 *.log
 .DS_Store
 Thumbs.db
 agent-tools/
 js/modules/generated/
 js/chunks/
+backups/

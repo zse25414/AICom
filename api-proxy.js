@@ -257,7 +257,7 @@ function setCors(req, res) {
     } else if (!origin) {
         res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS[0] || 'http://localhost:3456');
     }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
@@ -420,26 +420,39 @@ async function requireAuth(req) {
 async function requireAiAuth(req) {
     if (ALLOW_ANONYMOUS_AI) return { ok: true, user: null };
     const user = await getAuthFromRequest(req);
-    if (!user) return { ok: false, status: 401, error: '請先登入才能使用 AI 功能' };
+    if (!user) {
+        return { ok: false, status: 401, error: '請先登入才能使用 AI 功能', code: 'UNAUTHORIZED' };
+    }
     return { ok: true, user };
+}
+
+/** Send JSON error with machine-readable `code` (keeps human `error` string). */
+function sendError(res, status, error, code) {
+    const body = { ok: false, error };
+    if (code) body.code = code;
+    sendJson(res, status, body);
+}
+
+function sendAccessResult(res, access) {
+    sendError(res, access.status, access.error, access.code);
 }
 
 async function assertEnterpriseMember(group, memberId, authUser, options = {}) {
     const { bind = true, store = null } = options;
     if (!group || !memberId) {
-        return { ok: false, status: 403, error: '無效的成員或身份驗證失敗' };
+        return { ok: false, status: 403, error: '無效的成員或身份驗證失敗', code: 'GROUP_FORBIDDEN' };
     }
     const member = group.members.find(m => m.id === memberId);
     if (!member) {
-        return { ok: false, status: 403, error: '無效的成員或身份驗證失敗' };
+        return { ok: false, status: 403, error: '無效的成員或身份驗證失敗', code: 'GROUP_FORBIDDEN' };
     }
 
     if (REQUIRE_ENTERPRISE_AUTH) {
         if (!authUser?.id) {
-            return { ok: false, status: 401, error: '請先登入才能使用團隊功能' };
+            return { ok: false, status: 401, error: '請先登入才能使用團隊功能', code: 'UNAUTHORIZED' };
         }
         if (member.userId && member.userId !== authUser.id) {
-            return { ok: false, status: 403, error: '此成員已綁定其他帳號' };
+            return { ok: false, status: 403, error: '此成員已綁定其他帳號', code: 'GROUP_FORBIDDEN' };
         }
         if (!member.userId && bind) {
             member.userId = authUser.id;
@@ -450,7 +463,7 @@ async function assertEnterpriseMember(group, memberId, authUser, options = {}) {
 
     if (member.userId) {
         if (!authUser?.id || authUser.id !== member.userId) {
-            return { ok: false, status: 403, error: '無效的成員或身份驗證失敗' };
+            return { ok: false, status: 403, error: '無效的成員或身份驗證失敗', code: 'GROUP_FORBIDDEN' };
         }
     } else if (authUser?.id && bind) {
         member.userId = authUser.id;
@@ -459,27 +472,635 @@ async function assertEnterpriseMember(group, memberId, authUser, options = {}) {
     return { ok: true, member };
 }
 
-async function assertRagGroupAccess(groupCode, authUser) {
+/**
+ * Group membership for RAG routes.
+ * @param {{ requireManager?: boolean }} options
+ */
+async function assertRagGroupAccess(groupCode, authUser, options = {}) {
+    const { requireManager = false } = options;
     const code = normalizeCode(groupCode);
-    if (!code) return { ok: false, status: 400, error: '缺少 group_code' };
+    if (!code) return { ok: false, status: 400, error: '缺少 group_code', code: 'VALIDATION_ERROR' };
 
     const store = prepareStore(await loadStore());
     const group = getGroup(store, code);
-    if (!group) return { ok: false, status: 404, error: '找不到群組' };
+    if (!group) return { ok: false, status: 404, error: '找不到群組', code: 'GROUP_NOT_FOUND' };
 
-    if (ALLOW_ANONYMOUS_AI && !REQUIRE_ENTERPRISE_AUTH) {
-        return { ok: true, group };
+    // Dev anonymous: allow read paths only; write still needs a bound manager when requireManager.
+    if (ALLOW_ANONYMOUS_AI && !REQUIRE_ENTERPRISE_AUTH && !requireManager) {
+        return { ok: true, group, member: null, store };
     }
 
     if (!authUser?.id) {
-        return { ok: false, status: 401, error: '請先登入才能使用知識庫' };
+        return { ok: false, status: 401, error: '請先登入才能使用知識庫', code: 'UNAUTHORIZED' };
     }
 
     const member = group.members.find(m => m.userId === authUser.id);
     if (!member) {
-        return { ok: false, status: 403, error: '你不是此群組成員' };
+        return { ok: false, status: 403, error: '你不是此群組成員', code: 'GROUP_FORBIDDEN' };
     }
-    return { ok: true, group, member };
+    if (requireManager && member.role !== 'manager') {
+        return { ok: false, status: 403, error: '僅主管可管理知識庫', code: 'ROLE_FORBIDDEN' };
+    }
+    return { ok: true, group, member, store };
+}
+
+function isActiveDocument(doc) {
+    if (!doc) return false;
+    if (doc.deletedAt) return false;
+    if (doc.status === 'deleted') return false;
+    return true;
+}
+
+function getRagFilenameForDoc(doc) {
+    if (!doc) return '';
+    if (doc.filename) return doc.filename;
+    if (doc.title) return `text::${doc.title}.md`;
+    return '';
+}
+
+/** Align with rag_service.normalize_kb_id: [a-z0-9_-], default general. */
+function normalizeKbId(value) {
+    const cleaned = String(value || 'general').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    return cleaned.slice(0, 30) || 'general';
+}
+
+function isActiveKb(kb) {
+    if (!kb) return false;
+    if (kb.deletedAt) return false;
+    if (kb.status === 'deleted') return false;
+    return true;
+}
+
+function defaultKbDisplayName(id) {
+    const labels = {
+        general: '一般預設',
+        onboarding: '新人培訓',
+        specs: '規格文件',
+        meetings: '會議紀錄'
+    };
+    return labels[id] || id;
+}
+
+function createKbRecord(id, fields = {}) {
+    const now = new Date().toISOString();
+    return {
+        id,
+        displayName: fields.displayName || defaultKbDisplayName(id),
+        description: fields.description || '',
+        status: 'active',
+        createdAt: fields.createdAt || now,
+        updatedAt: fields.updatedAt || now,
+        createdByMemberId: fields.createdByMemberId || null,
+        createdByUserId: fields.createdByUserId || null,
+        createdByName: fields.createdByName || null,
+        docCount: 0,
+        deletedAt: null
+    };
+}
+
+/**
+ * Ensure group.knowledgeBases map exists; migrate from document.kbId; always has general.
+ * Returns the map (mutates group). Soft-deleted KBs are not auto-revived (except general).
+ */
+function ensureKnowledgeBases(group) {
+    if (!group.knowledgeBases || typeof group.knowledgeBases !== 'object' || Array.isArray(group.knowledgeBases)) {
+        group.knowledgeBases = {};
+    }
+    const now = new Date().toISOString();
+    for (const doc of group.documents || []) {
+        if (!isActiveDocument(doc)) continue;
+        const id = normalizeKbId(doc.kbId || 'general');
+        if (!group.knowledgeBases[id]) {
+            group.knowledgeBases[id] = createKbRecord(id, { createdAt: doc.createdAt || now });
+        }
+    }
+    if (!group.knowledgeBases.general) {
+        group.knowledgeBases.general = createKbRecord('general', {
+            displayName: '一般預設',
+            description: '預設知識庫'
+        });
+    } else if (!isActiveKb(group.knowledgeBases.general)) {
+        // general is system KB — always revive
+        group.knowledgeBases.general.status = 'active';
+        group.knowledgeBases.general.deletedAt = null;
+        group.knowledgeBases.general.updatedAt = now;
+    }
+    for (const kb of Object.values(group.knowledgeBases)) {
+        if (!isActiveKb(kb)) {
+            kb.docCount = 0;
+            continue;
+        }
+        kb.docCount = (group.documents || []).filter(
+            d => isActiveDocument(d) && normalizeKbId(d.kbId || 'general') === kb.id
+        ).length;
+    }
+    return group.knowledgeBases;
+}
+
+function serializeKbItem(kb) {
+    return {
+        id: kb.id,
+        displayName: kb.displayName || defaultKbDisplayName(kb.id),
+        description: kb.description || '',
+        status: kb.status || 'active',
+        docCount: typeof kb.docCount === 'number' ? kb.docCount : 0,
+        createdAt: kb.createdAt || null,
+        updatedAt: kb.updatedAt || null,
+        createdByMemberId: kb.createdByMemberId || null,
+        createdByUserId: kb.createdByUserId || null,
+        createdByName: kb.createdByName || null
+    };
+}
+
+function buildKbListResponse(group) {
+    ensureKnowledgeBases(group);
+    const items = Object.values(group.knowledgeBases)
+        .filter(isActiveKb)
+        .map(serializeKbItem)
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    return {
+        ok: true,
+        group_code: group.code,
+        kb_ids: items.map(i => i.id),
+        items
+    };
+}
+
+/**
+ * Resolve KB for upload/write.
+ * - autoCreate defaults true (migration period: unknown kb_id is created on the fly).
+ * - Pass auto_create=false / autoCreate=false to require a pre-created active KB.
+ * - Unknown / soft-deleted with autoCreate=false → 400 KB_NOT_FOUND.
+ * Returns { ok, kb, created } or { ok:false, status, error, code }.
+ */
+function resolveKbForWrite(group, kbIdRaw, options = {}) {
+    ensureKnowledgeBases(group);
+    const kbId = normalizeKbId(kbIdRaw);
+    const autoCreate = options.autoCreate !== false;
+    let kb = group.knowledgeBases[kbId];
+    if (isActiveKb(kb)) {
+        return { ok: true, kb, created: false };
+    }
+    if (!autoCreate) {
+        return { ok: false, status: 400, error: '知識庫不存在或已刪除', code: 'KB_NOT_FOUND' };
+    }
+    // Soft-deleted or missing id: create/revive as new active record
+    kb = createKbRecord(kbId, {
+        displayName: options.displayName || defaultKbDisplayName(kbId),
+        description: options.description || '',
+        createdByMemberId: options.createdByMemberId || null,
+        createdByUserId: options.createdByUserId || null,
+        createdByName: options.createdByName || null
+    });
+    group.knowledgeBases[kbId] = kb;
+    return { ok: true, kb, created: true };
+}
+
+/**
+ * Soft-delete a KB: cascade soft-delete its documents, best-effort wipe RAG index, mark status=deleted.
+ * Mutates group; caller must saveStore.
+ * @returns {{ ok:true, kb_id, documentsSoftDeleted, ragDeleteOk, warning? } | { ok:false, status, error, code }}
+ */
+async function softDeleteKnowledgeBase(group, kbIdRaw) {
+    const kbId = normalizeKbId(kbIdRaw);
+    if (!kbId) {
+        return { ok: false, status: 400, error: '無效的知識庫 id', code: 'INVALID_KB_ID' };
+    }
+    if (kbId === 'general') {
+        return { ok: false, status: 400, error: '不可刪除預設知識庫 general', code: 'KB_PROTECTED' };
+    }
+    ensureKnowledgeBases(group);
+    const kb = group.knowledgeBases[kbId];
+    if (!kb || !isActiveKb(kb)) {
+        return { ok: false, status: 404, error: '知識庫不存在', code: 'KB_NOT_FOUND' };
+    }
+
+    const now = new Date().toISOString();
+    let documentsSoftDeleted = 0;
+    for (const doc of group.documents || []) {
+        if (!isActiveDocument(doc)) continue;
+        if (normalizeKbId(doc.kbId || 'general') !== kbId) continue;
+        doc.status = 'deleted';
+        doc.deletedAt = now;
+        setDocumentRagStatus(doc, 'deleted');
+        documentsSoftDeleted++;
+    }
+
+    const ragResult = await proxyRagDeleteKb(normalizeCode(group.code), kbId);
+    if (!ragResult.ok) {
+        console.warn('[Lumina API] RAG KB index delete failed:', ragResult.text);
+    }
+
+    kb.status = 'deleted';
+    kb.deletedAt = now;
+    kb.updatedAt = now;
+    kb.docCount = 0;
+
+    return {
+        ok: true,
+        kb_id: kbId,
+        documentsSoftDeleted,
+        ragDeleteOk: ragResult.ok,
+        warning: ragResult.ok ? undefined : '知識庫已軟刪，但索引目錄清除失敗'
+    };
+}
+
+async function proxyRagDeleteKb(groupCode, kbId) {
+    try {
+        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/kb/delete`, {
+            method: 'POST',
+            headers: buildRagHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({
+                group_code: groupCode || '',
+                kb_id: kbId || 'general'
+            })
+        });
+        const text = await response.text();
+        const ok = response.ok || response.status === 404;
+        return { ok, status: response.status, text };
+    } catch (e) {
+        return { ok: false, status: 0, text: e.message || 'RAG KB delete failed' };
+    }
+}
+
+function setDocumentRagStatus(doc, status, extra = {}) {
+    if (!doc) return;
+    const now = new Date().toISOString();
+    doc.ragStatus = status;
+    doc.rag = {
+        ...(doc.rag && typeof doc.rag === 'object' ? doc.rag : {}),
+        status,
+        lastIndexedAt: status === 'indexed' ? now : (doc.rag?.lastIndexedAt || null),
+        lastError: extra.lastError != null ? extra.lastError : (status === 'failed' ? (extra.lastError || null) : null),
+        refDocId: extra.refDocId != null ? extra.refDocId : (doc.rag?.refDocId || null),
+        chunks: extra.chunks != null ? extra.chunks : (doc.rag?.chunks || null)
+    };
+}
+
+function findGroupDocument(group, { documentId, filename, title } = {}) {
+    const docs = group?.documents || [];
+    if (documentId) {
+        const byId = docs.find(d => d.id === documentId);
+        if (byId) return byId;
+    }
+    if (filename) {
+        const byFile = docs.find(d => isActiveDocument(d) && (
+            d.filename === filename || getRagFilenameForDoc(d) === filename
+        ));
+        if (byFile) return byFile;
+    }
+    if (title) {
+        const byTitle = docs.find(d => isActiveDocument(d) && d.title === title);
+        if (byTitle) return byTitle;
+    }
+    return null;
+}
+
+async function persistDocumentRagStatus(groupCode, lookup, status, extra = {}) {
+    const store = prepareStore(await loadStore());
+    const group = getGroup(store, normalizeCode(groupCode));
+    if (!group) return false;
+    const doc = findGroupDocument(group, lookup);
+    if (!doc) return false;
+    setDocumentRagStatus(doc, status, extra);
+    await saveStore(store);
+    return true;
+}
+
+async function proxyRagDeleteIndex(groupCode, kbId, filename) {
+    const form = new URLSearchParams();
+    form.set('group_code', groupCode || '');
+    form.set('kb_id', kbId || 'general');
+    form.set('filename', filename || '');
+    try {
+        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/document/delete`, {
+            method: 'POST',
+            headers: buildRagHeaders({ 'Content-Type': 'application/x-www-form-urlencoded' }),
+            body: form.toString()
+        });
+        const text = await response.text();
+        // 404 = already absent — treat as success for consistency
+        const ok = response.ok || response.status === 404;
+        return { ok, status: response.status, text };
+    } catch (e) {
+        return { ok: false, status: 0, text: e.message || 'RAG delete failed' };
+    }
+}
+
+// ── W2-C: Server-side RAG index orchestration ──────────────────────────────
+// Prefer sync await within RAG_INDEX_TIMEOUT_MS; on timeout respond pending and
+// finish in-process (fire-and-forget) with 1 retry. See document/add response.
+const RAG_INDEX_TIMEOUT_MS = Math.max(2000, Number(process.env.RAG_INDEX_TIMEOUT_MS) || 12000);
+const RAG_INDEX_MAX_ATTEMPTS = 2; // initial + 1 retry
+/** @type {Set<string>} */
+const ragBackgroundIndexJobs = new Set();
+
+function parseRagProxyResult(proxied) {
+    const ok = proxied && proxied.status >= 200 && proxied.status < 300;
+    let chunks = null;
+    let lastError = null;
+    if (ok) {
+        try {
+            const data = JSON.parse(proxied.text || '{}');
+            chunks = data.chunks != null ? data.chunks : null;
+        } catch (_) {}
+    } else {
+        try {
+            const data = JSON.parse((proxied && proxied.text) || '{}');
+            lastError = data.detail || data.error || (proxied && proxied.text) || 'RAG index failed';
+        } catch (_) {
+            lastError = (proxied && proxied.text) || 'RAG index failed';
+        }
+    }
+    return { ok, status: proxied ? proxied.status : 0, chunks, lastError };
+}
+
+async function proxyRagUploadTextIndex({ groupCode, kbId, title, content, filename, documentId }) {
+    try {
+        const proxied = await proxyRagJson('/api/rag/document/upload-text', {
+            group_code: groupCode || '',
+            kb_id: kbId || 'general',
+            title: title || '',
+            content: content || '',
+            filename: filename || `text::${title || 'doc'}.md`,
+            document_id: documentId || null
+        });
+        return parseRagProxyResult(proxied);
+    } catch (e) {
+        return { ok: false, status: 0, chunks: null, lastError: e.message || 'RAG upload-text failed' };
+    }
+}
+
+async function proxyRagUploadBinaryIndex({ groupCode, kbId, filename, fileBuffer }) {
+    try {
+        const boundary = 'lumina-rag-' + crypto.randomBytes(8).toString('hex');
+        const parts = [
+            `--${boundary}\r\nContent-Disposition: form-data; name="group_code"\r\n\r\n${groupCode || ''}\r\n`,
+            `--${boundary}\r\nContent-Disposition: form-data; name="kb_id"\r\n\r\n${kbId || 'general'}\r\n`,
+            `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename || 'file.bin'}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+            fileBuffer,
+            `\r\n--${boundary}--\r\n`
+        ];
+        const payload = Buffer.concat(parts.map(p => (Buffer.isBuffer(p) ? p : Buffer.from(p, 'utf8'))));
+        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/document/upload`, {
+            method: 'POST',
+            headers: buildRagHeaders({
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': String(payload.length)
+            }),
+            body: payload
+        });
+        const text = await response.text();
+        return parseRagProxyResult({ status: response.status, text });
+    } catch (e) {
+        return { ok: false, status: 0, chunks: null, lastError: e.message || 'RAG binary upload failed' };
+    }
+}
+
+/**
+ * Index one enterprise document into rag_service.
+ * Prefers non-empty text content (upload-text); else binary from buffer / uploads disk.
+ */
+async function indexEnterpriseDocumentToRag(groupCode, doc, options = {}) {
+    if (!doc) {
+        return { ok: false, status: 0, chunks: null, lastError: 'document missing' };
+    }
+    const kbId = doc.kbId || options.kbId || 'general';
+    const title = doc.title || 'untitled';
+    const textContent = String(doc.content || '').trim();
+    const ragFilename = getRagFilenameForDoc(doc);
+    const documentId = doc.id || null;
+
+    if (textContent) {
+        const filename = doc.docType === 'text'
+            ? `text::${title}.md`
+            : (ragFilename || `text::${title}.md`);
+        return proxyRagUploadTextIndex({
+            groupCode,
+            kbId,
+            title,
+            content: textContent,
+            filename,
+            documentId
+        });
+    }
+
+    let fileBuffer = null;
+    if (options.fileBuffer && Buffer.isBuffer(options.fileBuffer)) {
+        fileBuffer = options.fileBuffer;
+    } else if (options.fileData && typeof options.fileData === 'string') {
+        try {
+            fileBuffer = Buffer.from(options.fileData, 'base64');
+        } catch (_) {}
+    } else if (doc.fileUrl && String(doc.fileUrl).startsWith('/uploads/')) {
+        try {
+            const filePath = path.join(UPLOADS_DIR, path.basename(doc.fileUrl));
+            if (fs.existsSync(filePath)) fileBuffer = fs.readFileSync(filePath);
+        } catch (_) {}
+    }
+
+    if (fileBuffer && fileBuffer.length && ragFilename) {
+        return proxyRagUploadBinaryIndex({
+            groupCode,
+            kbId,
+            filename: ragFilename,
+            fileBuffer
+        });
+    }
+
+    return { ok: false, status: 0, chunks: null, lastError: '沒有可索引的文件內容' };
+}
+
+async function indexDocumentWithRetry(groupCode, doc, options = {}) {
+    const maxAttempts = options.maxAttempts || RAG_INDEX_MAX_ATTEMPTS;
+    let last = { ok: false, status: 0, chunks: null, lastError: 'RAG index not attempted' };
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        last = await indexEnterpriseDocumentToRag(groupCode, doc, options);
+        if (last.ok) return last;
+        if (attempt + 1 < maxAttempts) {
+            console.warn(
+                `[Lumina Backend] RAG index attempt ${attempt + 1} failed for doc ${doc?.id}:`,
+                last.lastError
+            );
+        }
+    }
+    return last;
+}
+
+/** Resolve when promise settles or timeout elapses (does not cancel work). */
+function raceWithTimeout(promise, ms) {
+    return new Promise(resolve => {
+        let settled = false;
+        const timer = setTimeout(() => {
+            if (!settled) {
+                settled = true;
+                resolve({ timedOut: true, value: null });
+            }
+        }, ms);
+        Promise.resolve(promise).then(
+            value => {
+                if (!settled) {
+                    settled = true;
+                    clearTimeout(timer);
+                    resolve({ timedOut: false, value });
+                }
+            },
+            err => {
+                if (!settled) {
+                    settled = true;
+                    clearTimeout(timer);
+                    resolve({
+                        timedOut: false,
+                        value: { ok: false, status: 0, chunks: null, lastError: err.message || 'RAG index error' }
+                    });
+                }
+            }
+        );
+    });
+}
+
+/**
+ * Fire-and-forget completion after timed-out sync path.
+ * Reloads store so concurrent writes are not clobbered by stale in-memory doc.
+ */
+async function runBackgroundRagIndex(groupCode, docId, options = {}) {
+    const key = `${normalizeCode(groupCode)}:${docId}`;
+    if (!docId || ragBackgroundIndexJobs.has(key)) return;
+    ragBackgroundIndexJobs.add(key);
+    try {
+        const store = prepareStore(await loadStore());
+        const group = getGroup(store, normalizeCode(groupCode));
+        if (!group) return;
+        const doc = findGroupDocument(group, { documentId: docId });
+        if (!doc || !isActiveDocument(doc)) return;
+        // Skip if another path already finished
+        if (doc.ragStatus === 'indexed') return;
+
+        const result = await indexDocumentWithRetry(groupCode, doc, options);
+        if (result.ok) {
+            await persistDocumentRagStatus(groupCode, { documentId: docId }, 'indexed', {
+                chunks: result.chunks,
+                lastError: null
+            });
+            console.log(`[Lumina Backend] background RAG index ok: ${docId}`);
+        } else {
+            await persistDocumentRagStatus(groupCode, { documentId: docId }, 'failed', {
+                lastError: String(result.lastError || 'RAG index failed').slice(0, 500)
+            });
+            console.warn(`[Lumina Backend] background RAG index failed: ${docId}`, result.lastError);
+        }
+    } catch (e) {
+        console.warn('[Lumina Backend] background RAG index error:', e.message);
+        try {
+            await persistDocumentRagStatus(groupCode, { documentId: docId }, 'failed', {
+                lastError: String(e.message || 'RAG index failed').slice(0, 500)
+            });
+        } catch (_) {}
+    } finally {
+        ragBackgroundIndexJobs.delete(key);
+    }
+}
+
+/**
+ * Persist index result after work completes (used by both sync response and timeout tail).
+ * Reloads store so concurrent enterprise writes are not clobbered.
+ */
+async function applyDocumentRagIndexResult(groupCode, doc, result) {
+    if (!doc?.id) return result;
+    if (result && result.ok) {
+        setDocumentRagStatus(doc, 'indexed', { chunks: result.chunks, lastError: null });
+        await persistDocumentRagStatus(groupCode, { documentId: doc.id }, 'indexed', {
+            chunks: result.chunks,
+            lastError: null
+        });
+        return result;
+    }
+    const lastError = String((result && result.lastError) || 'RAG index failed').slice(0, 500);
+    setDocumentRagStatus(doc, 'failed', { lastError });
+    await persistDocumentRagStatus(groupCode, { documentId: doc.id }, 'failed', { lastError });
+    return result;
+}
+
+/**
+ * Orchestrate RAG index for a freshly saved (or reindex) document.
+ * Sync await within timeout; on timeout leave pending and let the same promise finish
+ * (no second index job — avoids double-write to rag_service).
+ * @returns {{ ragOk: boolean|null, ragStatus: string, ragPending: boolean, warning?: string, document: object }}
+ */
+async function orchestrateDocumentRagIndex(groupCode, doc, options = {}) {
+    const key = `${normalizeCode(groupCode)}:${doc?.id || ''}`;
+    if (doc?.id) ragBackgroundIndexJobs.add(key);
+
+    const work = (async () => {
+        try {
+            const result = await indexDocumentWithRetry(groupCode, doc, options);
+            await applyDocumentRagIndexResult(groupCode, doc, result);
+            return result;
+        } finally {
+            if (doc?.id) ragBackgroundIndexJobs.delete(key);
+        }
+    })();
+
+    const raced = await raceWithTimeout(work, options.timeoutMs || RAG_INDEX_TIMEOUT_MS);
+
+    if (raced.timedOut) {
+        // Same work continues; status will flip pending → indexed|failed when done.
+        work.catch(err => {
+            console.warn('[Lumina Backend] RAG index tail error:', err.message);
+        });
+        return {
+            ragOk: null,
+            ragStatus: 'pending',
+            ragPending: true,
+            warning: '文件已存檔，知識庫索引處理中',
+            document: doc
+        };
+    }
+
+    const result = raced.value || { ok: false, lastError: 'RAG index failed' };
+    if (result.ok) {
+        return {
+            ragOk: true,
+            ragStatus: 'indexed',
+            ragPending: false,
+            document: doc
+        };
+    }
+
+    return {
+        ragOk: false,
+        ragStatus: 'failed',
+        ragPending: false,
+        warning: '文件已存檔，但知識庫索引失敗',
+        document: doc
+    };
+}
+
+/** Normalize rag_service sources → citations[] (keep sources for compat). */
+function normalizeRagCitations(sources, group) {
+    const list = Array.isArray(sources) ? sources : [];
+    const docs = (group?.documents || []).filter(isActiveDocument);
+    return list.map((s, idx) => {
+        const filename = s.filename || s.file_name || null;
+        const kbId = s.kb_id || s.kbId || 'general';
+        const match = docs.find(d => {
+            if (s.document_id && d.id === s.document_id) return true;
+            const ragName = getRagFilenameForDoc(d);
+            if (filename && (d.filename === filename || ragName === filename)) return true;
+            if (filename && d.title && filename.includes(d.title)) return true;
+            return false;
+        });
+        return {
+            ref_id: s.ref_id != null ? s.ref_id : idx + 1,
+            document_id: match?.id || s.document_id || null,
+            title: match?.title || s.title || null,
+            filename: filename || match?.filename || null,
+            kb_id: kbId || match?.kbId || 'general',
+            score: typeof s.score === 'number' ? s.score : null,
+            snippet: s.snippet || s.text || s.chunk_text || null,
+            chunk_id: s.doc_id || s.chunk_id || null
+        };
+    });
 }
 
 async function canAccessUpload(authUser, filename) {
@@ -649,7 +1270,17 @@ async function handleEnterprise(req, res, urlPath, method) {
                     joinedAt: new Date().toISOString()
                 }],
                 tasks: [],
-                notifications: []
+                notifications: [],
+                documents: [],
+                knowledgeBases: {
+                    general: createKbRecord('general', {
+                        displayName: '一般預設',
+                        description: '預設知識庫',
+                        createdByMemberId: managerId,
+                        createdByUserId: authUser?.id || null,
+                        createdByName: managerName
+                    })
+                }
             };
             await saveStore(store);
 
@@ -758,7 +1389,7 @@ async function handleEnterprise(req, res, urlPath, method) {
             name: group.name,
             members: group.members,
             tasks: group.tasks,
-            documents: group.documents || [],
+            documents: (group.documents || []).filter(isActiveDocument),
             notifications: group.notifications
                 .filter(n => n.recipientId === memberId)
                 .slice(0, 50),
@@ -782,16 +1413,19 @@ async function handleEnterprise(req, res, urlPath, method) {
 
             const authUser = await getOptionalAuth(req);
             const memberCheck = await assertEnterpriseMember(group, managerId, authUser, { store });
-            if (!memberCheck.ok || memberCheck.member.role !== 'manager') {
-                return sendJson(res, memberCheck.status || 403, { error: memberCheck.error || '僅主管可管理知識庫' });
+            if (!memberCheck.ok) {
+                return sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
+            }
+            if (memberCheck.member.role !== 'manager') {
+                return sendError(res, 403, '僅主管可管理知識庫', 'ROLE_FORBIDDEN');
             }
             const manager = memberCheck.member;
 
             if (docType === 'text' && (!title || !content)) {
-                return sendJson(res, 400, { error: '請輸入標題與內容' });
+                return sendJson(res, 400, { error: '請輸入標題與內容', code: 'VALIDATION_ERROR' });
             }
             if (!title) {
-                return sendJson(res, 400, { error: '請輸入標題' });
+                return sendJson(res, 400, { error: '請輸入標題', code: 'VALIDATION_ERROR' });
             }
 
             let fileUrl = null;
@@ -800,10 +1434,10 @@ async function handleEnterprise(req, res, urlPath, method) {
                     const fileBuffer = Buffer.from(body.fileData, 'base64');
                     const ext = (path.extname(body.filename) || (docType === 'pdf' ? '.pdf' : docType === 'excel' ? '.xlsx' : '.png')).toLowerCase();
                     if (!ALLOWED_UPLOAD_EXT.has(ext)) {
-                        return sendJson(res, 400, { error: '不支援的檔案類型' });
+                        return sendJson(res, 400, { error: '不支援的檔案類型', code: 'VALIDATION_ERROR' });
                     }
                     if (fileBuffer.length > MAX_UPLOAD_BYTES) {
-                        return sendJson(res, 400, { error: '檔案過大（上限 5MB）' });
+                        return sendJson(res, 400, { error: '檔案過大（上限 5MB）', code: 'VALIDATION_ERROR' });
                     }
                     const safeBase = path.basename(body.filename, ext).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
                     const uniqueFilename = `${uid()}-${safeBase}${ext}`;
@@ -816,6 +1450,16 @@ async function handleEnterprise(req, res, urlPath, method) {
             }
 
             if (!group.documents) group.documents = [];
+            const autoCreate = body.auto_create !== false && body.autoCreate !== false;
+            const kbResolve = resolveKbForWrite(group, body.kbId || body.kb_id || 'general', {
+                autoCreate,
+                createdByMemberId: manager.id,
+                createdByUserId: manager.userId || authUser?.id || null,
+                createdByName: manager.name
+            });
+            if (!kbResolve.ok) {
+                return sendError(res, kbResolve.status, kbResolve.error, kbResolve.code);
+            }
             const doc = {
                 id: uid(),
                 title,
@@ -823,14 +1467,91 @@ async function handleEnterprise(req, res, urlPath, method) {
                 docType,
                 fileUrl,
                 filename: body.filename || null,
-                kbId: clampText(body.kbId, 30) || 'general',
+                kbId: kbResolve.kb.id,
                 author: manager.name,
-                createdAt: new Date().toISOString()
+                createdAt: new Date().toISOString(),
+                // D2: Enterprise success first; RAG index may lag
+                ragStatus: 'pending',
+                rag: {
+                    status: 'pending',
+                    lastIndexedAt: null,
+                    lastError: null,
+                    refDocId: null,
+                    chunks: null
+                }
             };
             group.documents.unshift(doc);
+            ensureKnowledgeBases(group);
             await saveStore(store);
 
-            sendJson(res, 200, { ok: true, document: doc });
+            // W2-C: server-side RAG orchestration after enterprise metadata is durable.
+            // Sync await within RAG_INDEX_TIMEOUT_MS; timeout → pending + background finish.
+            let fileBuffer = null;
+            if (body.fileData && typeof body.fileData === 'string') {
+                try {
+                    fileBuffer = Buffer.from(body.fileData, 'base64');
+                } catch (_) {
+                    fileBuffer = null;
+                }
+            }
+            const ragOrchestration = await orchestrateDocumentRagIndex(code, doc, {
+                fileData: body.fileData || null,
+                fileBuffer,
+                kbId: doc.kbId
+            });
+
+            sendJson(res, 200, {
+                ok: true,
+                document: ragOrchestration.document || doc,
+                ragStatus: ragOrchestration.ragStatus || doc.ragStatus || 'pending',
+                ragOk: ragOrchestration.ragOk,
+                ragPending: !!ragOrchestration.ragPending,
+                warning: ragOrchestration.warning
+            });
+        });
+    }
+
+    if (method === 'POST' && urlPath === '/api/enterprise/group/document/reindex') {
+        return readBody(req).then(async body => {
+            const code = normalizeCode(body.groupCode);
+            const managerId = body.managerId;
+            const docId = body.documentId || body.document_id;
+
+            const group = getGroup(store, code);
+            if (!group) return sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, managerId, authUser, { store });
+            if (!memberCheck.ok) {
+                return sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
+            }
+            if (memberCheck.member.role !== 'manager') {
+                return sendError(res, 403, '僅主管可管理知識庫', 'ROLE_FORBIDDEN');
+            }
+            if (!docId) {
+                return sendError(res, 400, '缺少 documentId', 'VALIDATION_ERROR');
+            }
+
+            const doc = findGroupDocument(group, { documentId: docId });
+            if (!doc || !isActiveDocument(doc)) {
+                return sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+            }
+
+            setDocumentRagStatus(doc, 'pending', { lastError: null });
+            await saveStore(store);
+
+            const ragOrchestration = await orchestrateDocumentRagIndex(code, doc, {
+                kbId: doc.kbId
+            });
+
+            sendJson(res, 200, {
+                ok: ragOrchestration.ragOk !== false || !!ragOrchestration.ragPending,
+                document: ragOrchestration.document || doc,
+                ragStatus: ragOrchestration.ragStatus || doc.ragStatus || 'pending',
+                ragOk: ragOrchestration.ragOk,
+                ragPending: !!ragOrchestration.ragPending,
+                warning: ragOrchestration.warning
+            });
         });
     }
 
@@ -841,19 +1562,49 @@ async function handleEnterprise(req, res, urlPath, method) {
             const docId = body.documentId;
 
             const group = getGroup(store, code);
-            if (!group) return sendJson(res, 404, { error: '找不到群組' });
+            if (!group) return sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
 
             const authUser = await getOptionalAuth(req);
             const memberCheck = await assertEnterpriseMember(group, managerId, authUser, { store });
-            if (!memberCheck.ok || memberCheck.member.role !== 'manager') {
-                return sendJson(res, memberCheck.status || 403, { error: memberCheck.error || '僅主管可管理知識庫' });
+            if (!memberCheck.ok) {
+                return sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
+            }
+            if (memberCheck.member.role !== 'manager') {
+                return sendError(res, 403, '僅主管可管理知識庫', 'ROLE_FORBIDDEN');
             }
 
             if (!group.documents) group.documents = [];
-            const index = group.documents.findIndex(d => d.id === docId);
-            if (index === -1) return sendJson(res, 404, { error: '找不到該文件' });
+            const index = group.documents.findIndex(d => d.id === docId && isActiveDocument(d));
+            if (index === -1) return sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
 
             const doc = group.documents[index];
+            const kbId = doc.kbId || 'general';
+            const ragFilename = getRagFilenameForDoc(doc);
+
+            // Always attempt index cleanup before metadata soft-delete (D2 consistency).
+            // If cleanup fails, do NOT soft-delete — keep doc list-visible so manager can retry.
+            let ragDeleteOk = true;
+            let ragDeleteError = null;
+            if (ragFilename) {
+                const ragResult = await proxyRagDeleteIndex(code, kbId, ragFilename);
+                ragDeleteOk = ragResult.ok;
+                if (!ragDeleteOk) {
+                    ragDeleteError = ragResult.text || 'RAG index delete failed';
+                    console.warn('[Lumina Backend] RAG index delete failed:', ragDeleteError);
+                    setDocumentRagStatus(doc, 'failed', {
+                        lastError: ragDeleteError || '知識庫索引清除失敗，請重試刪除'
+                    });
+                    await saveStore(store);
+                    return sendJson(res, 200, {
+                        ok: false,
+                        ragDeleteOk: false,
+                        ragStatus: doc.ragStatus,
+                        warning: '知識庫索引清除失敗，文件仍保留於列表，請重試刪除',
+                        error: '知識庫索引清除失敗，請重試刪除'
+                    });
+                }
+            }
+
             if (doc.fileUrl) {
                 try {
                     const baseName = path.basename(doc.fileUrl);
@@ -866,10 +1617,18 @@ async function handleEnterprise(req, res, urlPath, method) {
                 }
             }
 
-            group.documents.splice(index, 1);
+            // Soft-delete only after RAG index cleanup succeeded (or no filename to purge)
+            doc.status = 'deleted';
+            doc.deletedAt = new Date().toISOString();
+            setDocumentRagStatus(doc, 'deleted', { lastError: null });
+
             await saveStore(store);
 
-            sendJson(res, 200, { ok: true });
+            sendJson(res, 200, {
+                ok: true,
+                ragDeleteOk: true,
+                ragStatus: doc.ragStatus
+            });
         });
     }
 
@@ -1226,34 +1985,164 @@ const server = http.createServer(async (req, res) => {
         try {
             const aiAuth = await requireAiAuth(req);
             if (!aiAuth.ok) {
-                sendJson(res, aiAuth.status, { error: aiAuth.error });
+                sendError(res, aiAuth.status, aiAuth.error, aiAuth.code || 'UNAUTHORIZED');
                 return;
             }
 
-            if (req.method === 'GET' && urlPath === '/api/rag/kb/list') {
+            // GET /api/rag/kb | /api/rag/kb/list — member list (kb_ids + items)
+            if (req.method === 'GET' && (urlPath === '/api/rag/kb/list' || urlPath === '/api/rag/kb')) {
                 const query = parseQuery(req);
                 const groupCode = query.get('group_code') || query.get('groupCode') || '';
                 const access = await assertRagGroupAccess(groupCode, aiAuth.user);
                 if (!access.ok) {
-                    sendJson(res, access.status, { error: access.error });
+                    sendAccessResult(res, access);
                     return;
                 }
-                const proxied = await proxyRagGet(`/api/rag/kb/list?group_code=${encodeURIComponent(groupCode)}`);
-                res.writeHead(proxied.status, { 'Content-Type': 'application/json' });
-                res.end(proxied.text);
+                const store = prepareStore(await loadStore());
+                const group = getGroup(store, groupCode);
+                if (!group) {
+                    sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+                    return;
+                }
+                const hadKbMap = !!(group.knowledgeBases && typeof group.knowledgeBases === 'object'
+                    && !Array.isArray(group.knowledgeBases) && Object.keys(group.knowledgeBases).length);
+                ensureKnowledgeBases(group);
+                // Persist lazy migration once so list survives restarts
+                if (!hadKbMap) await saveStore(store);
+                sendJson(res, 200, buildKbListResponse(group));
+                return;
+            }
+
+            // POST /api/rag/kb — manager create
+            if (req.method === 'POST' && urlPath === '/api/rag/kb') {
+                const body = await readBody(req);
+                const groupCode = body.group_code || body.groupCode || '';
+                const access = await assertRagGroupAccess(groupCode, aiAuth.user, { requireManager: true });
+                if (!access.ok) {
+                    sendAccessResult(res, access);
+                    return;
+                }
+                const store = prepareStore(await loadStore());
+                const group = getGroup(store, groupCode);
+                if (!group) {
+                    sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+                    return;
+                }
+                ensureKnowledgeBases(group);
+
+                const displayName = clampText(body.displayName || body.display_name || body.name, 80);
+                if (!displayName) {
+                    sendError(res, 400, '請提供 displayName', 'VALIDATION_ERROR');
+                    return;
+                }
+                const explicitId = clampText(body.id || body.kb_id || body.kbId, 30);
+                let kbId;
+                if (explicitId) {
+                    kbId = normalizeKbId(explicitId);
+                } else {
+                    const slug = displayName
+                        .toLowerCase()
+                        .replace(/[\s]+/g, '-')
+                        .replace(/[^a-z0-9_-]/g, '');
+                    kbId = slug ? normalizeKbId(slug) : normalizeKbId('kb' + uid().slice(0, 10));
+                    // Chinese-only names slug to empty → general; use random id instead
+                    if (kbId === 'general') {
+                        kbId = normalizeKbId('kb' + uid().slice(0, 10));
+                    }
+                }
+                if (!kbId) {
+                    sendError(res, 400, '無效的知識庫 id', 'INVALID_KB_ID');
+                    return;
+                }
+
+                const existing = group.knowledgeBases[kbId];
+                if (existing && isActiveKb(existing)) {
+                    sendError(res, 409, '知識庫 id 已存在', 'KB_EXISTS');
+                    return;
+                }
+
+                const description = clampText(body.description, 500);
+                const kb = createKbRecord(kbId, {
+                    displayName,
+                    description,
+                    createdByMemberId: access.member?.id || null,
+                    createdByUserId: access.member?.userId || aiAuth.user?.id || null,
+                    createdByName: access.member?.name || null
+                });
+                // Preserve createdAt if re-creating after soft-delete
+                if (existing && existing.createdAt) {
+                    kb.createdAt = existing.createdAt;
+                }
+                group.knowledgeBases[kbId] = kb;
+                await saveStore(store);
+                sendJson(res, 200, { ok: true, knowledgeBase: serializeKbItem(kb) });
+                return;
+            }
+
+            // POST /api/rag/kb/delete — manager soft-delete (body: group_code, kb_id)
+            // DELETE /api/rag/kb/:kbId — same (query/body: group_code)
+            const kbDeletePathMatch = urlPath.match(/^\/api\/rag\/kb\/([^/]+)$/);
+            const isPostKbDelete = req.method === 'POST' && urlPath === '/api/rag/kb/delete';
+            const isDeleteKbPath = req.method === 'DELETE' && kbDeletePathMatch
+                && kbDeletePathMatch[1] !== 'list' && kbDeletePathMatch[1] !== 'delete';
+            if (isPostKbDelete || isDeleteKbPath) {
+                let groupCode = '';
+                let kbIdRaw = isDeleteKbPath ? decodeURIComponent(kbDeletePathMatch[1]) : '';
+                const query = parseQuery(req);
+                groupCode = query.get('group_code') || query.get('groupCode') || '';
+                let body = {};
+                try {
+                    body = await readBody(req);
+                    if (!groupCode) groupCode = body.group_code || body.groupCode || '';
+                    if (!kbIdRaw) kbIdRaw = body.kb_id || body.kbId || body.id || '';
+                } catch (_) {
+                    body = {};
+                }
+                if (!kbIdRaw && query.get('kb_id')) kbIdRaw = query.get('kb_id');
+                if (!String(kbIdRaw || '').trim()) {
+                    sendError(res, 400, '缺少 kb_id', 'VALIDATION_ERROR');
+                    return;
+                }
+
+                const access = await assertRagGroupAccess(groupCode, aiAuth.user, { requireManager: true });
+                if (!access.ok) {
+                    sendAccessResult(res, access);
+                    return;
+                }
+
+                const store = prepareStore(await loadStore());
+                const group = getGroup(store, groupCode);
+                if (!group) {
+                    sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+                    return;
+                }
+
+                const result = await softDeleteKnowledgeBase(group, kbIdRaw);
+                if (!result.ok) {
+                    sendError(res, result.status, result.error, result.code);
+                    return;
+                }
+                await saveStore(store);
+                sendJson(res, 200, {
+                    ok: true,
+                    kb_id: result.kb_id,
+                    documentsSoftDeleted: result.documentsSoftDeleted,
+                    ragDeleteOk: result.ragDeleteOk,
+                    warning: result.warning
+                });
                 return;
             }
 
             if (req.method === 'POST' && urlPath === '/api/rag/query') {
                 const aiUserId = aiAuth.user?.id || getClientIp(req);
                 if (!checkAiRateLimit(aiUserId)) {
-                    sendJson(res, 429, { error: 'AI 請求過於頻繁，請稍後再試' });
+                    sendError(res, 429, 'AI 請求過於頻繁，請稍後再試', 'RATE_LIMITED');
                     return;
                 }
                 const body = await readBody(req);
                 const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
                 if (!access.ok) {
-                    sendJson(res, access.status, { error: access.error });
+                    sendAccessResult(res, access);
                     return;
                 }
                 // Prevent key exfiltration via attacker-controlled api_base:
@@ -1269,17 +2158,55 @@ const server = http.createServer(async (req, res) => {
                 } else if (body.api_base != null && String(body.api_base).trim()) {
                     const resolved = resolveLlmApiBase(body.api_base);
                     if (!resolved) {
-                        sendJson(res, 400, {
-                            error: 'api_base is not allowed',
-                            code: 'API_BASE_FORBIDDEN'
-                        });
+                        sendError(res, 400, 'api_base is not allowed', 'API_BASE_FORBIDDEN');
                         return;
                     }
                     body.api_base = resolved;
                 } else if (hasClientLlmKey) {
                     body.api_base = DEFAULT_LLM_API_BASE;
                 }
+                // Only search active KBs (soft-deleted KB ids are dropped)
+                ensureKnowledgeBases(access.group);
+                const activeKbIds = new Set(
+                    Object.values(access.group.knowledgeBases || {})
+                        .filter(isActiveKb)
+                        .map(k => k.id)
+                );
+                if (Array.isArray(body.kb_ids) && body.kb_ids.length) {
+                    body.kb_ids = body.kb_ids
+                        .map(id => normalizeKbId(id))
+                        .filter(id => activeKbIds.has(id));
+                    if (!body.kb_ids.length) {
+                        // Client asked only for deleted/unknown KBs — empty answer, no RAG fan-out
+                        sendJson(res, 200, {
+                            answer: '抱歉，根據目前的知識庫資料，我無法回答此問題。',
+                            sources: [],
+                            citations: [],
+                            retrieval_mode: 'none',
+                            embedding_mode: 'none'
+                        });
+                        return;
+                    }
+                } else {
+                    body.kb_ids = [...activeKbIds];
+                }
                 const proxied = await proxyRagJson('/api/rag/query', body);
+                // Attach citations[] while keeping sources for compatibility
+                if (proxied.status >= 200 && proxied.status < 300) {
+                    try {
+                        const data = JSON.parse(proxied.text || '{}');
+                        if (data && typeof data === 'object') {
+                            data.citations = normalizeRagCitations(data.sources || data.citations, access.group);
+                            if (!Array.isArray(data.sources)) data.sources = data.sources || [];
+                            const out = JSON.stringify(data);
+                            res.writeHead(proxied.status, { 'Content-Type': 'application/json' });
+                            res.end(out);
+                            return;
+                        }
+                    } catch (_) {
+                        // fall through to raw proxy body
+                    }
+                }
                 res.writeHead(proxied.status, { 'Content-Type': 'application/json' });
                 res.end(proxied.text);
                 return;
@@ -1287,12 +2214,55 @@ const server = http.createServer(async (req, res) => {
 
             if (req.method === 'POST' && urlPath === '/api/rag/document/upload-text') {
                 const body = await readBody(req);
-                const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
+                const access = await assertRagGroupAccess(body.group_code, aiAuth.user, { requireManager: true });
                 if (!access.ok) {
-                    sendJson(res, access.status, { error: access.error });
+                    sendAccessResult(res, access);
                     return;
                 }
+                // Require active KB (auto_create default true for migration)
+                const storeForKb = prepareStore(await loadStore());
+                const groupForKb = getGroup(storeForKb, body.group_code);
+                if (!groupForKb) {
+                    sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+                    return;
+                }
+                const autoCreate = body.auto_create !== false && body.autoCreate !== false;
+                const kbResolve = resolveKbForWrite(groupForKb, body.kb_id || body.kbId || 'general', {
+                    autoCreate,
+                    createdByMemberId: access.member?.id || null,
+                    createdByUserId: access.member?.userId || aiAuth.user?.id || null,
+                    createdByName: access.member?.name || null
+                });
+                if (!kbResolve.ok) {
+                    sendError(res, kbResolve.status, kbResolve.error, kbResolve.code);
+                    return;
+                }
+                body.kb_id = kbResolve.kb.id;
+                if (kbResolve.created) await saveStore(storeForKb);
+
+                const lookup = {
+                    documentId: body.document_id || body.documentId || null,
+                    filename: body.filename || null,
+                    title: body.title || null
+                };
                 const proxied = await proxyRagJson('/api/rag/document/upload-text', body);
+                let chunks = null;
+                let lastError = null;
+                if (proxied.status >= 200 && proxied.status < 300) {
+                    try {
+                        const data = JSON.parse(proxied.text || '{}');
+                        chunks = data.chunks != null ? data.chunks : null;
+                    } catch (_) {}
+                    await persistDocumentRagStatus(body.group_code, lookup, 'indexed', { chunks, lastError: null });
+                } else {
+                    try {
+                        const data = JSON.parse(proxied.text || '{}');
+                        lastError = data.detail || data.error || proxied.text || 'RAG index failed';
+                    } catch (_) {
+                        lastError = proxied.text || 'RAG index failed';
+                    }
+                    await persistDocumentRagStatus(body.group_code, lookup, 'failed', { lastError: String(lastError).slice(0, 500) });
+                }
                 res.writeHead(proxied.status, { 'Content-Type': 'application/json' });
                 res.end(proxied.text);
                 return;
@@ -1300,15 +2270,40 @@ const server = http.createServer(async (req, res) => {
 
             if (req.method === 'POST' && urlPath === '/api/rag/document/upload') {
                 const body = await readBody(req);
-                const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
+                const access = await assertRagGroupAccess(body.group_code, aiAuth.user, { requireManager: true });
                 if (!access.ok) {
-                    sendJson(res, access.status, { error: access.error });
+                    sendAccessResult(res, access);
                     return;
                 }
                 if (!body.file_base64 || !body.filename) {
-                    sendJson(res, 400, { error: '缺少 file_base64 或 filename' });
+                    sendError(res, 400, '缺少 file_base64 或 filename', 'VALIDATION_ERROR');
                     return;
                 }
+                const storeForKb = prepareStore(await loadStore());
+                const groupForKb = getGroup(storeForKb, body.group_code);
+                if (!groupForKb) {
+                    sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+                    return;
+                }
+                const autoCreate = body.auto_create !== false && body.autoCreate !== false;
+                const kbResolve = resolveKbForWrite(groupForKb, body.kb_id || body.kbId || 'general', {
+                    autoCreate,
+                    createdByMemberId: access.member?.id || null,
+                    createdByUserId: access.member?.userId || aiAuth.user?.id || null,
+                    createdByName: access.member?.name || null
+                });
+                if (!kbResolve.ok) {
+                    sendError(res, kbResolve.status, kbResolve.error, kbResolve.code);
+                    return;
+                }
+                body.kb_id = kbResolve.kb.id;
+                if (kbResolve.created) await saveStore(storeForKb);
+
+                const lookup = {
+                    documentId: body.document_id || body.documentId || null,
+                    filename: body.filename || null,
+                    title: body.title || null
+                };
                 const fileBuffer = Buffer.from(body.file_base64, 'base64');
                 const boundary = 'lumina-rag-' + crypto.randomBytes(8).toString('hex');
                 const parts = [
@@ -1328,6 +2323,23 @@ const server = http.createServer(async (req, res) => {
                     body: payload
                 });
                 const text = await response.text();
+                if (response.ok) {
+                    let chunks = null;
+                    try {
+                        const data = JSON.parse(text || '{}');
+                        chunks = data.chunks != null ? data.chunks : null;
+                    } catch (_) {}
+                    await persistDocumentRagStatus(body.group_code, lookup, 'indexed', { chunks, lastError: null });
+                } else {
+                    let lastError = text;
+                    try {
+                        const data = JSON.parse(text || '{}');
+                        lastError = data.detail || data.error || text;
+                    } catch (_) {}
+                    await persistDocumentRagStatus(body.group_code, lookup, 'failed', {
+                        lastError: String(lastError).slice(0, 500)
+                    });
+                }
                 res.writeHead(response.status, { 'Content-Type': 'application/json' });
                 res.end(text);
                 return;
@@ -1335,9 +2347,9 @@ const server = http.createServer(async (req, res) => {
 
             if (req.method === 'POST' && urlPath === '/api/rag/document/delete') {
                 const body = await readBody(req);
-                const access = await assertRagGroupAccess(body.group_code, aiAuth.user);
+                const access = await assertRagGroupAccess(body.group_code, aiAuth.user, { requireManager: true });
                 if (!access.ok) {
-                    sendJson(res, access.status, { error: access.error });
+                    sendAccessResult(res, access);
                     return;
                 }
                 const form = new URLSearchParams();
@@ -1350,6 +2362,37 @@ const server = http.createServer(async (req, res) => {
                     body: form.toString()
                 });
                 const text = await response.text();
+                const lookup = {
+                    documentId: body.document_id || body.documentId || null,
+                    filename: body.filename || null
+                };
+                if (response.ok || response.status === 404) {
+                    const store = prepareStore(await loadStore());
+                    const group = getGroup(store, body.group_code);
+                    const doc = findGroupDocument(group, lookup);
+                    if (doc) {
+                        doc.ragStatus = 'deleted';
+                        doc.rag = {
+                            ...(doc.rag && typeof doc.rag === 'object' ? doc.rag : {}),
+                            status: 'deleted',
+                            lastError: null
+                        };
+                        if (body.soft_delete || body.softDelete) {
+                            doc.status = 'deleted';
+                            doc.deletedAt = doc.deletedAt || new Date().toISOString();
+                        }
+                        await saveStore(store);
+                    }
+                } else {
+                    let lastError = text;
+                    try {
+                        const data = JSON.parse(text || '{}');
+                        lastError = data.detail || data.error || text;
+                    } catch (_) {}
+                    await persistDocumentRagStatus(body.group_code, lookup, 'failed', {
+                        lastError: String(lastError).slice(0, 500)
+                    });
+                }
                 res.writeHead(response.status, { 'Content-Type': 'application/json' });
                 res.end(text);
                 return;
@@ -1418,6 +2461,10 @@ initDb().then(async connected => {
         console.log(`Lumina API proxy running at http://localhost:${PORT}`);
         console.log(`  POST /api/chat                    → DeepSeek`);
         console.log(`  POST /api/rag/query               → RAG 知識庫查詢（注入 API Key）`);
+        console.log(`  GET  /api/rag/kb[/list]           → KB 列表（kb_ids + items）`);
+        console.log(`  POST /api/rag/kb                  → 建立 KB（manager）`);
+        console.log(`  POST /api/rag/kb/delete           → 軟刪 KB（manager）`);
+        console.log(`  DELETE /api/rag/kb/:kbId          → 軟刪 KB（manager）`);
         console.log(`  POST /api/auth/register           → 註冊帳號`);
         console.log(`  POST /api/auth/login              → 登入`);
         console.log(`  GET  /api/auth/me                 → 取得目前使用者`);
@@ -1430,6 +2477,9 @@ initDb().then(async connected => {
         console.log(`  POST /api/enterprise/group/create → 建立群組`);
         console.log(`  POST /api/enterprise/group/join   → 加入群組`);
         console.log(`  GET  /api/enterprise/group/:code  → 群組資料`);
+        console.log(`  POST /api/enterprise/group/document/add     → 文件 + server RAG 索引`);
+        console.log(`  POST /api/enterprise/group/document/reindex → 重試 RAG 索引（manager）`);
+        console.log(`  POST /api/enterprise/group/document/delete  → 清索引後 soft-delete`);
         console.log(`  POST /api/enterprise/task/assign  → 指派任務`);
         console.log(`  PATCH /api/enterprise/task/:id    → 更新任務`);
         console.log(`  GET  /api/enterprise/notifications → 團隊通知`);

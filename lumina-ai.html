@@ -417,12 +417,22 @@
                             </div>
                             <div id="coach-agent-thread" class="coach-agent-thread custom-scroll"></div>
                             <div class="coach-chat-composer">
-                                <div id="rag-kb-selector-wrap" class="coach-rag-selector hidden">
+                                <div id="rag-kb-selector-wrap" class="coach-rag-selector hidden" aria-disabled="false">
                                     <div class="coach-rag-selector-label">
                                         <i class="fa-solid fa-database text-purple-400"></i>
                                         <span>選用 RAG 知識庫</span>
+                                        <span class="coach-rag-selector-hint">可不選＝純教練</span>
                                     </div>
-                                    <div id="rag-kb-checkboxes" class="coach-rag-checkboxes"></div>
+                                    <div id="rag-kb-offline-banner" class="coach-rag-offline-banner hidden" role="status">
+                                        <i class="fa-solid fa-triangle-exclamation"></i>
+                                        <span>RAG 離線，改用一般教練。選庫暫不可用，教練仍可對話。</span>
+                                    </div>
+                                    <div id="rag-kb-empty-banner" class="coach-rag-empty-banner hidden" role="status">
+                                        <i class="fa-solid fa-folder-open"></i>
+                                        <span id="rag-kb-empty-banner-text">所選知識庫尚無文件，檢索可能無結果。請至團隊 → 知識庫上傳。</span>
+                                    </div>
+                                    <div id="rag-kb-checkboxes" class="coach-rag-checkboxes" role="group" aria-label="知識庫多選"></div>
+                                    <div id="rag-kb-query-summary" class="coach-rag-query-summary hidden" aria-live="polite"></div>
                                 </div>
                                 <div class="coach-chat-input-row">
                                     <textarea id="chat-input" rows="2" placeholder="跟教練說：卡住了、做完了、換個做法…"
@@ -640,6 +650,21 @@
                         </div>
                     </div>
                     
+                    <div id="team-workspace-tabs" class="team-workspace-tabs hidden" role="tablist" aria-label="團隊工作區分頁">
+                        <button type="button" role="tab" id="team-tab-members"
+                                data-lumina-action="switchTeamWorkspaceTab" data-lumina-arg="members"
+                                class="team-workspace-tab active" aria-selected="true" aria-controls="team-pane-members">
+                            <i class="fa-solid fa-users mr-1.5" aria-hidden="true"></i>成員與任務
+                        </button>
+                        <button type="button" role="tab" id="team-tab-knowledge"
+                                data-lumina-action="switchTeamWorkspaceTab" data-lumina-arg="knowledge"
+                                class="team-workspace-tab" aria-selected="false" aria-controls="team-pane-knowledge">
+                            <i class="fa-solid fa-book mr-1.5" aria-hidden="true"></i>知識庫
+                        </button>
+                    </div>
+
+                    <!-- Pane: 成員與任務 -->
+                    <div id="team-pane-members" class="team-workspace-pane space-y-5" role="tabpanel" aria-labelledby="team-tab-members">
                     <div id="team-stats-row" class="hidden grid grid-cols-3 gap-3 sm:gap-4">
                         <div class="team-stat">
                             <div class="team-stat-value text-indigo-300" id="team-stat-members">0</div>
@@ -737,92 +762,6 @@
                         </div>
                     </div>
                     
-                    <!-- 團隊知識庫與新人指南 -->
-                    <div id="team-knowledge-panel" class="panel-card panel-card-accent-purple p-6 sm:p-7">
-                        <div class="flex items-center justify-between mb-4">
-                            <div class="flex items-center gap-3">
-                                <div class="panel-icon bg-purple-500/15 text-purple-400"><i class="fa-solid fa-book"></i></div>
-                                <div>
-                                    <div class="font-semibold">團隊知識庫與新人指南</div>
-                                    <div class="text-xs text-slate-500 mt-0.5">共享專案資料、新人培訓指引與開發文檔</div>
-                                </div>
-                            </div>
-                            <button id="team-add-doc-btn" data-lumina-action="toggleAddDocForm" class="hidden text-xs px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-medium">
-                                <i class="fa-solid fa-plus mr-1"></i>新增文件
-                            </button>
-                        </div>
-                        
-                        <!-- Add Document Form (Manager Only) -->
-                        <div id="team-add-doc-form" class="hidden space-y-4 mb-5 p-4 border border-purple-500/20 bg-purple-500/5 rounded-2xl">
-                            <div class="font-semibold text-sm text-purple-300">發布新文件</div>
-                            
-                            <!-- Type Selection -->
-                            <div>
-                                <label class="text-xs text-slate-400 block mb-1">文件類型</label>
-                                <div class="flex gap-4">
-                                    <label class="inline-flex items-center gap-2 cursor-pointer text-xs text-slate-300">
-                                        <input type="radio" name="team-doc-type" value="text" checked onchange="switchDocFormType('text')" class="accent-purple-500 w-4 h-4">
-                                        <span>純文字筆記</span>
-                                    </label>
-                                    <label class="inline-flex items-center gap-2 cursor-pointer text-xs text-slate-300">
-                                        <input type="radio" name="team-doc-type" value="file" onchange="switchDocFormType('file')" class="accent-purple-500 w-4 h-4">
-                                        <span>上傳檔案 (PDF / 圖片 / Excel)</span>
-                                    </label>
-                                </div>
-                            </div>
-                            
-                             <!-- Title Input -->
-                            <div>
-                                <label class="text-xs text-slate-400 block mb-1">文件標題 / 檔案名稱</label>
-                                <input id="team-doc-title" type="text" placeholder="例如：新人環境架設、專案架構規範" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring">
-                            </div>
-                            
-                            <!-- Category Select -->
-                            <div>
-                                <label class="text-xs text-slate-400 block mb-1">歸屬知識庫類別</label>
-                                <select id="team-doc-kb-select" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring">
-                                    <option value="general">一般預設知識庫 (General)</option>
-                                    <option value="onboarding">新人培訓指南 (Onboarding)</option>
-                                    <option value="specs">開發規格文檔 (Specs & Docs)</option>
-                                    <option value="meetings">會議記錄與 SOP (Meeting & SOP)</option>
-                                </select>
-                            </div>
-                            
-                            <!-- Text Content Area -->
-                            <div id="team-doc-text-area">
-                                <label class="text-xs text-slate-400 block mb-1">文件內容 (純文字，發布後會餵給 AI 行動教練當作專案上下文)</label>
-                                <textarea id="team-doc-content" rows="6" placeholder="請在此輸入專案指導方針或新人培訓材料..." class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring resize-y"></textarea>
-                            </div>
-                            
-                            <!-- File Upload Area -->
-                            <div id="team-doc-file-area" class="hidden space-y-3">
-                                <div>
-                                    <label class="text-xs text-slate-400 block mb-1.5">選擇檔案 (支援 PDF、圖片或 Excel，最大限制 5MB)</label>
-                                    <input type="file" id="team-doc-file" accept="application/pdf,image/*,.xlsx,.xls" onchange="handleDocFileSelect(event)" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-xs text-slate-400 focus-ring">
-                                </div>
-                                <div id="team-doc-file-info" class="hidden text-xs py-2 px-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-purple-300">
-                                    <!-- Dynamic text extraction status or preview -->
-                                </div>
-                                <div id="team-doc-file-description-area">
-                                    <label id="team-doc-desc-label" class="text-xs text-slate-400 block mb-1">檔案描述 / AI 輔助備註</label>
-                                    <textarea id="team-doc-description" rows="3" placeholder="輸入此檔案的說明（圖片需手動描述，暫不支援自動 OCR；PDF/Excel 會自動擷取文字）" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring resize-y"></textarea>
-                                </div>
-                            </div>
-                            
-                            <div class="flex gap-2 pt-2">
-                                <button data-lumina-action="saveTeamDocument" class="flex-1 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium flex items-center justify-center gap-2">
-                                    <i class="fa-solid fa-cloud-arrow-up"></i><span>發布</span>
-                                </button>
-                                <button data-lumina-action="toggleAddDocForm" data-lumina-arg="false" data-lumina-arg-type="boolean" class="px-4 py-2.5 rounded-xl border border-slate-600 text-sm text-slate-400 hover:text-slate-200">取消</button>
-                            </div>
-                        </div>
-
-                        <!-- Documents List -->
-                        <div id="team-docs-list" class="space-y-3">
-                            <!-- 由 JS 動態渲染 -->
-                        </div>
-                    </div>
-                    
                     <div class="panel-card p-5">
                         <div class="text-xs text-slate-500 mb-3 font-medium uppercase tracking-wider">團隊成員</div>
                         <div id="team-members-list" class="flex flex-wrap gap-2"></div>
@@ -870,6 +809,131 @@
                             <i class="fa-solid fa-circle-info mr-1"></i>請在瀏覽器允許通知權限，才能收到桌面提醒
                         </div>
                     </div>
+                    </div><!-- /team-pane-members -->
+
+                    <!-- Pane: 知識庫（管理面：庫列表 + 文件上傳） -->
+                    <div id="team-pane-knowledge" class="team-workspace-pane space-y-5 hidden" role="tabpanel" aria-labelledby="team-tab-knowledge" hidden>
+                        <div id="team-kb-manage-panel" class="panel-card panel-card-accent-indigo p-6 sm:p-7">
+                            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="panel-icon bg-indigo-500/15 text-indigo-400"><i class="fa-solid fa-layer-group"></i></div>
+                                    <div>
+                                        <div class="font-semibold">知識庫管理</div>
+                                        <div class="text-xs text-slate-500 mt-0.5">建立／檢視庫別；教練對話時可勾選要查詢的庫</div>
+                                    </div>
+                                </div>
+                                <button type="button" id="team-kb-create-toggle" data-lumina-action="toggleCreateKbForm"
+                                        class="hidden min-h-[44px] text-xs px-3.5 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium focus-ring">
+                                    <i class="fa-solid fa-plus mr-1"></i>建立知識庫
+                                </button>
+                            </div>
+                            <div id="team-kb-create-disabled" class="team-kb-create-disabled hidden" role="status">
+                                <i class="fa-solid fa-lock"></i>
+                                <span>建立新庫需主管身分且 API 連線；目前可使用既有類別上傳文件。</span>
+                            </div>
+                            <div id="team-kb-create-form" class="hidden team-kb-create-form mb-4">
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div class="form-field sm:col-span-2">
+                                        <label for="team-kb-create-name">知識庫名稱</label>
+                                        <input id="team-kb-create-name" type="text" maxlength="80" placeholder="例如：專案 A、法遵手冊" class="form-input focus-ring">
+                                    </div>
+                                    <div class="form-field sm:col-span-2">
+                                        <label for="team-kb-create-desc">說明（選填）</label>
+                                        <input id="team-kb-create-desc" type="text" maxlength="200" placeholder="簡短描述此庫用途" class="form-input focus-ring">
+                                    </div>
+                                </div>
+                                <div class="flex flex-wrap gap-2 mt-3">
+                                    <button type="button" data-lumina-action="createTeamKnowledgeBase"
+                                            class="min-h-[44px] px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium focus-ring">
+                                        <i class="fa-solid fa-check mr-1"></i>建立
+                                    </button>
+                                    <button type="button" data-lumina-action="toggleCreateKbForm" data-lumina-arg="false" data-lumina-arg-type="boolean"
+                                            class="min-h-[44px] px-4 py-2 rounded-xl border border-slate-600 text-sm text-slate-400 hover:text-slate-200 focus-ring">取消</button>
+                                </div>
+                            </div>
+                            <div id="team-kb-list" class="team-kb-list" aria-live="polite">
+                                <!-- 由 JS 動態渲染 -->
+                            </div>
+                        </div>
+
+                        <div id="team-knowledge-panel" class="panel-card panel-card-accent-purple p-6 sm:p-7">
+                            <div class="flex items-center justify-between mb-4 gap-3">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <div class="panel-icon bg-purple-500/15 text-purple-400"><i class="fa-solid fa-book"></i></div>
+                                    <div class="min-w-0">
+                                        <div class="font-semibold">文件列表與上傳</div>
+                                        <div class="text-xs text-slate-500 mt-0.5">共享專案資料、新人培訓與開發文檔 · 顯示索引狀態</div>
+                                    </div>
+                                </div>
+                                <button type="button" id="team-add-doc-btn" data-lumina-action="toggleAddDocForm"
+                                        class="hidden min-h-[44px] text-xs px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-medium focus-ring flex-shrink-0">
+                                    <i class="fa-solid fa-plus mr-1"></i>新增文件
+                                </button>
+                            </div>
+                            
+                            <!-- Add Document Form (Manager Only) -->
+                            <div id="team-add-doc-form" class="hidden space-y-4 mb-5 p-4 border border-purple-500/20 bg-purple-500/5 rounded-2xl">
+                                <div class="font-semibold text-sm text-purple-300">發布新文件</div>
+                                
+                                <div>
+                                    <label class="text-xs text-slate-400 block mb-1">文件類型</label>
+                                    <div class="flex flex-wrap gap-4">
+                                        <label class="inline-flex items-center gap-2 cursor-pointer text-xs text-slate-300 min-h-[44px]">
+                                            <input type="radio" name="team-doc-type" value="text" checked onchange="switchDocFormType('text')" class="accent-purple-500 w-4 h-4">
+                                            <span>純文字筆記</span>
+                                        </label>
+                                        <label class="inline-flex items-center gap-2 cursor-pointer text-xs text-slate-300 min-h-[44px]">
+                                            <input type="radio" name="team-doc-type" value="file" onchange="switchDocFormType('file')" class="accent-purple-500 w-4 h-4">
+                                            <span>上傳檔案 (PDF / 圖片 / Excel)</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label class="text-xs text-slate-400 block mb-1" for="team-doc-title">文件標題 / 檔案名稱</label>
+                                    <input id="team-doc-title" type="text" placeholder="例如：新人環境架設、專案架構規範" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring">
+                                </div>
+                                
+                                <div>
+                                    <label class="text-xs text-slate-400 block mb-1" for="team-doc-kb-select">歸屬知識庫</label>
+                                    <select id="team-doc-kb-select" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring">
+                                        <option value="general">一般預設知識庫 (General)</option>
+                                        <option value="onboarding">新人培訓指南 (Onboarding)</option>
+                                        <option value="specs">開發規格文檔 (Specs & Docs)</option>
+                                        <option value="meetings">會議記錄與 SOP (Meeting & SOP)</option>
+                                    </select>
+                                </div>
+                                
+                                <div id="team-doc-text-area">
+                                    <label class="text-xs text-slate-400 block mb-1" for="team-doc-content">文件內容（純文字，發布後供教練檢索）</label>
+                                    <textarea id="team-doc-content" rows="6" placeholder="請在此輸入專案指導方針或新人培訓材料..." class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring resize-y"></textarea>
+                                </div>
+                                
+                                <div id="team-doc-file-area" class="hidden space-y-3">
+                                    <div>
+                                        <label class="text-xs text-slate-400 block mb-1.5" for="team-doc-file">選擇檔案（PDF、圖片或 Excel，最大 5MB）</label>
+                                        <input type="file" id="team-doc-file" accept="application/pdf,image/*,.xlsx,.xls" onchange="handleDocFileSelect(event)" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-xs text-slate-400 focus-ring">
+                                    </div>
+                                    <div id="team-doc-file-info" class="hidden text-xs py-2 px-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-purple-300"></div>
+                                    <div id="team-doc-file-description-area">
+                                        <label id="team-doc-desc-label" class="text-xs text-slate-400 block mb-1" for="team-doc-description">檔案描述 / AI 輔助備註</label>
+                                        <textarea id="team-doc-description" rows="3" placeholder="輸入此檔案的說明（圖片需手動描述，暫不支援自動 OCR；PDF/Excel 會自動擷取文字）" class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring resize-y"></textarea>
+                                    </div>
+                                </div>
+                                
+                                <div class="flex gap-2 pt-2">
+                                    <button type="button" data-lumina-action="saveTeamDocument" class="flex-1 min-h-[44px] py-2.5 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium flex items-center justify-center gap-2 focus-ring">
+                                        <i class="fa-solid fa-cloud-arrow-up"></i><span>發布</span>
+                                    </button>
+                                    <button type="button" data-lumina-action="toggleAddDocForm" data-lumina-arg="false" data-lumina-arg-type="boolean" class="min-h-[44px] px-4 py-2.5 rounded-xl border border-slate-600 text-sm text-slate-400 hover:text-slate-200 focus-ring">取消</button>
+                                </div>
+                            </div>
+
+                            <div id="team-docs-list" class="space-y-3">
+                                <!-- 由 JS 動態渲染 -->
+                            </div>
+                        </div>
+                    </div><!-- /team-pane-knowledge -->
                 </div>
             </div>
         </div>

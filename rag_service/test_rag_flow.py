@@ -1,23 +1,44 @@
 import json
+import os
+import urllib.error
 import urllib.request
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.getenv("RAG_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+RAG_API_KEY = os.getenv("RAG_API_KEY", "").strip()
+
+
+def _headers(include_json=False):
+    h = {}
+    if include_json:
+        h["Content-Type"] = "application/json"
+    if RAG_API_KEY:
+        h["X-RAG-API-Key"] = RAG_API_KEY
+    return h
 
 
 def post(path, payload):
     req = urllib.request.Request(
         BASE + path,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=_headers(include_json=True),
         method="POST",
     )
-    with urllib.request.urlopen(req) as res:
-        return json.load(res)
+    try:
+        with urllib.request.urlopen(req) as res:
+            return json.load(res)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"POST {path} → HTTP {e.code}: {body}") from e
 
 
 def get(path):
-    with urllib.request.urlopen(BASE + path) as res:
-        return json.load(res)
+    req = urllib.request.Request(BASE + path, headers=_headers(), method="GET")
+    try:
+        with urllib.request.urlopen(req) as res:
+            return json.load(res)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GET {path} → HTTP {e.code}: {body}") from e
 
 
 def main():

@@ -125,6 +125,19 @@ def list_group_kbs(group_code: str) -> List[str]:
     return sorted(kb_ids)
 
 
+def delete_kb_index(group_code: str, kb_id: str) -> bool:
+    """Remove entire knowledge-base storage directory (index + leftovers)."""
+    code = normalize_code(group_code)
+    kb = normalize_kb_id(kb_id)
+    if not code or not kb:
+        return False
+    kb_dir = os.path.join(STORAGE_DIR, code, kb)
+    if not os.path.isdir(kb_dir):
+        return False
+    shutil.rmtree(kb_dir, ignore_errors=True)
+    return not os.path.isdir(kb_dir)
+
+
 def _build_local_embed_model():
     global _embed_model_name
     try:
@@ -425,12 +438,16 @@ def build_sources(nodes: List[NodeWithScore]) -> Tuple[str, List[dict]]:
         context_chunks.append(
             f"[{ref_id}] 知識庫：{kb_id}｜來源：{filename}\n{node.node.text}"
         )
+        text = node.node.text or ""
         sources.append({
             "ref_id": ref_id,
             "filename": filename,
             "kb_id": kb_id,
             "doc_id": node.node.id_,
+            "document_id": meta.get("document_id"),
+            "title": meta.get("title"),
             "score": float(node.score if node.score is not None else 1.0),
+            "snippet": text[:200] if text else None,
         })
 
     return "\n\n".join(context_chunks), sources

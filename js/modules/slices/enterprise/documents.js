@@ -130,7 +130,18 @@ async function handleDocFileSelect(event) {
             };
             
             if (infoEl) {
-                infoEl.innerHTML = `<i class="fa-solid fa-file-pdf mr-1 text-red-400"></i> PDF 解析完成！共擷取 <strong>${extractedText.length}</strong> 字元，將會自動餵給 AI 行動教練。`;
+                if (extractedText.length < 30) {
+                    infoEl.innerHTML = `
+                        <div class="doc-extract-warn" role="alert">
+                            <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+                            <div>
+                                <div class="font-medium text-amber-200">幾乎沒有可擷取文字（${extractedText.length} 字）</div>
+                                <div class="text-[11px] text-amber-200/70 mt-0.5">可能是掃描圖 PDF。請改上傳文字檔，或在下方「檔案備註」補上關鍵內容，否則教練知識庫可能無法檢索。</div>
+                            </div>
+                        </div>`;
+                } else {
+                    infoEl.innerHTML = `<i class="fa-solid fa-file-pdf mr-1 text-red-400"></i> PDF 解析完成！共擷取 <strong>${extractedText.length}</strong> 字元，將會自動餵給 AI 行動教練。`;
+                }
             }
         } else if (isExcel) {
             let extractedText = '';
@@ -149,7 +160,18 @@ async function handleDocFileSelect(event) {
             };
             
             if (infoEl) {
-                infoEl.innerHTML = `<i class="fa-solid fa-file-excel mr-1 text-green-500"></i> Excel 解析完成！共擷取 <strong>${extractedText.length}</strong> 字元，將會自動餵給 AI 行動教練。`;
+                if (extractedText.length < 30) {
+                    infoEl.innerHTML = `
+                        <div class="doc-extract-warn" role="alert">
+                            <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+                            <div>
+                                <div class="font-medium text-amber-200">幾乎沒有可擷取資料（${extractedText.length} 字）</div>
+                                <div class="text-[11px] text-amber-200/70 mt-0.5">請確認工作表有文字內容，或在備註欄補充說明。</div>
+                            </div>
+                        </div>`;
+                } else {
+                    infoEl.innerHTML = `<i class="fa-solid fa-file-excel mr-1 text-green-500"></i> Excel 解析完成！共擷取 <strong>${extractedText.length}</strong> 字元，將會自動餵給 AI 行動教練。`;
+                }
             }
         } else if (isImage) {
             S.selectedDocFile = {
@@ -273,6 +295,15 @@ async function saveTeamDocument() {
     }
     
     const kbId = document.getElementById('team-doc-kb-select')?.value || 'general';
+
+    // Near-empty PDF/Excel: warn but still allow publish
+    if ((docType === 'pdf' || docType === 'excel') && (content || '').replace(/【[^】]+】[：:]\s*/g, '').trim().length < 30) {
+        const proceed = confirm(
+            `${docType === 'pdf' ? 'PDF' : 'Excel'} 幾乎沒有可擷取文字。仍要發布嗎？\n（教練知識庫可能無法有效檢索這份文件）`
+        );
+        if (!proceed) return;
+    }
+
     const payload = {
         groupCode: S.enterpriseSession.groupCode,
         managerId: S.enterpriseSession.memberId,
@@ -286,6 +317,7 @@ async function saveTeamDocument() {
     
     let ok = false;
     let newDoc = null;
+    let ragOk = null;
     
     if (S.enterpriseSession.offline) {
         try {
@@ -314,40 +346,90 @@ async function saveTeamDocument() {
                 docType,
                 fileUrl,
                 filename,
+                kbId,
                 author: S.enterpriseSession.name,
-                createdAt: new Date().toISOString()
+                createdAt: new Date().toISOString(),
+                ragStatus: 'pending',
+                rag: { status: 'pending', lastIndexedAt: null, lastError: null }
             };
             group.documents.unshift(newDoc);
             saveLocalEnterpriseStore(store);
             ok = true;
-            await syncDocumentToRag({
+
+            applyLocalDocRagStatus(newDoc.id, 'pending');
+            ragOk = await syncDocumentToRag({
                 groupCode: S.enterpriseSession.groupCode,
                 kbId,
                 docType,
                 title,
                 content,
                 filename,
-                fileData
-            }, { toastOnError: true });
+                fileData,
+                documentId: newDoc?.id
+            }, { toastOnError: false });
+            applyLocalDocRagStatus(newDoc.id, ragOk ? 'indexed' : 'failed', {
+                lastError: ragOk ? null : 'RAG 索引失敗'
+            });
+            try {
+                const store2 = loadLocalEnterpriseStore();
+                const g2 = store2.groups[normalizeEnterpriseCode(S.enterpriseSession.groupCode)];
+                const d2 = g2?.documents?.find(d => d.id === newDoc.id);
+                if (d2) {
+                    d2.ragStatus = ragOk ? 'indexed' : 'failed';
+                    d2.rag = {
+                        status: d2.ragStatus,
+                        lastIndexedAt: ragOk ? new Date().toISOString() : null,
+                        lastError: ragOk ? null : 'RAG 索引失敗'
+                    };
+                    d2.kbId = kbId;
+                    saveLocalEnterpriseStore(store2);
+                }
+            } catch (_) {}
             S.ragSyncedGroupKey = null;
         } catch (e) {
             showToast('本機保存失敗: ' + e.message, 'error');
         }
     } else {
+        // Online: server orchestrates RAG after enterprise write (W2-C).
+        // Skip client syncDocumentToRag when server already indexed; client-retry only if ragOk === false.
         const res = await enterpriseFetch('POST', '/api/enterprise/group/document/add', payload);
         if (res.ok) {
             ok = true;
             newDoc = res.data.document;
-            
-            await syncDocumentToRag({
-                groupCode: S.enterpriseSession.groupCode,
-                kbId,
-                docType,
-                title,
-                content,
-                filename,
-                fileData
-            }, { toastOnError: true });
+            if (newDoc) {
+                newDoc.kbId = newDoc.kbId || kbId;
+                if (!newDoc.ragStatus) newDoc.ragStatus = res.data.ragStatus || 'pending';
+            }
+
+            const serverRagOk = res.data?.ragOk;
+            const serverRagStatus = res.data?.ragStatus || newDoc?.ragStatus || 'pending';
+            const serverPending = res.data?.ragPending === true || serverRagStatus === 'pending';
+
+            if (serverRagOk === true || serverRagStatus === 'indexed') {
+                ragOk = true;
+                applyLocalDocRagStatus(newDoc?.id, 'indexed', { lastError: null });
+            } else if (serverRagOk === false || serverRagStatus === 'failed') {
+                // Server tried and failed — one client retry with full file payload if available
+                applyLocalDocRagStatus(newDoc?.id, 'pending');
+                ragOk = await syncDocumentToRag({
+                    groupCode: S.enterpriseSession.groupCode,
+                    kbId,
+                    docType,
+                    title,
+                    content,
+                    filename,
+                    fileData,
+                    documentId: newDoc?.id
+                }, { toastOnError: false });
+                applyLocalDocRagStatus(newDoc?.id, ragOk ? 'indexed' : 'failed', {
+                    lastError: ragOk ? null : (res.data?.warning || 'RAG 索引失敗')
+                });
+            } else {
+                // pending / async server indexing — do not double-write from client
+                ragOk = null;
+                applyLocalDocRagStatus(newDoc?.id, 'pending');
+                if (serverPending && newDoc) newDoc.ragStatus = 'pending';
+            }
             S.ragSyncedGroupKey = null;
         } else {
             showToast('發布失敗: ' + res.error, 'error');
@@ -355,7 +437,14 @@ async function saveTeamDocument() {
     }
     
     if (ok) {
-        showToast('文件已成功發布', 'success');
+        // Enterprise OK vs RAG: indexed / failed / pending (server async)
+        if (ragOk === true) {
+            showToast('文件已發布，知識庫已可檢索', 'success');
+        } else if (ragOk === false) {
+            showToast('文件已存檔，但知識庫索引失敗 — 可稍後重試', 'error');
+        } else {
+            showToast('文件已存檔，知識庫索引處理中', 'success');
+        }
         const tEl = document.getElementById('team-doc-title');
         const cEl = document.getElementById('team-doc-content');
         const fInput = document.getElementById('team-doc-file');
@@ -373,8 +462,163 @@ async function saveTeamDocument() {
         
         S.selectedDocFile = null;
         toggleAddDocForm(false);
+        if (newDoc && S.enterpriseGroupData) {
+            const list = S.enterpriseGroupData.documents || [];
+            const existing = list.find(d => d.id === newDoc.id);
+            if (!existing) {
+                S.enterpriseGroupData.documents = [{ ...newDoc, ragStatus: ragOk ? 'indexed' : (ragOk === false ? 'failed' : 'pending'), kbId: newDoc.kbId || kbId }, ...list];
+            } else {
+                applyLocalDocRagStatus(newDoc.id, ragOk ? 'indexed' : (ragOk === false ? 'failed' : 'pending'), {
+                    lastError: ragOk === false ? 'RAG 索引失敗' : null
+                });
+            }
+            renderEnterpriseDocuments();
+        }
         refreshEnterpriseData();
     }
+}
+
+function resolveDocRagStatus(doc) {
+    if (!doc) return 'pending';
+    // Prefer session override (survives refreshEnterpriseData until Core persists)
+    const override = S.docRagStatusOverrides?.[doc.id];
+    if (override === 'indexed' || override === 'pending' || override === 'failed' || override === 'deleted') {
+        return override;
+    }
+    const status = doc.ragStatus || doc.rag?.status || null;
+    if (status === 'indexed' || status === 'pending' || status === 'failed' || status === 'deleted') {
+        return status;
+    }
+    // No age-based "fake indexed" heuristic — unknown status stays pending until Core persists.
+    return 'pending';
+}
+
+function applyLocalDocRagStatus(docId, status, extra = {}) {
+    if (!docId) return;
+    if (!S.docRagStatusOverrides) S.docRagStatusOverrides = {};
+    S.docRagStatusOverrides[docId] = status;
+
+    if (!S.enterpriseGroupData?.documents) return;
+    const doc = S.enterpriseGroupData.documents.find(d => d.id === docId);
+    if (!doc) return;
+    doc.ragStatus = status;
+    doc.rag = {
+        ...(doc.rag && typeof doc.rag === 'object' ? doc.rag : {}),
+        status,
+        lastIndexedAt: status === 'indexed' ? new Date().toISOString() : (doc.rag?.lastIndexedAt || null),
+        lastError: extra.lastError != null ? extra.lastError : (status === 'failed' ? (extra.lastError || '索引失敗') : null)
+    };
+}
+
+function renderDocRagStatusBadge(doc) {
+    const status = resolveDocRagStatus(doc);
+    const map = {
+        indexed: { label: '已索引', cls: 'doc-rag-badge-indexed', icon: 'fa-circle-check', title: '已發布且可被教練檢索' },
+        pending: { label: '索引中', cls: 'doc-rag-badge-pending', icon: 'fa-spinner fa-spin', title: '已存檔，知識庫索引處理中' },
+        failed: { label: '索引失敗', cls: 'doc-rag-badge-failed', icon: 'fa-circle-exclamation', title: doc.rag?.lastError || '已存檔但無法被教練檢索' },
+        deleted: { label: '已刪除索引', cls: 'doc-rag-badge-failed', icon: 'fa-trash', title: '索引已移除' }
+    };
+    const conf = map[status] || map.pending;
+    return `<span class="doc-rag-badge ${conf.cls}" title="${escapeHtml(conf.title)}"><i class="fa-solid ${conf.icon}"></i> ${conf.label}</span>`;
+}
+
+function isNearEmptyDocContent(doc) {
+    if (!doc) return false;
+    if (doc.docType !== 'pdf' && doc.docType !== 'excel') return false;
+    const text = String(doc.content || '')
+        .replace(/【[^】]+】[：:]\s*/g, '')
+        .trim();
+    return text.length < 30;
+}
+
+async function retryDocumentRagIndex(docId) {
+    if (!S.enterpriseSession || !docId) return;
+    const docs = S.enterpriseGroupData?.documents || [];
+    const doc = docs.find(d => d.id === docId);
+    if (!doc) {
+        showToast('找不到文件', 'error');
+        return;
+    }
+
+    applyLocalDocRagStatus(docId, 'pending');
+    renderEnterpriseDocuments();
+
+    let ok = false;
+
+    if (!S.enterpriseSession.offline) {
+        // Online: prefer server reindex (manager only, W2-C)
+        const res = await enterpriseFetch('POST', '/api/enterprise/group/document/reindex', {
+            groupCode: S.enterpriseSession.groupCode,
+            managerId: S.enterpriseSession.memberId,
+            documentId: doc.id
+        });
+        if (res.ok) {
+            const status = res.data?.ragStatus || (res.data?.ragOk === true ? 'indexed' : null);
+            if (status === 'indexed' || res.data?.ragOk === true) {
+                ok = true;
+            } else if (res.data?.ragPending || status === 'pending') {
+                // Server still working — leave pending; list refresh will pick up status
+                applyLocalDocRagStatus(docId, 'pending');
+                renderEnterpriseDocuments();
+                showToast(`索引處理中：${doc.title}`, 'success');
+                S.ragSyncedGroupKey = null;
+                return;
+            } else {
+                ok = false;
+            }
+        } else {
+            // Fallback: client best-effort if reindex endpoint unavailable
+            ok = await syncDocumentToRag({
+                groupCode: S.enterpriseSession.groupCode,
+                kbId: doc.kbId || 'general',
+                docType: doc.docType || 'text',
+                title: doc.title,
+                content: doc.content,
+                filename: getRagFilenameForDoc(doc),
+                fileData: null,
+                documentId: doc.id
+            }, { toastOnError: false });
+        }
+    } else {
+        // Offline path: client best-effort RAG
+        ok = await syncDocumentToRag({
+            groupCode: S.enterpriseSession.groupCode,
+            kbId: doc.kbId || 'general',
+            docType: doc.docType || 'text',
+            title: doc.title,
+            content: doc.content,
+            filename: getRagFilenameForDoc(doc),
+            fileData: null,
+            documentId: doc.id
+        }, { toastOnError: false });
+    }
+
+    applyLocalDocRagStatus(docId, ok ? 'indexed' : 'failed', {
+        lastError: ok ? null : '重試索引失敗'
+    });
+
+    if (S.enterpriseSession.offline) {
+        try {
+            const store = loadLocalEnterpriseStore();
+            const group = store.groups[normalizeEnterpriseCode(S.enterpriseSession.groupCode)];
+            const d = group?.documents?.find(x => x.id === docId);
+            if (d) {
+                d.ragStatus = ok ? 'indexed' : 'failed';
+                d.rag = {
+                    status: d.ragStatus,
+                    lastIndexedAt: ok ? new Date().toISOString() : d.rag?.lastIndexedAt || null,
+                    lastError: ok ? null : '重試索引失敗'
+                };
+                if (!d.kbId) d.kbId = doc.kbId || 'general';
+                saveLocalEnterpriseStore(store);
+            }
+        } catch (_) {}
+    }
+
+    renderEnterpriseDocuments();
+    if (ok) showToast(`已重新索引：${doc.title}`, 'success');
+    else showToast(`索引仍失敗：${doc.title}`, 'error');
+    S.ragSyncedGroupKey = null;
 }
 
 async function deleteTeamDocument(docId) {
@@ -407,25 +651,250 @@ async function deleteTeamDocument(docId) {
         }
     } else {
         const res = await enterpriseFetch('POST', '/api/enterprise/group/document/delete', payload);
-        if (res.ok) {
-            ok = true;
-        } else {
+        if (!res.ok) {
             showToast('刪除失敗: ' + res.error, 'error');
+            return;
         }
+        const data = res.data || {};
+        // RAG index cleanup failed: server did not soft-delete — keep list item + allow retry
+        if (data.ragDeleteOk === false || data.ok === false) {
+            const msg = data.warning || data.error || '知識庫索引清除失敗，文件仍保留，請重試刪除';
+            applyLocalDocRagStatus(docId, data.ragStatus || 'failed', {
+                lastError: msg
+            });
+            renderEnterpriseDocuments();
+            showToast(msg, 'error');
+            return;
+        }
+        ok = true;
     }
     
     if (ok) {
         showToast('文件已成功刪除', 'success');
         
-        if (S.ragServiceActive && docToDelete) {
+        // Offline path: best-effort client RAG cleanup (online path is server-side).
+        if (S.enterpriseSession.offline && S.ragServiceActive && docToDelete) {
             await deleteDocumentFromRag({
                 groupCode: S.enterpriseSession.groupCode,
                 kbId: docToDelete.kbId || 'general',
-                filename: getRagFilenameForDoc(docToDelete)
+                filename: getRagFilenameForDoc(docToDelete),
+                documentId: docToDelete.id
             });
         }
         
+        if (S.docRagStatusOverrides && docId) delete S.docRagStatusOverrides[docId];
         refreshEnterpriseData();
+    }
+}
+
+function toggleCreateKbForm(show) {
+    const form = document.getElementById('team-kb-create-form');
+    if (!form) return;
+    if (show === undefined) {
+        form.classList.toggle('hidden');
+    } else {
+        form.classList.toggle('hidden', !show);
+    }
+    if (!form.classList.contains('hidden')) {
+        document.getElementById('team-kb-create-name')?.focus();
+    }
+}
+
+function getFallbackKbItems() {
+    return Object.keys(C.RAG_KB_LABELS).map(id => ({
+        id,
+        displayName: C.RAG_KB_LABELS[id],
+        description: '',
+        docCount: getKbDocCount(id),
+        status: 'active'
+    }));
+}
+
+async function populateTeamDocKbSelect(items) {
+    const select = document.getElementById('team-doc-kb-select');
+    if (!select) return;
+    const prev = select.value || 'general';
+    const list = (items && items.length) ? items : getFallbackKbItems();
+    select.innerHTML = list.map(kb => {
+        const label = (kb.displayName || getRagKbLabel(kb.id)).replace(/\s*\([^)]*\)\s*$/, '').trim();
+        const count = typeof kb.docCount === 'number' ? kb.docCount : getKbDocCount(kb.id);
+        const countHint = count > 0 ? `（${count} 份）` : '（空庫）';
+        return `<option value="${escapeHtml(kb.id)}">${escapeHtml(label)} ${countHint}</option>`;
+    }).join('');
+    if ([...select.options].some(o => o.value === prev)) select.value = prev;
+    else select.value = list[0]?.id || 'general';
+}
+
+async function renderTeamKnowledgeBases(options = {}) {
+    if (!S.enterpriseSession) return;
+    const listEl = document.getElementById('team-kb-list');
+    const createToggle = document.getElementById('team-kb-create-toggle');
+    const createDisabled = document.getElementById('team-kb-create-disabled');
+    const isManager = S.enterpriseSession.role === 'manager';
+    const offline = !!S.enterpriseSession.offline;
+    const force = !!options.force;
+
+    if (createToggle) createToggle.classList.toggle('hidden', !isManager || offline);
+    if (createDisabled) {
+        // Show when member OR offline — create API needs manager + online
+        createDisabled.classList.toggle('hidden', isManager && !offline);
+        if (!isManager) {
+            createDisabled.innerHTML = '<i class="fa-solid fa-lock"></i><span>僅主管可建立／刪除知識庫。你可檢視庫別與文件；請請主管補資料。</span>';
+        } else if (offline) {
+            createDisabled.innerHTML = '<i class="fa-solid fa-lock"></i><span>離線模式無法建立新庫；請連線 API 後再試。仍可對既有類別上傳文件（本機）。</span>';
+        }
+    }
+
+    if (!listEl) return;
+
+    let items = null;
+    const cacheFresh = S._kbListCache
+        && S._kbListCache.groupCode === S.enterpriseSession.groupCode
+        && (Date.now() - (S._kbListCache.at || 0)) < 8000;
+
+    if (!force && cacheFresh) {
+        items = S._kbListCache.items;
+    } else if (!offline) {
+        const list = await fetchRagKbList(S.enterpriseSession.groupCode).catch(() => null);
+        if (list?.items?.length) {
+            rememberRagKbItems(list.items);
+            items = list.items;
+        } else if (list?.kb_ids?.length) {
+            items = list.kb_ids.map(id => ({
+                id,
+                displayName: getRagKbLabel(id),
+                docCount: getKbDocCount(id),
+                status: 'active'
+            }));
+            rememberRagKbItems(items);
+        }
+        if (items?.length) {
+            S._kbListCache = {
+                groupCode: S.enterpriseSession.groupCode,
+                at: Date.now(),
+                items
+            };
+        }
+    }
+
+    if (!items || !items.length) {
+        items = getFallbackKbItems();
+        rememberRagKbItems(items);
+    }
+
+    // Live doc counts from enterprise documents (source of truth in session)
+    items = items.map(kb => ({
+        ...kb,
+        displayName: kb.displayName || getRagKbLabel(kb.id),
+        docCount: getKbDocCount(kb.id)
+    }));
+
+    await populateTeamDocKbSelect(items);
+
+    listEl.innerHTML = items.map(kb => {
+        const name = (kb.displayName || getRagKbLabel(kb.id)).replace(/\s*\([^)]*\)\s*$/, '').trim();
+        const count = typeof kb.docCount === 'number' ? kb.docCount : 0;
+        const countLabel = count > 0 ? `${count} 份文件` : '空庫';
+        const isGeneral = kb.id === 'general';
+        const canDelete = isManager && !offline && !isGeneral;
+        return `
+            <div class="team-kb-card" data-kb-id="${escapeHtml(kb.id)}">
+                <div class="team-kb-card-main">
+                    <div class="team-kb-card-name">${escapeHtml(name)}</div>
+                    <div class="team-kb-card-meta">
+                        <span class="font-mono text-[10px] opacity-70">${escapeHtml(kb.id)}</span>
+                        ${kb.description ? ` · ${escapeHtml(kb.description)}` : ''}
+                    </div>
+                </div>
+                <div class="team-kb-card-actions">
+                    <span class="team-kb-card-badge ${count === 0 ? 'is-empty' : ''}">${countLabel}</span>
+                    ${canDelete ? `
+                        <button type="button" class="team-kb-delete-btn focus-ring"
+                            ${luminaAction('deleteTeamKnowledgeBase', { arg: kb.id })}
+                            aria-label="刪除知識庫 ${escapeHtml(name)}"
+                            title="刪除知識庫（不可恢復）">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    ` : (isGeneral ? '<span class="text-[10px] text-slate-600">預設</span>' : '')}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function createTeamKnowledgeBase() {
+    if (!S.enterpriseSession) return;
+    if (S.enterpriseSession.role !== 'manager') {
+        return showToast('僅主管可建立知識庫', 'error');
+    }
+    if (S.enterpriseSession.offline) {
+        return showToast('離線模式無法建立知識庫，請先連線 API', 'error');
+    }
+    const nameEl = document.getElementById('team-kb-create-name');
+    const descEl = document.getElementById('team-kb-create-desc');
+    const displayName = (nameEl?.value || '').trim();
+    const description = (descEl?.value || '').trim();
+    if (!displayName) return showToast('請輸入知識庫名稱', 'error');
+
+    try {
+        const kb = await createRagKnowledgeBase({
+            groupCode: S.enterpriseSession.groupCode,
+            displayName,
+            description
+        });
+        if (kb?.id) {
+            rememberRagKbItems([{
+                id: kb.id,
+                displayName: kb.displayName || displayName,
+                description: kb.description || description,
+                docCount: 0,
+                status: 'active'
+            }]);
+        }
+        if (nameEl) nameEl.value = '';
+        if (descEl) descEl.value = '';
+        toggleCreateKbForm(false);
+        showToast(`知識庫「${displayName}」已建立`, 'success');
+        S._kbListCache = null;
+        await renderTeamKnowledgeBases({ force: true });
+        window.renderRagKbCheckboxes?.();
+    } catch (e) {
+        if (e.status === 404 || e.code === 'NOT_FOUND') {
+            showToast('建立 API 尚未就緒，請使用既有知識庫類別上傳', 'error');
+            document.getElementById('team-kb-create-toggle')?.classList.add('hidden');
+            document.getElementById('team-kb-create-disabled')?.classList.remove('hidden');
+            toggleCreateKbForm(false);
+            return;
+        }
+        showToast(e.message || '建立知識庫失敗', 'error');
+    }
+}
+
+async function deleteTeamKnowledgeBase(kbId) {
+    if (!S.enterpriseSession || !kbId) return;
+    if (S.enterpriseSession.role !== 'manager') {
+        return showToast('僅主管可刪除知識庫', 'error');
+    }
+    if (kbId === 'general') {
+        return showToast('不可刪除預設知識庫 general', 'error');
+    }
+    const label = getRagKbLabel(kbId).replace(/\s*\([^)]*\)\s*$/, '').trim();
+    if (!confirm(`確定刪除知識庫「${label}」？庫內文件將一併移除，且教練無法再檢索。`)) return;
+
+    try {
+        await deleteRagKnowledgeBase({
+            groupCode: S.enterpriseSession.groupCode,
+            kbId
+        });
+        if (S.ragKbItemsById) delete S.ragKbItemsById[kbId];
+        S.checkedRagKbs = (S.checkedRagKbs || []).filter(id => id !== kbId);
+        showToast(`已刪除知識庫「${label}」`, 'success');
+        S._kbListCache = null;
+        await refreshEnterpriseData(true);
+        await renderTeamKnowledgeBases({ force: true });
+        window.renderRagKbCheckboxes?.();
+    } catch (e) {
+        showToast(e.message || '刪除知識庫失敗', 'error');
     }
 }
 
@@ -436,6 +905,13 @@ function renderEnterpriseDocuments() {
     
     const addBtn = document.getElementById('team-add-doc-btn');
     if (addBtn) addBtn.classList.toggle('hidden', !isManager);
+
+    // Refresh KB cards with live counts when knowledge pane is open (uses cache)
+    if (S.teamWorkspaceTab === 'knowledge') {
+        renderTeamKnowledgeBases();
+    } else {
+        populateTeamDocKbSelect(Object.values(S.ragKbItemsById || {}));
+    }
     
     const listEl = document.getElementById('team-docs-list');
     if (!listEl) return;
@@ -445,7 +921,7 @@ function renderEnterpriseDocuments() {
             <div class="empty-state py-8">
                 <div class="empty-state-icon bg-purple-500/10 text-purple-400" style="background-color: rgba(168, 85, 247, 0.1); color: rgb(192, 132, 252);"><i class="fa-solid fa-folder-open"></i></div>
                 <div class="text-sm text-slate-400">目前沒有知識庫文件</div>
-                <div class="text-xs text-slate-500 mt-1">${isManager ? '在上方點擊「新增文件」發布專案指南或新人資料' : '主管發布指南後將會在此顯示，且 AI 行動教練會自動學習'}</div>
+                <div class="text-xs text-slate-500 mt-1">${isManager ? '點擊「新增文件」發布專案指南；空庫時教練勾選該庫可能查不到內容' : '主管發布指南後將顯示於此。教練選庫時若顯示「空庫」表示尚無可檢索文件'}</div>
             </div>`;
         return;
     }
@@ -489,31 +965,50 @@ function renderEnterpriseDocuments() {
             typeBadge = '<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/20"><i class="fa-solid fa-file-lines mr-1"></i>文字筆記</span>';
         }
 
-        const kbLabels = {
-            general: '一般預設',
-            onboarding: '新人培訓',
-            specs: '開發規格',
-            meetings: '會議 SOP'
-        };
-        const kbName = kbLabels[d.kbId || 'general'] || '一般預設';
-        const kbBadge = `<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/20"><i class="fa-solid fa-tag mr-1"></i>${kbName}</span>`;
+        const kbId = d.kbId || 'general';
+        const kbName = getRagKbLabel(kbId).replace(/\s*\([^)]*\)\s*$/, '').trim() || kbId;
+        const kbBadge = `<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/20"><i class="fa-solid fa-tag mr-1"></i>${escapeHtml(kbName)}</span>`;
+        const ragBadge = renderDocRagStatusBadge(d);
+        const ragStatus = resolveDocRagStatus(d);
+        const nearEmpty = isNearEmptyDocContent(d);
+        const canRetry = isManager && (ragStatus === 'failed' || ragStatus === 'pending');
         
         return `
         <div class="p-4 rounded-2xl border border-slate-800 bg-slate-950/40 hover:bg-slate-900/50 transition-colors">
             <div class="flex items-start justify-between gap-3 mb-2">
-                <div>
+                <div class="min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
                         <h4 class="font-semibold text-sm text-slate-200">${escapeHtml(d.title)}</h4>
                         ${typeBadge}
                         ${kbBadge}
+                        ${ragBadge}
                     </div>
                     <div class="text-[10px] text-slate-500 mt-0.5">發布者：${escapeHtml(d.author || '主管')} · ${new Date(d.createdAt).toLocaleString('zh-TW')}</div>
+                    ${nearEmpty ? `
+                        <div class="doc-near-empty-warn mt-1.5" role="status">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                            幾乎無文字內容 — 教練可能無法從此文件檢索
+                        </div>
+                    ` : ''}
                 </div>
-                ${isManager ? `
-                    <button ${luminaAction('deleteTeamDocument', { arg: d.id })} class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition-colors">
-                        <i class="fa-solid fa-trash-can"></i>
-                    </button>
-                ` : ''}
+                <div class="flex items-center gap-1 flex-shrink-0">
+                    ${canRetry ? `
+                        <button type="button" ${luminaAction('retryDocumentRagIndex', { arg: d.id })}
+                            class="doc-rag-retry-btn focus-ring"
+                            title="重新同步至知識庫"
+                            aria-label="重試索引 ${escapeHtml(d.title)}">
+                            <i class="fa-solid fa-rotate-right"></i>
+                            <span>重試</span>
+                        </button>
+                    ` : ''}
+                    ${isManager ? `
+                        <button type="button" ${luminaAction('deleteTeamDocument', { arg: d.id })}
+                            class="text-red-400 hover:text-red-300 text-xs min-h-[44px] min-w-[44px] px-2 py-1 rounded hover:bg-red-500/10 transition-colors focus-ring"
+                            aria-label="刪除文件 ${escapeHtml(d.title)}">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    ` : ''}
+                </div>
             </div>
             
             ${isText ? `

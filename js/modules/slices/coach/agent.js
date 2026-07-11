@@ -1,9 +1,173 @@
 /* Lumina: coach/agent.js */
-function pushCoachAgentMessage(role, content, sources) {
-    S.coachAgentMessages.push({ role, content, ts: Date.now(), sources: sources || null });
+function pushCoachAgentMessage(role, content, sources, meta) {
+    S.coachAgentMessages.push({
+        role,
+        content,
+        ts: Date.now(),
+        sources: sources || null,
+        meta: meta || null
+    });
     if (S.coachAgentMessages.length > 24) S.coachAgentMessages = S.coachAgentMessages.slice(-24);
     S.chatHistory.push({ role: role === 'coach' ? 'assistant' : 'user', content });
     if (S.chatHistory.length > 20) S.chatHistory = S.chatHistory.slice(-20);
+}
+
+/** Map retrieval score → 高 / 中 / 低 (never show misleading %) */
+function getSourceRelevanceLevel(score) {
+    const raw = Number(score);
+    if (!Number.isFinite(raw)) return { key: 'mid', label: '中' };
+    const n = raw > 1 ? raw / 100 : raw;
+    if (n >= 0.55) return { key: 'high', label: '高' };
+    if (n >= 0.3) return { key: 'mid', label: '中' };
+    return { key: 'low', label: '低' };
+}
+
+function enrichCoachSource(s) {
+    if (!s || typeof s !== 'object') return s;
+    const filename = s.filename || s.file_name || '';
+    const docs = S.enterpriseGroupData?.documents || [];
+    const match = docs.find(d => {
+        if (s.document_id && d.id === s.document_id) return true;
+        const ragName = typeof getRagFilenameForDoc === 'function' ? getRagFilenameForDoc(d) : (d.filename || '');
+        if (filename && (d.filename === filename || ragName === filename)) return true;
+        if (filename && d.title && filename.includes(d.title)) return true;
+        return false;
+    });
+    let fileUrl = s.fileUrl || s.file_url || match?.fileUrl || null;
+    if (fileUrl && fileUrl.startsWith('/uploads/')) {
+        const base = getEnterpriseBaseUrl() + fileUrl;
+        try {
+            const session = JSON.parse(localStorage.getItem('lumina_auth_session') || 'null');
+            if (session?.token) {
+                const sep = base.includes('?') ? '&' : '?';
+                fileUrl = `${base}${sep}token=${encodeURIComponent(session.token)}`;
+            } else {
+                fileUrl = base;
+            }
+        } catch (_) {
+            fileUrl = base;
+        }
+    }
+    const snippet = s.snippet || s.text || s.chunk_text
+        || (match?.content ? String(match.content).slice(0, 400) : null);
+    return {
+        ...s,
+        filename: filename || match?.filename || '未知檔案',
+        title: s.title || match?.title || null,
+        document_id: s.document_id || match?.id || null,
+        kb_id: s.kb_id || s.kbId || match?.kbId || 'general',
+        score: typeof s.score === 'number' ? s.score : null,
+        snippet,
+        fileUrl
+    };
+}
+
+function closeCoachSourcePreview() {
+    document.getElementById('coach-source-drawer')?.remove();
+}
+
+function openCoachSourcePreview(msgIndex, srcIndex) {
+    closeCoachSourcePreview();
+    const m = S.coachAgentMessages[msgIndex];
+    const raw = m?.sources?.[srcIndex];
+    if (!raw) return;
+    const s = enrichCoachSource(raw);
+    const rel = getSourceRelevanceLevel(s.score);
+    const displayName = s.title || s.filename || '來源';
+    const kbLabel = typeof getRagKbLabel === 'function' ? getRagKbLabel(s.kb_id) : s.kb_id;
+    const drawer = document.createElement('div');
+    drawer.id = 'coach-source-drawer';
+    drawer.className = 'coach-source-drawer';
+    drawer.setAttribute('role', 'dialog');
+    drawer.setAttribute('aria-modal', 'true');
+    drawer.setAttribute('aria-label', '資料來源預覽');
+    drawer.innerHTML = `
+        <div class="coach-source-drawer-backdrop" data-lumina-action="closeCoachSourcePreview"></div>
+        <div class="coach-source-drawer-panel">
+            <div class="coach-source-drawer-header">
+                <div>
+                    <div class="coach-source-drawer-kicker">來源 [${s.ref_id != null ? s.ref_id : srcIndex + 1}] · 相關度 ${rel.label}</div>
+                    <h3 class="coach-source-drawer-title">${escapeHtml(displayName)}</h3>
+                    <div class="coach-source-drawer-meta">
+                        ${s.kb_id ? `<span><i class="fa-solid fa-tag"></i> ${escapeHtml(kbLabel)}</span>` : ''}
+                        ${s.filename ? `<span><i class="fa-solid fa-file"></i> ${escapeHtml(s.filename)}</span>` : ''}
+                    </div>
+                </div>
+                <button type="button" class="coach-source-drawer-close focus-ring" data-lumina-action="closeCoachSourcePreview" aria-label="關閉">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="coach-source-drawer-body custom-scroll">
+                ${s.snippet
+                    ? `<p class="coach-source-snippet">${escapeHtml(s.snippet)}</p>`
+                    : `<p class="coach-source-snippet coach-source-snippet-empty">此來源未附段落摘要。可開啟原檔或至團隊知識庫查看全文。</p>`}
+            </div>
+            <div class="coach-source-drawer-footer">
+                ${s.fileUrl
+                    ? `<a href="${escapeHtml(s.fileUrl)}" target="_blank" rel="noopener noreferrer" class="coach-source-open-btn focus-ring">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> 開啟檔案
+                       </a>`
+                    : ''}
+                <button type="button" class="coach-source-secondary-btn focus-ring" data-lumina-action="closeCoachSourcePreview">關閉</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(drawer);
+    drawer.querySelector('.coach-source-drawer-close')?.focus();
+}
+
+function renderCoachSourceChips(sources, msgIndex) {
+    if (!sources || !sources.length) return '';
+    return `
+        <div class="coach-sources mt-3 pt-2.5 border-t border-slate-800/80 text-xs text-slate-500">
+            <div class="font-medium text-slate-400 mb-1.5 flex items-center gap-1.5">
+                <i class="fa-solid fa-list-check text-purple-400"></i>
+                <span>資料來源引用</span>
+            </div>
+            <div class="flex flex-wrap gap-2 mt-1">
+                ${sources.map((raw, si) => {
+                    const s = enrichCoachSource(raw);
+                    const rel = getSourceRelevanceLevel(s.score);
+                    const name = s.title || s.filename || '來源';
+                    const shortName = name.length > 28 ? name.slice(0, 26) + '…' : name;
+                    return `
+                        <button type="button"
+                            class="coach-source-chip coach-source-chip-${rel.key} focus-ring"
+                            data-lumina-action="openCoachSourcePreview"
+                            data-lumina-arg="${msgIndex}"
+                            data-lumina-arg-type="number"
+                            data-lumina-arg2="${si}"
+                            data-lumina-arg2-type="number"
+                            title="相關度 ${rel.label} · 點擊查看摘要">
+                            <span class="font-mono text-purple-400">[${s.ref_id != null ? s.ref_id : si + 1}]</span>
+                            ${s.kb_id ? `<span class="text-indigo-400/80">${escapeHtml(getRagKbLabel(s.kb_id).replace(/\s*\([^)]*\)\s*$/, ''))}</span>` : ''}
+                            <span class="coach-source-chip-name">${escapeHtml(shortName)}</span>
+                            <span class="coach-source-rel coach-source-rel-${rel.key}" aria-label="相關度 ${rel.label}">${rel.label}</span>
+                        </button>
+                    `;
+                }).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderCoachKbUsageBadge(meta) {
+    if (!meta || meta.usedKnowledge !== false) return '';
+    const reason = meta.kbSkipReason || 'degraded';
+    const hints = {
+        offline: 'RAG 離線',
+        empty_selection: '未選知識庫',
+        degraded: '查詢降級',
+        no_team: '未加入團隊'
+    };
+    const hint = hints[reason] || '未檢索';
+    return `
+        <div class="coach-kb-unused-badge" role="status">
+            <i class="fa-solid fa-book-slash"></i>
+            <span>未使用知識庫</span>
+            <span class="coach-kb-unused-hint">（${escapeHtml(hint)}）</span>
+        </div>
+    `;
 }
 
 function getOpeningCoachMessage(task, steps) {
@@ -159,8 +323,18 @@ function isGenericCoachFallback(reply) {
     return /專注這一步就好|針對「[^」]+」：/.test(reply || '');
 }
 
+function resolveCoachKbSkipReason() {
+    if (!S.enterpriseSession) return 'no_team';
+    if (!S.ragServiceActive) return 'offline';
+    if (!S.checkedRagKbs?.length) return 'empty_selection';
+    return null;
+}
+
 async function coachAgentRespondWithAI(userMsg, task, session) {
-    if (S.ragServiceActive && S.checkedRagKbs.length > 0 && S.enterpriseSession) {
+    const skipReason = resolveCoachKbSkipReason();
+    let ragDegraded = false;
+
+    if (!skipReason) {
         try {
             const payload = {
                 query: userMsg,
@@ -184,17 +358,27 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                 if (!reply.includes('[選項:')) {
                     reply += `\n\n[選項: 我了解，繼續執行當前步驟]\n[選項: 請幫我把這段資料再做詳細拆解]`;
                 }
+
+                const sources = (data.citations || data.sources || []).map(enrichCoachSource);
                 
                 return {
                     reply: clampText(reply, 5000),
-                    sources: data.sources || [],
+                    sources,
+                    meta: { usedKnowledge: true },
                     ...inferAgentActionsFromUserMsg(userMsg, session)
                 };
             }
+            ragDegraded = true;
         } catch (e) {
+            ragDegraded = true;
             console.warn('[Lumina RAG] RAG 查詢失敗，降級到一般 AI 問答:', e.message);
         }
     }
+
+    const kbMeta = {
+        usedKnowledge: false,
+        kbSkipReason: ragDegraded ? 'degraded' : (skipReason || 'degraded')
+    };
 
     const step = session.steps[session.currentStep];
     const contextBlock = buildCoachContextText(getCoachContext());
@@ -232,14 +416,18 @@ ${contextBlock}
     if (text.startsWith('{')) {
         const parsed = parseCoachAgentResponse(text, userMsg, task, session);
         if (parsed.reply && !isGenericCoachFallback(parsed.reply)) {
-            return { ...parsed, ...inferAgentActionsFromUserMsg(userMsg, session) };
+            return { ...parsed, meta: kbMeta, ...inferAgentActionsFromUserMsg(userMsg, session) };
         }
     }
     
-    if (!text) return buildOfflineAgentReply(userMsg, task, session);
+    if (!text) {
+        const offline = buildOfflineAgentReply(userMsg, task, session);
+        return { ...offline, meta: kbMeta };
+    }
     
     return {
         reply: clampText(text, 400),
+        meta: kbMeta,
         ...inferAgentActionsFromUserMsg(userMsg, session)
     };
 }
@@ -364,9 +552,11 @@ function renderCoachAgentThread(thinking) {
         : thinking === 'offline' ? '離線引導中'
         : thinking ? '教練思考中' : '';
     
+    const baseIndex = Math.max(0, S.coachAgentMessages.length - recent.length);
     let html = '';
     recent.forEach((m, idx) => {
         const isLast = idx === recent.length - 1;
+        const msgIndex = baseIndex + idx;
         let displayContent = m.content;
         const options = [];
         
@@ -377,33 +567,15 @@ function renderCoachAgentThread(thinking) {
             }).replace(/\n\s*\n/g, '\n').trim();
         }
         
-        let sourcesHtml = '';
-        if (m.sources && m.sources.length > 0) {
-            sourcesHtml = `
-                <div class="mt-3 pt-2.5 border-t border-slate-800/80 text-xs text-slate-500">
-                    <div class="font-medium text-slate-400 mb-1.5 flex items-center gap-1.5">
-                        <i class="fa-solid fa-list-check text-purple-400"></i>
-                        <span>資料來源引用</span>
-                    </div>
-                    <div class="flex flex-wrap gap-2 mt-1">
-                        ${m.sources.map(s => `
-                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-400">
-                                <span class="font-mono text-purple-400">[${s.ref_id}]</span>
-                                ${s.kb_id ? `<span class="text-indigo-400/80">${escapeHtml(getRagKbLabel(s.kb_id))}</span>` : ''}
-                                <span>${escapeHtml(s.filename)}</span>
-                                <span class="text-[10px] text-slate-600">(${Math.round(s.score * 100)}%)</span>
-                            </span>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-        }
+        const sourcesHtml = m.role === 'coach' ? renderCoachSourceChips(m.sources, msgIndex) : '';
+        const kbBadge = m.role === 'coach' ? renderCoachKbUsageBadge(m.meta) : '';
 
         html += `
             <div class="coach-agent-msg coach-agent-msg-${m.role}">
                 ${m.role === 'coach' ? '<i class="fa-solid fa-bolt text-sky-400"></i>' : ''}
                 <div class="flex-1 min-w-0">
                     <span>${m.role === 'coach' ? formatCoachContent(displayContent) : escapeHtml(displayContent)}</span>
+                    ${kbBadge}
                     ${sourcesHtml}
                     ${(isLast && options.length > 0 && !thinking) ? `
                         <div class="coach-agent-options flex flex-wrap gap-2 mt-3">
@@ -561,15 +733,26 @@ async function sendCoachAgentMessage(preset) {
             result = await coachAgentRespondWithAI(msg, task, S.focusSession);
         } else {
             result = buildOfflineAgentReply(msg, task, S.focusSession);
+            const skip = resolveCoachKbSkipReason();
+            // Offline coach path never hits RAG — surface trust badge when team KB is relevant
+            if (S.enterpriseSession && !result.meta) {
+                result.meta = {
+                    usedKnowledge: false,
+                    kbSkipReason: skip || 'degraded'
+                };
+            }
         }
     } catch (err) {
         console.warn('[Lumina Coach] AI 請求失敗，改用離線引導:', err.message);
         result = buildOfflineAgentReply(msg, task, S.focusSession);
+        if (S.enterpriseSession && !result.meta) {
+            result.meta = { usedKnowledge: false, kbSkipReason: 'degraded' };
+        }
     } finally {
         S.coachRequestInFlight = false;
     }
     
-    pushCoachAgentMessage('coach', result.reply, result.sources);
+    pushCoachAgentMessage('coach', result.reply, result.sources, result.meta || null);
     if (result.complete) {
         coachCompleteTaskFromAgent();
     } else if (result.advance) {

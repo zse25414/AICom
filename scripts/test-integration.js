@@ -9,6 +9,7 @@ const ciMode = process.env.CI === 'true' || process.env.CI === '1';
 const scripts = [
     'test-register.js',
     'test-enterprise.js',
+    'test-security-matrix.js',
     'test-coach-rag.js'
 ];
 

@@ -7,15 +7,18 @@ function getRagFilenameForDoc(doc) {
 }
 
 function getRagKbLabel(kbId) {
+    const meta = S.ragKbItemsById?.[kbId];
+    if (meta?.displayName) return meta.displayName;
     return C.RAG_KB_LABELS[kbId] || kbId;
 }
 
-async function syncDocumentToRag({ groupCode, kbId, docType, title, content, filename, fileData }, options = {}) {
+async function syncDocumentToRag({ groupCode, kbId, docType, title, content, filename, fileData, documentId }, options = {}) {
     if (!groupCode) return false;
     const kb = kbId || 'general';
     const ragFilename = filename || `text::${title}.md`;
     const textContent = (content || '').trim();
     const ragBase = getRagServiceBase();
+    const document_id = documentId || options.documentId || null;
 
     try {
         if (textContent) {
@@ -27,7 +30,8 @@ async function syncDocumentToRag({ groupCode, kbId, docType, title, content, fil
                     kb_id: kb,
                     title,
                     content: textContent,
-                    filename: docType === 'text' ? `text::${title}.md` : ragFilename
+                    filename: docType === 'text' ? `text::${title}.md` : ragFilename,
+                    document_id
                 })
             });
             if (!res.ok) {
@@ -42,7 +46,9 @@ async function syncDocumentToRag({ groupCode, kbId, docType, title, content, fil
                     group_code: groupCode,
                     kb_id: kb,
                     filename: ragFilename,
-                    file_base64: fileData
+                    file_base64: fileData,
+                    document_id,
+                    title
                 })
             });
             if (!res.ok) {
@@ -65,6 +71,8 @@ async function syncDocumentToRag({ groupCode, kbId, docType, title, content, fil
 
 async function reindexEnterpriseDocumentsToRag(options = {}) {
     if (!S.enterpriseSession || !S.enterpriseGroupData?.documents?.length) return { ok: 0, fail: 0 };
+    // Only managers may bulk reindex (writes to RAG)
+    if (S.enterpriseSession.role !== 'manager') return { ok: 0, fail: 0 };
 
     let ok = 0;
     let fail = 0;
@@ -75,7 +83,8 @@ async function reindexEnterpriseDocumentsToRag(options = {}) {
             docType: doc.docType || 'text',
             title: doc.title,
             content: doc.content,
-            filename: getRagFilenameForDoc(doc)
+            filename: getRagFilenameForDoc(doc),
+            documentId: doc.id
         });
         if (synced) ok++;
         else fail++;
@@ -93,23 +102,33 @@ async function reindexEnterpriseDocumentsToRag(options = {}) {
 
 async function ensureEnterpriseDocsInRag(options = {}) {
     if (!S.enterpriseSession || !S.enterpriseGroupData?.documents?.length) return;
+    // Only managers bulk-sync indexes (members must not write RAG)
+    if (S.enterpriseSession.role !== 'manager') return;
     const syncKey = `${S.enterpriseSession.groupCode}:${S.enterpriseGroupData.documents.map(d => d.id).join(',')}`;
     if (!options.force && S.ragSyncedGroupKey === syncKey) return;
 
-    try {
-        const res = await fetch(`${C.RAG_SERVICE_URL}/health`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.service !== 'lumina-rag-service') return;
-    } catch (_) {
-        return;
+    // Prefer API /ready (via probe) or getRagServiceBase() — never hardcode 127.0.0.1:8000
+    let online = false;
+    if (typeof probeRagServiceOnline === 'function') {
+        const probe = await probeRagServiceOnline();
+        online = !!probe?.online;
+    } else {
+        try {
+            const res = await fetch(`${getRagServiceBase()}/health`);
+            if (!res.ok) return;
+            const data = await res.json().catch(() => ({}));
+            online = data.service === 'lumina-rag-service' || data.ok === true;
+        } catch (_) {
+            return;
+        }
     }
+    if (!online) return;
 
     const result = await reindexEnterpriseDocumentsToRag(options);
     if (result.ok > 0) S.ragSyncedGroupKey = syncKey;
 }
 
-async function deleteDocumentFromRag({ groupCode, kbId, filename }) {
+async function deleteDocumentFromRag({ groupCode, kbId, filename, documentId }) {
     if (!S.ragServiceActive || !groupCode || !filename) return;
     try {
         const res = await fetch(`${getRagServiceBase()}/api/rag/document/delete`, {
@@ -118,7 +137,8 @@ async function deleteDocumentFromRag({ groupCode, kbId, filename }) {
             body: JSON.stringify({
                 group_code: groupCode,
                 kb_id: kbId || 'general',
-                filename
+                filename,
+                document_id: documentId || null
             })
         });
         if (!res.ok) {
@@ -131,13 +151,84 @@ async function deleteDocumentFromRag({ groupCode, kbId, filename }) {
     }
 }
 
+/**
+ * Fetch knowledge-base list. Prefers API items (displayName, docCount).
+ * Returns { kb_ids, items } or null on failure.
+ */
+async function fetchRagKbList(groupCode) {
+    if (!groupCode) return null;
+    try {
+        const res = await fetch(`${getRagServiceBase()}/api/rag/kb/list?group_code=${encodeURIComponent(groupCode)}`, {
+            headers: getAuthHeaders(false)
+        });
+        if (!res.ok) return null;
+        const data = await res.json().catch(() => ({}));
+        const items = Array.isArray(data.items) ? data.items : [];
+        const kb_ids = Array.isArray(data.kb_ids) && data.kb_ids.length
+            ? data.kb_ids
+            : items.map(i => i.id).filter(Boolean);
+        return { kb_ids, items, ok: !!data.ok };
+    } catch (_) {
+        return null;
+    }
+}
+
 async function fetchRagKbIds(groupCode) {
-    const res = await fetch(`${getRagServiceBase()}/api/rag/kb/list?group_code=${encodeURIComponent(groupCode)}`, {
-        headers: getAuthHeaders(false)
+    const list = await fetchRagKbList(groupCode);
+    return list?.kb_ids?.length ? list.kb_ids : null;
+}
+
+function rememberRagKbItems(items) {
+    if (!Array.isArray(items)) return;
+    if (!S.ragKbItemsById) S.ragKbItemsById = {};
+    for (const item of items) {
+        if (!item?.id) continue;
+        const prev = S.ragKbItemsById[item.id];
+        S.ragKbItemsById[item.id] = {
+            id: item.id,
+            displayName: item.displayName || prev?.displayName || C.RAG_KB_LABELS[item.id] || item.id,
+            description: item.description || prev?.description || '',
+            docCount: typeof item.docCount === 'number' ? item.docCount : (prev?.docCount ?? null),
+            status: item.status || prev?.status || 'active'
+        };
+    }
+}
+
+async function createRagKnowledgeBase({ groupCode, displayName, description }) {
+    const res = await fetch(`${getRagServiceBase()}/api/rag/kb`, {
+        method: 'POST',
+        headers: getAuthHeaders(true),
+        body: JSON.stringify({
+            group_code: groupCode,
+            displayName,
+            description: description || ''
+        })
     });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Array.isArray(data.kb_ids) ? data.kb_ids : null;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const err = new Error(data.error || data.detail || `建立知識庫失敗 (${res.status})`);
+        err.code = data.code;
+        err.status = res.status;
+        throw err;
+    }
+    return data.knowledgeBase || data;
+}
+
+async function deleteRagKnowledgeBase({ groupCode, kbId }) {
+    const q = `group_code=${encodeURIComponent(groupCode)}`;
+    const res = await fetch(`${getRagServiceBase()}/api/rag/kb/${encodeURIComponent(kbId)}?${q}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(true),
+        body: JSON.stringify({ group_code: groupCode })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const err = new Error(data.error || data.detail || `刪除知識庫失敗 (${res.status})`);
+        err.code = data.code;
+        err.status = res.status;
+        throw err;
+    }
+    return data;
 }
 
 function getRagServiceBase() {

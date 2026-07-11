@@ -38,6 +38,8 @@ export function createSlice() {
         ragRetrievalMode: 'hybrid',
         ragSyncedGroupKey: null,
         checkedRagKbs: ['general'],
+        /** Session-local RAG status overrides until server persists ragStatus (W1-A) */
+        docRagStatusOverrides: {},
         rolledCountOnInit: 0,
         todayFocusTaskId: null,
         focusSession: null,

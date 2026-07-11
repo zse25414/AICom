@@ -165,19 +165,30 @@ async function refreshServiceStatus() {
         setStatus('status-sync', false, '', '● 需啟動 API');
     }
 
+    // Prefer /ready checks.rag (enterprise base); avoid hardcoding only 127.0.0.1:8000
     try {
-        const res = await fetch(C.RAG_SERVICE_URL + '/health', { method: 'GET' });
-        const data = res.ok ? await res.json() : null;
-        const ragOk = data?.service === 'lumina-rag-service';
+        let ragOk = false;
+        let mode = '';
+        if (apiStatus.checks && 'rag' in apiStatus.checks) {
+            ragOk = !!apiStatus.checks.rag;
+        } else {
+            const base = typeof getEnterpriseBaseUrl === 'function' ? getEnterpriseBaseUrl() : '';
+            const res = await fetch((base || '') + '/ready', { method: 'GET' });
+            const data = res.ok ? await res.json().catch(() => ({})) : null;
+            if (data?.checks && 'rag' in data.checks) {
+                ragOk = !!data.checks.rag;
+            }
+        }
         const ragEl = document.getElementById('status-rag');
         if (ragEl) {
             if (ragOk) {
-                const mode = data.embedding || data.retrieval || '';
                 ragEl.textContent = mode ? `● 已連線 (${mode})` : '● 已連線';
                 ragEl.className = 'service-status-dot service-status-ok';
+                ragEl.title = '經 API /ready 檢查';
             } else {
                 ragEl.textContent = '● 未連線';
                 ragEl.className = 'service-status-dot service-status-off';
+                ragEl.title = apiReachable ? 'API 已連線，RAG 子系統未就緒' : '請執行 npm run dev';
             }
         }
     } catch (_) {

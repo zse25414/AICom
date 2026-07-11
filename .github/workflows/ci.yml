@@ -73,6 +73,11 @@ jobs:
       - name: Security API tests (HTTP)
         run: SECURITY_HTTP_TESTS=1 node scripts/test-security-api.js
 
+      - name: Security matrix (W1-D negative)
+        run: node scripts/test-security-matrix.js
+        env:
+          REQUIRE_ENTERPRISE_AUTH: '1'
+
       - name: Coach RAG tests
         run: node scripts/test-coach-rag.js
 

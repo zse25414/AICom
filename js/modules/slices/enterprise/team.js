@@ -305,12 +305,54 @@ function leaveEnterpriseGroup() {
     S.teamNotificationsInitialized = false;
     S.knownTeamNotificationIds.clear();
     S.locallyReadNotificationIds.clear();
+    S.teamWorkspaceTab = 'members';
+    S.ragKbItemsById = {};
     closeNotificationPanel();
     stopEnterprisePolling();
     localStorage.removeItem('lumina_enterprise_session');
     renderEnterprisePage();
     updateNotificationUI();
     showToast('已離開群組', 'success');
+}
+
+/**
+ * Team workspace primary tabs: members | knowledge (not main nav).
+ */
+function switchTeamWorkspaceTab(tab) {
+    const next = tab === 'knowledge' ? 'knowledge' : 'members';
+    S.teamWorkspaceTab = next;
+
+    const membersPane = document.getElementById('team-pane-members');
+    const knowledgePane = document.getElementById('team-pane-knowledge');
+    const tabMembers = document.getElementById('team-tab-members');
+    const tabKnowledge = document.getElementById('team-tab-knowledge');
+    const isKnowledge = next === 'knowledge';
+
+    if (membersPane) {
+        membersPane.classList.toggle('hidden', isKnowledge);
+        membersPane.hidden = isKnowledge;
+    }
+    if (knowledgePane) {
+        knowledgePane.classList.toggle('hidden', !isKnowledge);
+        knowledgePane.hidden = !isKnowledge;
+    }
+    if (tabMembers) {
+        tabMembers.classList.toggle('active', !isKnowledge);
+        tabMembers.setAttribute('aria-selected', isKnowledge ? 'false' : 'true');
+    }
+    if (tabKnowledge) {
+        tabKnowledge.classList.toggle('active', isKnowledge);
+        tabKnowledge.setAttribute('aria-selected', isKnowledge ? 'true' : 'false');
+    }
+
+    if (isKnowledge) {
+        // renderEnterpriseDocuments also refreshes KB list when on knowledge pane
+        if (typeof window.renderEnterpriseDocuments === 'function' && S.enterpriseGroupData) {
+            window.renderEnterpriseDocuments();
+        } else {
+            window.renderTeamKnowledgeBases?.();
+        }
+    }
 }
 
 async function refreshEnterpriseData(force = false) {
@@ -355,10 +397,12 @@ function renderEnterprisePage() {
     const workspace = document.getElementById('team-workspace');
     const badge = document.getElementById('team-status-badge');
     const apiHint = document.getElementById('team-api-hint');
+    const tabs = document.getElementById('team-workspace-tabs');
     
     if (!S.enterpriseSession) {
         onboarding?.classList.remove('hidden');
         workspace?.classList.add('hidden');
+        tabs?.classList.add('hidden');
         if (badge) { badge.textContent = '未加入群組'; badge.className = 'self-start sm:self-auto text-xs px-4 py-2 rounded-full bg-slate-800/80 text-slate-400 border border-slate-700/60'; }
         document.getElementById('team-stats-row')?.classList.add('hidden');
         apiHint?.classList.remove('hidden');
@@ -367,6 +411,7 @@ function renderEnterprisePage() {
     
     onboarding?.classList.add('hidden');
     workspace?.classList.remove('hidden');
+    tabs?.classList.remove('hidden');
     apiHint?.classList.add('hidden');
 
     const offlineBanner = document.getElementById('team-offline-banner');
@@ -388,8 +433,11 @@ function renderEnterprisePage() {
     document.getElementById('team-manager-panel')?.classList.toggle('hidden', !isManager);
     document.getElementById('team-overview-panel')?.classList.toggle('hidden', !isManager);
     document.getElementById('team-stats-row')?.classList.remove('hidden');
-    const tasksTitle = document.getElementById('team-S.tasks-title');
+    const tasksTitle = document.getElementById('team-tasks-title');
     if (tasksTitle) tasksTitle.textContent = isManager ? '我負責的任務' : '指派給我的任務';
+
+    // Restore / apply workspace tab (members | knowledge)
+    switchTeamWorkspaceTab(S.teamWorkspaceTab === 'knowledge' ? 'knowledge' : 'members');
     
     const dueInput = document.getElementById('team-assign-due');
     if (dueInput && !dueInput.value) dueInput.value = getTomorrowISO();
