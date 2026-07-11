@@ -395,8 +395,18 @@ def _dedupe_nodes(nodes: List[NodeWithScore]) -> List[NodeWithScore]:
     return deduped
 
 
-def retrieve_context(group_code: str, kb_ids: List[str], query: str) -> List[NodeWithScore]:
+def retrieve_context(
+    group_code: str,
+    kb_ids: List[str],
+    query: str,
+    document_ids: Optional[List[str]] = None,
+) -> List[NodeWithScore]:
     all_nodes: List[NodeWithScore] = []
+    doc_filter = None
+    if document_ids:
+        doc_filter = {str(x).strip() for x in document_ids if str(x).strip()}
+        if not doc_filter:
+            doc_filter = None
 
     for kb_id in kb_ids:
         storage_dir = kb_index_dir(group_code, kb_id)
@@ -412,6 +422,18 @@ def retrieve_context(group_code: str, kb_ids: List[str], query: str) -> List[Nod
 
     if not all_nodes:
         return []
+
+    # Task-bound documents: keep only chunks whose metadata.document_id is allowed
+    if doc_filter:
+        scoped = []
+        for n in all_nodes:
+            meta = getattr(n.node, "metadata", None) or {}
+            did = meta.get("document_id")
+            if did is not None and str(did).strip() in doc_filter:
+                scoped.append(n)
+        all_nodes = scoped
+        if not all_nodes:
+            return []
 
     all_nodes = _dedupe_nodes(all_nodes)
     all_nodes.sort(key=lambda n: n.score if n.score is not None else 0.0, reverse=True)

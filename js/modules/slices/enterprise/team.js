@@ -628,9 +628,10 @@ function renderEnterpriseTasks() {
 
     if (S.enterpriseSession.role === 'manager') {
         populateTeamOverviewMemberFilter(members);
-        // Preserve current KB selection when re-rendering
+        // Preserve current KB/doc selection when re-rendering
         const prevKb = typeof readKbBindPicker === 'function' ? readKbBindPicker('team-assign-kb') : [];
-        populateTeamAssignKbPicker(prevKb);
+        const prevDoc = typeof readDocBindPicker === 'function' ? readDocBindPicker('team-assign-doc') : [];
+        populateTeamAssignKbPicker(prevKb, prevDoc);
     }
     
     const myTasksAll = groupTasks.filter(t => t.assigneeId === S.enterpriseSession.memberId);
@@ -751,9 +752,18 @@ function renderEnterpriseTasks() {
     renderEnterpriseDocuments();
 }
 
-function populateTeamAssignKbPicker(selectedIds) {
+function populateTeamAssignKbPicker(selectedKbIds, selectedDocIds) {
+    const kbIds = selectedKbIds || [];
     if (typeof renderKbBindPicker === 'function') {
-        renderKbBindPicker('team-assign-kb-list', selectedIds || [], 'team-assign-kb');
+        renderKbBindPicker('team-assign-kb-list', kbIds, 'team-assign-kb');
+    }
+    if (typeof renderDocBindPicker === 'function') {
+        renderDocBindPicker(
+            'team-assign-doc-list',
+            selectedDocIds || [],
+            'team-assign-doc',
+            kbIds
+        );
     }
 }
 
@@ -804,6 +814,9 @@ async function assignEnterpriseTask() {
     const kbIds = typeof readKbBindPicker === 'function'
         ? readKbBindPicker('team-assign-kb')
         : [];
+    const docIds = typeof readDocBindPicker === 'function'
+        ? readDocBindPicker('team-assign-doc')
+        : [];
 
     const payload = {
         groupCode: S.enterpriseSession.groupCode,
@@ -814,7 +827,8 @@ async function assignEnterpriseTask() {
         duration: parseInt(document.getElementById('team-assign-duration').value) || 30,
         category: document.getElementById('team-assign-category').value,
         energy: 3,
-        kbIds
+        kbIds,
+        docIds
     };
 
     S._assignTaskInFlight = true;
@@ -854,6 +868,7 @@ async function assignEnterpriseTask() {
             category: payload.category,
             due: payload.due,
             kbIds: Array.isArray(payload.kbIds) ? payload.kbIds : [],
+            docIds: Array.isArray(payload.docIds) ? payload.docIds : [],
             completed: false,
             completedAt: null,
             createdAt: new Date().toISOString()
@@ -911,8 +926,8 @@ async function assignEnterpriseTask() {
     if (dueEl) dueEl.value = (typeof getTomorrowISO === 'function' ? getTomorrowISO() : getTodayISO());
     const durEl = document.getElementById('team-assign-duration');
     if (durEl && !durEl.value) durEl.value = '30';
-    // keep assignee + category for bulk assign convenience; reset KB binds
-    populateTeamAssignKbPicker([]);
+    // keep assignee + category for bulk assign convenience; reset KB/doc binds
+    populateTeamAssignKbPicker([], []);
     titleEl?.focus();
 
     await refreshEnterpriseData(true);

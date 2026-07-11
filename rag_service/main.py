@@ -62,6 +62,8 @@ class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4000)
     group_code: str
     kb_ids: List[str] = Field(default_factory=list)
+    # Optional: restrict retrieval to these enterprise document ids (metadata.document_id)
+    document_ids: List[str] = Field(default_factory=list)
     openai_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     api_base: Optional[str] = None
@@ -242,10 +244,16 @@ async def query_knowledge_base(req: QueryRequest):
     if not kb_ids:
         kb_ids = list_group_kbs(code) or ["general"]
 
+    document_ids = [
+        str(x).strip() for x in (req.document_ids or []) if str(x).strip()
+    ][:50]
+
     query = req.query.strip()
     try:
         configure_embedding(req.openai_api_key)
-        top_nodes = retrieve_context(code, kb_ids, query)
+        top_nodes = retrieve_context(
+            code, kb_ids, query, document_ids=document_ids or None
+        )
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     info = get_runtime_info()

@@ -511,6 +511,46 @@ function isActiveDocument(doc) {
     return true;
 }
 
+/**
+ * Normalize task-scoped KB + document binding.
+ * - docIds must be active documents in the group
+ * - if kbIds set, docs must belong to those KBs
+ * - if only docIds provided, derive kbIds from them
+ */
+function normalizeTaskKnowledgeBinding(group, kbIdsRaw, docIdsRaw) {
+    ensureKnowledgeBases(group);
+    const activeDocs = (group.documents || []).filter(isActiveDocument);
+    const docById = new Map(activeDocs.map(d => [d.id, d]));
+
+    let kbIds = [...new Set(
+        (Array.isArray(kbIdsRaw) ? kbIdsRaw : [])
+            .map(id => normalizeKbId(id))
+            .filter(id => id && group.knowledgeBases[id] && isActiveKb(group.knowledgeBases[id]))
+    )].slice(0, 12);
+
+    let docIds = [...new Set(
+        (Array.isArray(docIdsRaw) ? docIdsRaw : [])
+            .map(id => String(id || '').trim())
+            .filter(id => id && docById.has(id))
+    )].slice(0, 20);
+
+    if (kbIds.length && docIds.length) {
+        const kbSet = new Set(kbIds);
+        docIds = docIds.filter(id => {
+            const d = docById.get(id);
+            return d && kbSet.has(normalizeKbId(d.kbId || 'general'));
+        });
+    }
+
+    if (!kbIds.length && docIds.length) {
+        kbIds = [...new Set(
+            docIds.map(id => normalizeKbId(docById.get(id)?.kbId || 'general'))
+        )].slice(0, 12);
+    }
+
+    return { kbIds, docIds };
+}
+
 function getRagFilenameForDoc(doc) {
     if (!doc) return '';
     if (doc.filename) return doc.filename;
@@ -2449,14 +2489,8 @@ async function handleEnterprise(req, res, urlPath, method) {
             if (!assignee) return sendJson(res, 404, { error: '找不到成員' });
             if (!title) return sendJson(res, 400, { error: '請輸入任務名稱' });
 
-            // Optional knowledge-base binding for coach RAG (task-scoped)
-            ensureKnowledgeBases(group);
-            const rawKbIds = Array.isArray(body.kbIds) ? body.kbIds : [];
-            const kbIds = [...new Set(
-                rawKbIds
-                    .map(id => normalizeKbId(id))
-                    .filter(id => id && group.knowledgeBases[id] && isActiveKb(group.knowledgeBases[id]))
-            )].slice(0, 12);
+            // Optional knowledge-base / document binding for coach RAG (task-scoped)
+            const bound = normalizeTaskKnowledgeBinding(group, body.kbIds, body.docIds);
 
             const task = {
                 id: uid(),
@@ -2470,7 +2504,8 @@ async function handleEnterprise(req, res, urlPath, method) {
                 category: ['deep', 'execution', 'meeting', 'learning', 'admin'].includes(body.category)
                     ? body.category : 'execution',
                 due: clampText(body.due, 12) || new Date().toISOString().split('T')[0],
-                kbIds,
+                kbIds: bound.kbIds,
+                docIds: bound.docIds,
                 completed: false,
                 completedAt: null,
                 createdAt: new Date().toISOString()
@@ -2526,14 +2561,15 @@ async function handleEnterprise(req, res, urlPath, method) {
             const canEdit = member.role === 'manager' || task.assigneeId === memberId;
             if (!canEdit) return sendJson(res, 403, { error: '無權限更新此任務' });
 
-            // Manager may rebind knowledge bases for coach scope
-            if (Array.isArray(body.kbIds) && member.role === 'manager') {
-                ensureKnowledgeBases(group);
-                task.kbIds = [...new Set(
-                    body.kbIds
-                        .map(id => normalizeKbId(id))
-                        .filter(id => id && group.knowledgeBases[id] && isActiveKb(group.knowledgeBases[id]))
-                )].slice(0, 12);
+            // Manager may rebind knowledge bases / documents for coach scope
+            if (member.role === 'manager' && (Array.isArray(body.kbIds) || Array.isArray(body.docIds))) {
+                const bound = normalizeTaskKnowledgeBinding(
+                    group,
+                    Array.isArray(body.kbIds) ? body.kbIds : (task.kbIds || []),
+                    Array.isArray(body.docIds) ? body.docIds : (task.docIds || [])
+                );
+                task.kbIds = bound.kbIds;
+                task.docIds = bound.docIds;
             }
 
             let notifications = [];
@@ -3052,6 +3088,30 @@ const server = http.createServer(async (req, res) => {
                     }
                 } else {
                     body.kb_ids = [...activeKbIds];
+                }
+                // Sanitize document_ids to active docs in this group (optional task-scoped filter)
+                if (Array.isArray(body.document_ids) && body.document_ids.length) {
+                    const activeDocIds = new Set(
+                        (access.group.documents || [])
+                            .filter(isActiveDocument)
+                            .map(d => d.id)
+                    );
+                    body.document_ids = body.document_ids
+                        .map(id => String(id || '').trim())
+                        .filter(id => activeDocIds.has(id))
+                        .slice(0, 50);
+                    if (!body.document_ids.length) {
+                        sendJson(res, 200, {
+                            answer: '抱歉，根據目前的知識庫資料，我無法回答此問題。',
+                            sources: [],
+                            citations: [],
+                            retrieval_mode: 'none',
+                            embedding_mode: 'none'
+                        });
+                        return;
+                    }
+                } else {
+                    delete body.document_ids;
                 }
                 const proxied = await proxyRagJson('/api/rag/query', body);
                 // Attach citations[] while keeping sources for compatibility

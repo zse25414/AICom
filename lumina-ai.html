@@ -717,9 +717,13 @@
                                 <input id="team-assign-duration" type="number" value="45" class="form-input focus-ring">
                             </div>
                             <div class="form-field md:col-span-2">
-                                <label>綁定知識庫 <span class="text-slate-500 font-normal">（選填 · 教練帶做時優先只查這些庫）</span></label>
+                                <label>綁定知識庫 <span class="text-slate-500 font-normal">（選填 · 教練優先查這些庫）</span></label>
                                 <div id="team-assign-kb-list" class="task-kb-picker mt-1.5" role="group" aria-label="任務綁定知識庫"></div>
-                                <div class="text-[10px] text-slate-500 mt-1.5">不選＝成員可在教練自行勾選知識庫；綁定後教練以任務庫為準（仍可用 @庫名 單則覆寫）</div>
+                            </div>
+                            <div class="form-field md:col-span-2">
+                                <label>綁定文件 <span class="text-slate-500 font-normal">（選填 · 更精準，教練只查這些文件）</span></label>
+                                <div id="team-assign-doc-list" class="task-doc-picker mt-1.5 custom-scroll" role="group" aria-label="任務綁定文件"></div>
+                                <div class="text-[10px] text-slate-500 mt-1.5">可先選知識庫縮小文件範圍；只選文件時會自動推導所屬庫。訊息仍可用 @庫名 單則覆寫。</div>
                             </div>
                         </div>
                         <button data-lumina-action="assignEnterpriseTask" class="btn-team mt-5 bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/20">
@@ -1565,9 +1569,15 @@
                         <input id="edit-task-due" type="date" class="w-full form-input focus-ring">
                     </div>
                 </div>
-                <div id="edit-task-kb-wrap" class="hidden">
-                    <label class="text-xs text-slate-400 mb-1 block">綁定知識庫 <span class="text-slate-500">（教練帶做時優先）</span></label>
-                    <div id="edit-task-kb-list" class="task-kb-picker" role="group" aria-label="編輯任務綁定知識庫"></div>
+                <div id="edit-task-kb-wrap" class="hidden space-y-3">
+                    <div>
+                        <label class="text-xs text-slate-400 mb-1 block">綁定知識庫 <span class="text-slate-500">（教練優先）</span></label>
+                        <div id="edit-task-kb-list" class="task-kb-picker" role="group" aria-label="編輯任務綁定知識庫"></div>
+                    </div>
+                    <div>
+                        <label class="text-xs text-slate-400 mb-1 block">綁定文件 <span class="text-slate-500">（可只選文件）</span></label>
+                        <div id="edit-task-doc-list" class="task-doc-picker custom-scroll" role="group" aria-label="編輯任務綁定文件"></div>
+                    </div>
                 </div>
             </div>
             <div class="flex gap-2 mt-5">

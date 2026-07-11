@@ -31,6 +31,7 @@ function migrateTasks() {
         ...t,
         category: t.category || inferCategory(t.name, t.energy || 3),
         kbIds: normalizeTaskKbIds(t.kbIds),
+        docIds: normalizeTaskDocIds(t.docIds),
         updatedAt: t.updatedAt || now
     }));
     rebuildTaskIndex();
@@ -44,8 +45,20 @@ function normalizeTaskKbIds(raw) {
     )].slice(0, 12);
 }
 
+/** Normalize task-bound document ids (max 20). */
+function normalizeTaskDocIds(raw) {
+    if (!Array.isArray(raw)) return [];
+    return [...new Set(
+        raw.map(id => String(id || '').trim()).filter(Boolean)
+    )].slice(0, 20);
+}
+
 function getTaskBoundKbIds(task) {
     return normalizeTaskKbIds(task?.kbIds);
+}
+
+function getTaskBoundDocIds(task) {
+    return normalizeTaskDocIds(task?.docIds);
 }
 
 function shortTaskKbLabel(kbId) {
@@ -95,11 +108,17 @@ function renderKbBindPicker(containerId, selectedIds, inputName) {
             <label class="task-kb-chip ${checked ? 'task-kb-chip-active' : ''}">
                 <input type="checkbox" name="${escapeHtml(inputName)}" value="${escapeHtml(o.id)}" ${checked}
                     class="task-kb-chip-input accent-indigo-400"
-                    onchange="this.closest('.task-kb-chip')?.classList.toggle('task-kb-chip-active', this.checked)">
+                    data-task-kb-picker="${escapeHtml(inputName)}">
                 <span class="task-kb-chip-text">${escapeHtml(o.label)}</span>
             </label>
         `;
     }).join('');
+    el.querySelectorAll(`input[name="${inputName}"]`).forEach(input => {
+        input.addEventListener('change', () => {
+            input.closest('.task-kb-chip')?.classList.toggle('task-kb-chip-active', input.checked);
+            if (typeof onTaskKbPickerChange === 'function') onTaskKbPickerChange(inputName);
+        });
+    });
 }
 
 function readKbBindPicker(inputName) {
@@ -108,14 +127,93 @@ function readKbBindPicker(inputName) {
     );
 }
 
+/** Documents available for binding, optionally filtered by selected KBs. */
+function getAvailableDocOptions(kbIds) {
+    const kbSet = Array.isArray(kbIds) && kbIds.length ? new Set(kbIds) : null;
+    return (S.enterpriseGroupData?.documents || [])
+        .filter(d => d && d.status !== 'deleted')
+        .filter(d => !kbSet || kbSet.has(d.kbId || 'general'))
+        .map(d => ({
+            id: d.id,
+            title: d.title || d.filename || d.id,
+            kbId: d.kbId || 'general'
+        }))
+        .slice(0, 80);
+}
+
+function renderDocBindPicker(containerId, selectedIds, inputName, kbIds) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const selected = new Set(normalizeTaskDocIds(selectedIds));
+    const opts = getAvailableDocOptions(kbIds);
+    if (!opts.length) {
+        el.innerHTML = '<span class="text-[11px] text-slate-500">此範圍尚無可綁定文件（可先上傳或改選知識庫）</span>';
+        return;
+    }
+    el.innerHTML = opts.map(o => {
+        const checked = selected.has(o.id) ? 'checked' : '';
+        const kbLabel = shortTaskKbLabel(o.kbId);
+        const shortTitle = o.title.length > 36 ? o.title.slice(0, 34) + '…' : o.title;
+        return `
+            <label class="task-doc-chip ${checked ? 'task-doc-chip-active' : ''}" title="${escapeHtml(o.title)} · ${escapeHtml(kbLabel)}">
+                <input type="checkbox" name="${escapeHtml(inputName)}" value="${escapeHtml(o.id)}" ${checked}
+                    class="task-kb-chip-input accent-indigo-400"
+                    onchange="this.closest('.task-doc-chip')?.classList.toggle('task-doc-chip-active', this.checked)">
+                <span class="task-doc-chip-text">
+                    <span class="task-doc-chip-title">${escapeHtml(shortTitle)}</span>
+                    <span class="task-doc-chip-kb">${escapeHtml(kbLabel)}</span>
+                </span>
+            </label>
+        `;
+    }).join('');
+}
+
+function readDocBindPicker(inputName) {
+    return normalizeTaskDocIds(
+        Array.from(document.querySelectorAll(`input[name="${inputName}"]:checked`)).map(el => el.value)
+    );
+}
+
+/** When KB selection changes, refresh linked document picker and prune invalid docs. */
+function onTaskKbPickerChange(inputName) {
+    if (inputName === 'team-assign-kb') {
+        const kbIds = readKbBindPicker('team-assign-kb');
+        const prev = readDocBindPicker('team-assign-doc');
+        const valid = new Set(getAvailableDocOptions(kbIds).map(d => d.id));
+        renderDocBindPicker('team-assign-doc-list', prev.filter(id => valid.has(id)), 'team-assign-doc', kbIds);
+        return;
+    }
+    if (inputName === 'edit-task-kb') {
+        const kbIds = readKbBindPicker('edit-task-kb');
+        const prev = readDocBindPicker('edit-task-doc');
+        const valid = new Set(getAvailableDocOptions(kbIds).map(d => d.id));
+        renderDocBindPicker('edit-task-doc-list', prev.filter(id => valid.has(id)), 'edit-task-doc', kbIds);
+    }
+}
+
 function renderTaskKbBadges(task) {
-    const ids = getTaskBoundKbIds(task);
-    if (!ids.length) return '';
-    const labels = ids.map(shortTaskKbLabel);
-    const title = `綁定知識庫：${labels.join('、')}`;
-    const shown = labels.slice(0, 2).join('、');
-    const more = labels.length > 2 ? ` +${labels.length - 2}` : '';
-    return `<span class="task-kb-bind-badge" title="${escapeHtml(title)}"><i class="fa-solid fa-database"></i> ${escapeHtml(shown)}${more}</span>`;
+    const kbIds = getTaskBoundKbIds(task);
+    const docIds = getTaskBoundDocIds(task);
+    if (!kbIds.length && !docIds.length) return '';
+
+    let html = '';
+    if (kbIds.length) {
+        const labels = kbIds.map(shortTaskKbLabel);
+        const title = `綁定知識庫：${labels.join('、')}`;
+        const shown = labels.slice(0, 2).join('、');
+        const more = labels.length > 2 ? ` +${labels.length - 2}` : '';
+        html += `<span class="task-kb-bind-badge" title="${escapeHtml(title)}"><i class="fa-solid fa-database"></i> ${escapeHtml(shown)}${more}</span>`;
+    }
+    if (docIds.length) {
+        const docs = S.enterpriseGroupData?.documents || [];
+        const titles = docIds.map(id => {
+            const d = docs.find(x => x.id === id);
+            return d?.title || d?.filename || id;
+        });
+        const title = `綁定文件：${titles.join('、')}`;
+        html += `<span class="task-doc-bind-badge" title="${escapeHtml(title)}"><i class="fa-solid fa-file-lines"></i> ${docIds.length} 份文件</span>`;
+    }
+    return html;
 }
 
 function touchTask(task) {
@@ -343,11 +441,15 @@ function openTaskEdit(taskId) {
 
     const kbWrap = document.getElementById('edit-task-kb-wrap');
     if (kbWrap) {
-        // Show KB bind when user is in a team (or task already has binds)
-        const showKb = !!S.enterpriseSession || getTaskBoundKbIds(task).length > 0;
+        // Show bind UI when user is in a team (or task already has binds)
+        const showKb = !!S.enterpriseSession
+            || getTaskBoundKbIds(task).length > 0
+            || getTaskBoundDocIds(task).length > 0;
         kbWrap.classList.toggle('hidden', !showKb);
         if (showKb) {
-            renderKbBindPicker('edit-task-kb-list', getTaskBoundKbIds(task), 'edit-task-kb');
+            const kbIds = getTaskBoundKbIds(task);
+            renderKbBindPicker('edit-task-kb-list', kbIds, 'edit-task-kb');
+            renderDocBindPicker('edit-task-doc-list', getTaskBoundDocIds(task), 'edit-task-doc', kbIds);
         }
     }
     
@@ -380,6 +482,14 @@ function saveTaskEdit() {
     const kbWrap = document.getElementById('edit-task-kb-wrap');
     if (kbWrap && !kbWrap.classList.contains('hidden')) {
         task.kbIds = readKbBindPicker('edit-task-kb');
+        task.docIds = readDocBindPicker('edit-task-doc');
+        // Derive KBs from docs if only docs selected
+        if (!task.kbIds.length && task.docIds.length) {
+            const docs = S.enterpriseGroupData?.documents || [];
+            task.kbIds = normalizeTaskKbIds(
+                task.docIds.map(id => (docs.find(d => d.id === id)?.kbId) || 'general')
+            );
+        }
     }
     touchTask(task);
     
@@ -413,7 +523,8 @@ function syncEnterpriseTaskToPersonal(enterpriseTaskId) {
         due: et.due || getTodayISO(),
         completed: !!et.completed,
         enterpriseTaskId: enterpriseTaskId,
-        kbIds: normalizeTaskKbIds(et.kbIds)
+        kbIds: normalizeTaskKbIds(et.kbIds),
+        docIds: normalizeTaskDocIds(et.docIds)
     });
     
     saveState();
