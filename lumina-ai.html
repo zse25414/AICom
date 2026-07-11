@@ -1012,6 +1012,33 @@
                                         <i class="fa-solid fa-rotate-right mr-1"></i>重試全部失敗索引
                                     </button>
                                 </div>
+                                <!-- Manager bulk actions -->
+                                <div id="team-docs-bulk-bar" class="team-docs-bulk-bar hidden" role="region" aria-label="文件批次操作">
+                                    <div class="team-docs-bulk-left">
+                                        <label class="team-docs-bulk-select-all">
+                                            <input type="checkbox" id="team-docs-select-all" class="accent-indigo-400"
+                                                data-lumina-change="onTeamDocsSelectAllChange"
+                                                data-lumina-change-args='["__checked__"]'
+                                                aria-label="全選目前顯示的文件">
+                                            <span>全選本頁</span>
+                                        </label>
+                                        <span id="team-docs-selected-count" class="team-docs-bulk-count">已選 0</span>
+                                    </div>
+                                    <div class="team-docs-bulk-right">
+                                        <button type="button" class="team-docs-bulk-btn team-docs-bulk-btn-amber focus-ring"
+                                            data-lumina-action="bulkRetrySelectedDocumentIndexes">
+                                            <i class="fa-solid fa-rotate-right mr-1"></i>重試選取
+                                        </button>
+                                        <button type="button" class="team-docs-bulk-btn team-docs-bulk-btn-danger focus-ring"
+                                            data-lumina-action="bulkDeleteSelectedDocuments">
+                                            <i class="fa-solid fa-trash-can mr-1"></i>刪除選取
+                                        </button>
+                                        <button type="button" class="team-docs-bulk-btn focus-ring"
+                                            data-lumina-action="clearDocSelection">
+                                            取消選取
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
 
                             <div id="team-docs-list" class="space-y-3">

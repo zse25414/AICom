@@ -2,13 +2,18 @@ const fs = require('fs');
 const { JSDOM } = require('jsdom');
 
 function inlineAppScripts(html) {
-  html = html.replace(/<script src="[^"]+"><\/script>\s*/g, '');
+  // Match src scripts with optional attrs (defer/async/type/…)
+  html = html.replace(/<script\b[^>]*\bsrc=["'][^"']+["'][^>]*>\s*<\/script>\s*/gi, '');
   const scripts = [fs.readFileSync('js/lumina-app.js', 'utf8')];
   for (const chunk of ['lumina-coach.js', 'lumina-enterprise-docs.js']) {
     const path = `js/chunks/${chunk}`;
     if (fs.existsSync(path)) scripts.push(fs.readFileSync(path, 'utf8'));
   }
-  const tags = scripts.map(s => `<script>${s}</script>`).join('\n');
+  const tags = scripts.map(s => {
+    // Guard against early </script> termination if a chunk ever embeds that sequence
+    const safe = s.replace(/<\/script/gi, '<\\/script');
+    return `<script>${safe}</script>`;
+  }).join('\n');
   return html.replace('</body>', `${tags}\n</body>`);
 }
 

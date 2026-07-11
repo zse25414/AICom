@@ -698,6 +698,107 @@ function formatCoachContent(text) {
     return sanitizeHtml(String(text || '').replace(/\n/g, '<br>'));
 }
 
+/** Strip coach option tags / markdown noise before creating tasks */
+function stripCoachMessageForTasks(content) {
+    return String(content || '')
+        .replace(/\[選項:\s*[^\]]+\]/g, '')
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\*\*([^*]+)\*\*/g, '$1')
+        .replace(/\*([^*]+)\*/g, '$1')
+        .replace(/#{1,6}\s*/g, '')
+        .trim();
+}
+
+/** Prefer numbered/bullet action items; fallback to first meaningful line */
+function extractTaskCandidatesFromCoachMessage(content) {
+    const text = stripCoachMessageForTasks(content);
+    if (!text) return [];
+    const items = [];
+    const re = /(?:^|\n)\s*(?:\d+[\.\)]\s+|[-•●]\s+)(.+)/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        let t = String(m[1] || '').trim()
+            .replace(/^[「『"']|[」』"']$/g, '')
+            .replace(/\s+/g, ' ');
+        // Drop pure questions / very short noise (CJK tasks can be 2–3 chars)
+        if (t.length < 2 || t.length > 120) continue;
+        if (/^(選項|注意|提示|說明)[:：]/.test(t)) continue;
+        items.push(t);
+        if (items.length >= 5) break;
+    }
+    if (items.length) return items;
+
+    const lines = text.split(/\n+/).map(l => l.trim()).filter(Boolean);
+    let title = lines.find(l => l.length >= 2 && !/^[-—]+$/.test(l)) || text.slice(0, 80);
+    title = title
+        .replace(/^(現在|步驟\s*\d*|任務|建議)[:：]\s*/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (title.length > 80) title = title.slice(0, 78) + '…';
+    return title ? [title] : [];
+}
+
+function addCoachMessageAsTodayTasks(msgIndex) {
+    const m = S.coachAgentMessages?.[msgIndex];
+    if (!m || m.role !== 'coach') {
+        return showToast('找不到教練訊息', 'error');
+    }
+    const candidates = extractTaskCandidatesFromCoachMessage(m.content);
+    if (!candidates.length) {
+        return showToast('無法從這則回覆抽出待辦', 'error');
+    }
+
+    const maxLen = (typeof C !== 'undefined' && C.TASK_NAME_MAX_LEN) || 200;
+    const baseId = Date.now();
+    const created = [];
+    candidates.forEach((name, i) => {
+        const taskName = String(name).slice(0, maxLen);
+        const newTask = {
+            id: baseId + i,
+            name: taskName,
+            duration: 30,
+            energy: 3,
+            category: typeof inferCategory === 'function' ? inferCategory(taskName, 3) : 'execution',
+            due: getTodayISO(),
+            completed: false,
+            updatedAt: new Date().toISOString(),
+            source: 'coach'
+        };
+        S.tasks.unshift(newTask);
+        created.push(newTask);
+    });
+
+    if (created[0]) S.todayFocusTaskId = created[0].id;
+    saveState();
+    refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+
+    if (created.length === 1) {
+        showToast(`已加入今日待辦：${created[0].name}`, 'success');
+    } else {
+        showToast(`已從教練回覆加入 ${created.length} 項今日待辦`, 'success');
+    }
+}
+
+function renderCoachAddTaskButton(msgIndex, content) {
+    const n = extractTaskCandidatesFromCoachMessage(content).length;
+    if (!n) return '';
+    const label = n > 1 ? `加入 ${n} 項今日待辦` : '加到今日待辦';
+    return `
+        <div class="coach-msg-actions mt-2.5">
+            <button type="button"
+                class="coach-add-task-btn focus-ring"
+                data-lumina-action="addCoachMessageAsTodayTasks"
+                data-lumina-arg="${msgIndex}"
+                data-lumina-arg-type="number"
+                title="把教練建議變成今日可執行任務">
+                <i class="fa-solid fa-plus"></i>
+                <span>${label}</span>
+            </button>
+        </div>
+    `;
+}
+
 function renderCoachAgentThread(thinking) {
     const el = document.getElementById('coach-agent-thread');
     if (!el) return;
@@ -727,6 +828,7 @@ function renderCoachAgentThread(thinking) {
         
         const sourcesHtml = m.role === 'coach' ? renderCoachSourceChips(m.sources, msgIndex) : '';
         const kbBadge = m.role === 'coach' ? renderCoachKbUsageBadge(m.meta) : '';
+        const addTaskHtml = m.role === 'coach' ? renderCoachAddTaskButton(msgIndex, m.content) : '';
 
         html += `
             <div class="coach-agent-msg coach-agent-msg-${m.role}">
@@ -735,6 +837,7 @@ function renderCoachAgentThread(thinking) {
                     <span>${m.role === 'coach' ? formatCoachContent(displayContent) : escapeHtml(displayContent)}</span>
                     ${kbBadge}
                     ${sourcesHtml}
+                    ${addTaskHtml}
                     ${(isLast && options.length > 0 && !thinking) ? `
                         <div class="coach-agent-options flex flex-wrap gap-2 mt-3">
                             ${options.map(opt => `

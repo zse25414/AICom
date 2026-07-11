@@ -1637,6 +1637,37 @@ body {
     color: #94a3b8;
 }
 
+.coach-msg-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.coach-add-task-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 32px;
+    padding: 0.3rem 0.7rem;
+    border-radius: 0.65rem;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    background: rgba(14, 165, 233, 0.1);
+    color: #7dd3fc;
+    font-size: 0.7rem;
+    font-weight: 600;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.coach-add-task-btn:hover {
+    background: rgba(14, 165, 233, 0.18);
+    border-color: rgba(56, 189, 248, 0.55);
+    color: #bae6fd;
+}
+
+.coach-add-task-btn i {
+    font-size: 0.65rem;
+}
+
 .coach-kb-unused-badge {
     display: inline-flex;
     align-items: center;
@@ -1649,6 +1680,95 @@ body {
     color: #94a3b8;
     font-size: 0.7rem;
     font-weight: 500;
+}
+
+/* Document bulk selection */
+.team-docs-bulk-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 0.75rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 0.85rem;
+    border: 1px solid rgba(129, 140, 248, 0.28);
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.team-docs-bulk-bar.hidden {
+    display: none;
+}
+
+.team-docs-bulk-left,
+.team-docs-bulk-right {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.team-docs-bulk-select-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.7rem;
+    color: #c7d2fe;
+    cursor: pointer;
+    user-select: none;
+}
+
+.team-docs-bulk-count {
+    font-size: 0.65rem;
+    color: #94a3b8;
+}
+
+.team-docs-bulk-btn {
+    min-height: 32px;
+    padding: 0.25rem 0.65rem;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: rgba(15, 23, 42, 0.55);
+    color: #cbd5e1;
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
+.team-docs-bulk-btn:hover {
+    background: rgba(30, 41, 59, 0.85);
+    color: #f1f5f9;
+}
+
+.team-docs-bulk-btn-danger {
+    border-color: rgba(248, 113, 113, 0.35);
+    color: #fca5a5;
+}
+
+.team-docs-bulk-btn-danger:hover {
+    background: rgba(239, 68, 68, 0.12);
+    color: #fecaca;
+}
+
+.team-docs-bulk-btn-amber {
+    border-color: rgba(251, 191, 36, 0.35);
+    color: #fcd34d;
+}
+
+.team-docs-bulk-btn-amber:hover {
+    background: rgba(245, 158, 11, 0.12);
+}
+
+.doc-select-checkbox {
+    width: 1rem;
+    height: 1rem;
+    margin-top: 0.15rem;
+    flex-shrink: 0;
+    accent-color: #818cf8;
+    cursor: pointer;
+}
+
+.doc-card-selected {
+    border-color: rgba(129, 140, 248, 0.55) !important;
+    background: rgba(99, 102, 241, 0.08) !important;
 }
 
 .coach-kb-used-badge {

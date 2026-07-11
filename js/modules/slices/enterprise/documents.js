@@ -1218,9 +1218,23 @@ async function publishDocumentVersion(docId) {
     refreshEnterpriseData();
 }
 
-async function deleteTeamDocument(docId) {
-    if (!S.enterpriseSession) return;
-    if (!confirm('確定要刪除此文件嗎？刪除後將無法恢復，且 AI 也無法讀取該資料。')) return;
+/**
+ * Delete a team document.
+ * @param {string} docId
+ * @param {{ skipConfirm?: boolean, quiet?: boolean, skipRefresh?: boolean }} [options]
+ * @returns {Promise<{ ok: boolean, cancelled?: boolean, error?: string }>}
+ */
+async function deleteTeamDocument(docId, options = {}) {
+    if (!S.enterpriseSession) return { ok: false, error: 'no_session' };
+    const skipConfirm = options.skipConfirm === true;
+    const quiet = options.quiet === true;
+    const skipRefresh = options.skipRefresh === true;
+
+    if (!skipConfirm) {
+        if (!confirm('確定要刪除此文件嗎？刪除後將無法恢復，且 AI 也無法讀取該資料。')) {
+            return { ok: false, cancelled: true };
+        }
+    }
     
     const docs = S.enterpriseGroupData?.documents || [];
     const docToDelete = docs.find(d => d.id === docId);
@@ -1244,13 +1258,14 @@ async function deleteTeamDocument(docId) {
             saveLocalEnterpriseStore(store);
             ok = true;
         } catch (e) {
-            showToast('本機刪除失敗: ' + e.message, 'error');
+            if (!quiet) showToast('本機刪除失敗: ' + e.message, 'error');
+            return { ok: false, error: e.message };
         }
     } else {
         const res = await enterpriseFetch('POST', '/api/enterprise/group/document/delete', payload);
         if (!res.ok) {
-            showToast('刪除失敗: ' + res.error, 'error');
-            return;
+            if (!quiet) showToast('刪除失敗: ' + res.error, 'error');
+            return { ok: false, error: res.error || 'delete_failed' };
         }
         const data = res.data || {};
         // RAG index cleanup failed: server did not soft-delete — keep list item + allow retry
@@ -1259,15 +1274,15 @@ async function deleteTeamDocument(docId) {
             applyLocalDocRagStatus(docId, data.ragStatus || 'failed', {
                 lastError: msg
             });
-            renderEnterpriseDocuments();
-            showToast(msg, 'error');
-            return;
+            if (!skipRefresh) renderEnterpriseDocuments();
+            if (!quiet) showToast(msg, 'error');
+            return { ok: false, error: msg };
         }
         ok = true;
     }
     
     if (ok) {
-        showToast('文件已成功刪除', 'success');
+        if (!quiet) showToast('文件已成功刪除', 'success');
         
         // Offline path: best-effort client RAG cleanup (online path is server-side).
         if (S.enterpriseSession.offline && S.ragServiceActive && docToDelete) {
@@ -1280,7 +1295,166 @@ async function deleteTeamDocument(docId) {
         }
         
         if (S.docRagStatusOverrides && docId) delete S.docRagStatusOverrides[docId];
-        refreshEnterpriseData();
+        if (S._selectedDocIds instanceof Set) S._selectedDocIds.delete(docId);
+        // Keep local cache in sync for bulk loops before refresh
+        if (S.enterpriseGroupData?.documents) {
+            S.enterpriseGroupData.documents = S.enterpriseGroupData.documents.filter(d => d.id !== docId);
+        }
+        if (!skipRefresh) refreshEnterpriseData();
+        return { ok: true };
+    }
+    return { ok: false };
+}
+
+function ensureDocSelectionSet() {
+    if (!(S._selectedDocIds instanceof Set)) S._selectedDocIds = new Set();
+    return S._selectedDocIds;
+}
+
+function pruneDocSelection(validIds) {
+    const set = ensureDocSelectionSet();
+    const valid = new Set(validIds || []);
+    for (const id of [...set]) {
+        if (!valid.has(id)) set.delete(id);
+    }
+    return set;
+}
+
+function toggleDocSelection(docId, checked) {
+    const set = ensureDocSelectionSet();
+    if (checked) set.add(docId);
+    else set.delete(docId);
+    updateDocBulkBarUI();
+    // Light visual update without full re-render
+    const card = document.querySelector(`[data-doc-id="${CSS.escape(String(docId))}"]`);
+    if (card) card.classList.toggle('doc-card-selected', !!checked);
+    const all = document.getElementById('team-docs-select-all');
+    if (all && S._visibleDocIds?.length) {
+        all.checked = S._visibleDocIds.every(id => set.has(id));
+        all.indeterminate = !all.checked && S._visibleDocIds.some(id => set.has(id));
+    }
+}
+
+function onTeamDocsSelectAllChange(checked) {
+    const set = ensureDocSelectionSet();
+    const ids = S._visibleDocIds || [];
+    if (checked) ids.forEach(id => set.add(id));
+    else ids.forEach(id => set.delete(id));
+    // Sync checkboxes in DOM
+    document.querySelectorAll('.doc-select-checkbox').forEach(cb => {
+        const id = cb.getAttribute('data-doc-id');
+        if (!id) return;
+        cb.checked = !!checked;
+        const card = document.querySelector(`[data-doc-id="${CSS.escape(id)}"]`);
+        if (card) card.classList.toggle('doc-card-selected', !!checked);
+    });
+    updateDocBulkBarUI();
+}
+
+function clearDocSelection() {
+    ensureDocSelectionSet().clear();
+    document.querySelectorAll('.doc-select-checkbox').forEach(cb => { cb.checked = false; });
+    document.querySelectorAll('.doc-card-selected').forEach(el => el.classList.remove('doc-card-selected'));
+    const all = document.getElementById('team-docs-select-all');
+    if (all) {
+        all.checked = false;
+        all.indeterminate = false;
+    }
+    updateDocBulkBarUI();
+}
+
+function updateDocBulkBarUI() {
+    const bar = document.getElementById('team-docs-bulk-bar');
+    if (!bar) return;
+    const isManager = S.enterpriseSession?.role === 'manager';
+    const hasDocs = (S.enterpriseGroupData?.documents || []).length > 0;
+    bar.classList.toggle('hidden', !(isManager && hasDocs));
+    if (!(isManager && hasDocs)) return;
+
+    const set = ensureDocSelectionSet();
+    const countEl = document.getElementById('team-docs-selected-count');
+    if (countEl) countEl.textContent = `已選 ${set.size}`;
+    const all = document.getElementById('team-docs-select-all');
+    if (all && S._visibleDocIds?.length) {
+        all.checked = S._visibleDocIds.length > 0 && S._visibleDocIds.every(id => set.has(id));
+        all.indeterminate = !all.checked && S._visibleDocIds.some(id => set.has(id));
+    }
+}
+
+async function bulkRetrySelectedDocumentIndexes() {
+    if (!S.enterpriseSession || S.enterpriseSession.role !== 'manager') {
+        return showToast('僅主管可批次重試索引', 'error');
+    }
+    if (S._batchRetryInFlight) return showToast('批次重試進行中…', 'error');
+
+    const set = ensureDocSelectionSet();
+    const docs = (S.enterpriseGroupData?.documents || []).filter(d => set.has(d.id));
+    const targets = docs.filter(d => {
+        const st = resolveDocRagStatus(d);
+        return st === 'failed' || st === 'pending';
+    });
+    if (!targets.length) {
+        return showToast(set.size ? '選取的文件沒有需重試的索引' : '請先勾選文件', 'error');
+    }
+    if (!confirm(`將重試 ${targets.length} 份選取文件的索引，是否繼續？`)) return;
+
+    S._batchRetryInFlight = true;
+    let okCount = 0;
+    let failCount = 0;
+    try {
+        for (const doc of targets.slice(0, 20)) {
+            try {
+                await retryDocumentRagIndex(doc.id);
+                const st = resolveDocRagStatus(
+                    (S.enterpriseGroupData?.documents || []).find(d => d.id === doc.id) || doc
+                );
+                if (st === 'indexed' || st === 'pending') okCount++;
+                else failCount++;
+            } catch (_) {
+                failCount++;
+            }
+        }
+        const more = targets.length > 20 ? `（僅處理前 20 份，共 ${targets.length}）` : '';
+        showToast(`選取重試完成：成功/處理中 ${okCount}，仍失敗 ${failCount}${more}`, failCount ? 'error' : 'success');
+        ensureRagStatusPolling();
+        renderEnterpriseDocuments();
+        try { renderCoachReadinessBar?.(); } catch (_) {}
+    } finally {
+        S._batchRetryInFlight = false;
+    }
+}
+
+async function bulkDeleteSelectedDocuments() {
+    if (!S.enterpriseSession || S.enterpriseSession.role !== 'manager') {
+        return showToast('僅主管可批次刪除', 'error');
+    }
+    if (S._bulkDeleteInFlight) return showToast('批次刪除進行中…', 'error');
+
+    const set = ensureDocSelectionSet();
+    const ids = [...set];
+    if (!ids.length) return showToast('請先勾選要刪除的文件', 'error');
+    if (!confirm(`確定刪除 ${ids.length} 份選取文件？此操作無法復原。`)) return;
+
+    S._bulkDeleteInFlight = true;
+    let okCount = 0;
+    let failCount = 0;
+    try {
+        for (const id of ids.slice(0, 25)) {
+            const result = await deleteTeamDocument(id, {
+                skipConfirm: true,
+                quiet: true,
+                skipRefresh: true
+            });
+            if (result?.ok) okCount++;
+            else failCount++;
+        }
+        const more = ids.length > 25 ? `（僅處理前 25 份，共 ${ids.length}）` : '';
+        showToast(`批次刪除完成：成功 ${okCount}，失敗 ${failCount}${more}`, failCount ? 'error' : 'success');
+        clearDocSelection();
+        await refreshEnterpriseData();
+        try { renderCoachReadinessBar?.(); } catch (_) {}
+    } finally {
+        S._bulkDeleteInFlight = false;
     }
 }
 
@@ -1730,22 +1904,27 @@ function renderEnterpriseDocuments() {
     
     if (docsSource.length === 0) {
         S._docListVisible = DOC_LIST_PAGE_SIZE;
+        S._visibleDocIds = [];
+        ensureDocSelectionSet().clear();
         listEl.innerHTML = `
             <div class="empty-state py-8">
                 <div class="empty-state-icon bg-purple-500/10 text-purple-400" style="background-color: rgba(168, 85, 247, 0.1); color: rgb(192, 132, 252);"><i class="fa-solid fa-folder-open"></i></div>
                 <div class="text-sm text-slate-400">目前沒有知識庫文件</div>
                 <div class="text-xs text-slate-500 mt-1">${isManager ? '點擊「新增文件」發布專案指南；空庫時教練勾選該庫可能查不到內容' : '主管發布指南後將顯示於此。教練選庫時若顯示「空庫」表示尚無可檢索文件'}</div>
             </div>`;
+        try { updateDocBulkBarUI(); } catch (_) {}
         return;
     }
 
     if (docsAll.length === 0) {
+        S._visibleDocIds = [];
         listEl.innerHTML = `
             <div class="empty-state py-8">
                 <div class="empty-state-icon bg-slate-500/10 text-slate-400"><i class="fa-solid fa-filter"></i></div>
                 <div class="text-sm text-slate-400">沒有符合篩選的文件</div>
                 <div class="text-xs text-slate-500 mt-1">試試清除搜尋或改選「全部知識庫／全部狀態」</div>
             </div>`;
+        try { updateDocBulkBarUI(); } catch (_) {}
         return;
     }
 
@@ -1756,6 +1935,8 @@ function renderEnterpriseDocuments() {
     const visibleCount = Math.min(S._docListVisible, docsAll.length);
     const docs = docsAll.slice(0, visibleCount);
     const hasMore = docsAll.length > visibleCount;
+    S._visibleDocIds = docs.map(d => d.id);
+    pruneDocSelection((docsSource || []).map(d => d.id));
     
     function resolveDocFileUrl(fileUrl) {
         if (!fileUrl) return '';
@@ -1805,11 +1986,22 @@ function renderEnterpriseDocuments() {
         const nearEmpty = isNearEmptyDocContent(d);
         const canRetry = isManager && (ragStatus === 'failed' || ragStatus === 'pending');
         const contentPreview = String(d.content || '');
+        const selected = isManager && ensureDocSelectionSet().has(d.id);
+        const selectBox = isManager ? `
+            <input type="checkbox" class="doc-select-checkbox accent-indigo-400"
+                data-doc-id="${escapeHtml(d.id)}"
+                ${selected ? 'checked' : ''}
+                ${luminaChange('toggleDocSelection', [d.id, '__checked__'])}
+                aria-label="選取 ${escapeHtml(d.title || '文件')}"
+                data-lumina-stop>
+        ` : '';
         
         return `
-        <div class="p-4 rounded-2xl border border-slate-800 bg-slate-950/40 hover:bg-slate-900/50 transition-colors" data-doc-id="${escapeHtml(d.id)}">
+        <div class="p-4 rounded-2xl border border-slate-800 bg-slate-950/40 hover:bg-slate-900/50 transition-colors ${selected ? 'doc-card-selected' : ''}" data-doc-id="${escapeHtml(d.id)}">
             <div class="flex items-start justify-between gap-3 mb-2">
-                <div class="min-w-0">
+                <div class="min-w-0 flex items-start gap-2.5">
+                    ${selectBox}
+                    <div class="min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
                         <h4 class="font-semibold text-sm text-slate-200">${escapeHtml(d.title)}</h4>
                         ${versionBadge}
@@ -1824,6 +2016,7 @@ function renderEnterpriseDocuments() {
                             幾乎無文字內容 — 教練可能無法從此文件檢索
                         </div>
                     ` : ''}
+                    </div>
                 </div>
                 <div class="flex items-center gap-1 flex-shrink-0">
                     ${canRetry ? `
@@ -1948,6 +2141,7 @@ function renderEnterpriseDocuments() {
 
     // Wave 3 polish: keep version/history UI open across re-renders (rag poll, etc.)
     try { restoreDocUiPanels(); } catch (e) { console.warn('[Lumina] restoreDocUiPanels', e); }
+    try { updateDocBulkBarUI(); } catch (_) {}
 }
 
 function showMoreEnterpriseDocuments() {
