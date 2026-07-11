@@ -339,6 +339,7 @@ async function saveTeamDocument() {
                 }
             }
             
+            const nowIso = new Date().toISOString();
             newDoc = {
                 id: 'd_' + Date.now(),
                 title,
@@ -348,7 +349,24 @@ async function saveTeamDocument() {
                 filename,
                 kbId,
                 author: S.enterpriseSession.name,
-                createdAt: new Date().toISOString(),
+                authorMemberId: S.enterpriseSession.memberId,
+                createdAt: nowIso,
+                updatedAt: nowIso,
+                currentVersion: 1,
+                versions: [{
+                    version: 1,
+                    title,
+                    content,
+                    filename,
+                    fileUrl,
+                    docType,
+                    createdAt: nowIso,
+                    createdByMemberId: S.enterpriseSession.memberId,
+                    createdByName: S.enterpriseSession.name,
+                    changeNote: 'initial'
+                }],
+                status: 'active',
+                deletedAt: null,
                 ragStatus: 'pending',
                 rag: { status: 'pending', lastIndexedAt: null, lastError: null }
             };
@@ -621,6 +639,348 @@ async function retryDocumentRagIndex(docId) {
     S.ragSyncedGroupKey = null;
 }
 
+// ── W2-F: document version history (minimal UI) ────────────────────────────
+
+function getDocCurrentVersion(doc) {
+    const n = Number(doc?.currentVersion);
+    if (Number.isFinite(n) && n >= 1) return n;
+    if (Array.isArray(doc?.versions) && doc.versions.length) {
+        return Math.max(...doc.versions.map(v => Number(v.version) || 0), 1);
+    }
+    return 1;
+}
+
+function renderDocVersionBadge(doc) {
+    const v = getDocCurrentVersion(doc);
+    return `<span class="doc-version-badge" title="目前版本">v${v}</span>`;
+}
+
+function toggleDocVersionPanel(docId) {
+    if (!docId) return;
+    const panel = document.getElementById(`doc-ver-panel-${docId}`);
+    if (!panel) return;
+    const opening = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !opening);
+    if (opening) {
+        loadDocumentVersions(docId);
+    }
+}
+
+function toggleDocNewVersionForm(docId) {
+    if (!docId) return;
+    const form = document.getElementById(`doc-newver-form-${docId}`);
+    if (!form) return;
+    form.classList.toggle('hidden');
+    if (!form.classList.contains('hidden')) {
+        document.getElementById(`doc-newver-title-${docId}`)?.focus();
+    }
+}
+
+async function loadDocumentVersions(docId) {
+    if (!S.enterpriseSession || !docId) return;
+    const listEl = document.getElementById(`doc-ver-list-${docId}`);
+    if (!listEl) return;
+
+    listEl.innerHTML = `<div class="text-[11px] text-slate-500 py-2"><i class="fa-solid fa-spinner fa-spin mr-1"></i>載入版本歷史…</div>`;
+
+    // Offline / local: use embedded versions on the doc
+    if (S.enterpriseSession.offline) {
+        const docs = S.enterpriseGroupData?.documents || [];
+        const doc = docs.find(d => d.id === docId);
+        const versions = (doc?.versions || [])
+            .slice()
+            .sort((a, b) => (Number(b.version) || 0) - (Number(a.version) || 0));
+        renderDocumentVersionList(docId, versions, getDocCurrentVersion(doc));
+        return;
+    }
+
+    const qs = new URLSearchParams({
+        groupCode: S.enterpriseSession.groupCode,
+        documentId: docId,
+        memberId: S.enterpriseSession.memberId
+    });
+    const res = await enterpriseFetch(
+        'GET',
+        `/api/enterprise/group/document/versions?${qs.toString()}`
+    );
+    if (!res.ok) {
+        listEl.innerHTML = `<div class="text-[11px] text-red-400 py-2">載入失敗：${escapeHtml(res.error || '未知錯誤')}</div>`;
+        return;
+    }
+    const versions = Array.isArray(res.data?.versions) ? res.data.versions : [];
+    const currentVersion = res.data?.currentVersion || getDocCurrentVersion(
+        (S.enterpriseGroupData?.documents || []).find(d => d.id === docId)
+    );
+    // Keep session doc in sync
+    const doc = (S.enterpriseGroupData?.documents || []).find(d => d.id === docId);
+    if (doc && res.data?.currentVersion) {
+        doc.currentVersion = res.data.currentVersion;
+    }
+    renderDocumentVersionList(docId, versions, currentVersion);
+}
+
+function renderDocumentVersionList(docId, versions, currentVersion) {
+    const listEl = document.getElementById(`doc-ver-list-${docId}`);
+    if (!listEl) return;
+    if (!versions.length) {
+        listEl.innerHTML = `<div class="text-[11px] text-slate-500 py-2">尚無版本記錄</div>`;
+        return;
+    }
+    listEl.innerHTML = versions.map(v => {
+        const isCurrent = Number(v.version) === Number(currentVersion);
+        const when = v.createdAt ? new Date(v.createdAt).toLocaleString('zh-TW') : '—';
+        const author = v.createdByName || '—';
+        const note = v.changeNote ? escapeHtml(v.changeNote) : '<span class="opacity-50">（無備註）</span>';
+        return `
+            <button type="button"
+                class="doc-ver-row ${isCurrent ? 'is-current' : ''} focus-ring"
+                ${luminaAction('previewDocumentVersion', { arg: `${docId}:${v.version}` })}
+                title="預覽 v${v.version}">
+                <div class="doc-ver-row-main">
+                    <span class="doc-ver-num">v${v.version}</span>
+                    ${isCurrent ? '<span class="doc-ver-current-tag">目前</span>' : ''}
+                    <span class="doc-ver-title">${escapeHtml(v.title || '')}</span>
+                </div>
+                <div class="doc-ver-row-meta">
+                    <span>${escapeHtml(author)} · ${escapeHtml(when)}</span>
+                    <span class="doc-ver-note">${note}</span>
+                </div>
+            </button>
+        `;
+    }).join('');
+}
+
+async function previewDocumentVersion(token) {
+    if (!S.enterpriseSession || !token) return;
+    const parts = String(token).split(':');
+    const docId = parts[0];
+    const version = parseInt(parts[1], 10);
+    if (!docId || !Number.isFinite(version)) return;
+
+    const previewEl = document.getElementById(`doc-ver-preview-${docId}`);
+    if (previewEl) {
+        previewEl.classList.remove('hidden');
+        previewEl.innerHTML = `<div class="text-[11px] text-slate-500"><i class="fa-solid fa-spinner fa-spin mr-1"></i>載入 v${version}…</div>`;
+    }
+
+    if (S.enterpriseSession.offline) {
+        const doc = (S.enterpriseGroupData?.documents || []).find(d => d.id === docId);
+        const snap = (doc?.versions || []).find(v => Number(v.version) === version);
+        if (!snap) {
+            if (previewEl) previewEl.innerHTML = `<div class="text-[11px] text-red-400">找不到 v${version}</div>`;
+            return;
+        }
+        renderDocumentVersionPreview(docId, snap, doc?.currentVersion);
+        return;
+    }
+
+    const qs = new URLSearchParams({
+        groupCode: S.enterpriseSession.groupCode,
+        documentId: docId,
+        version: String(version),
+        memberId: S.enterpriseSession.memberId
+    });
+    const res = await enterpriseFetch(
+        'GET',
+        `/api/enterprise/group/document/version?${qs.toString()}`
+    );
+    if (!res.ok) {
+        if (previewEl) {
+            previewEl.innerHTML = `<div class="text-[11px] text-red-400">預覽失敗：${escapeHtml(res.error || '未知錯誤')}</div>`;
+        } else {
+            showToast('預覽失敗: ' + (res.error || '未知錯誤'), 'error');
+        }
+        return;
+    }
+    renderDocumentVersionPreview(docId, res.data?.version || res.data, res.data?.currentVersion);
+}
+
+function renderDocumentVersionPreview(docId, snap, currentVersion) {
+    const previewEl = document.getElementById(`doc-ver-preview-${docId}`);
+    if (!previewEl || !snap) return;
+    const v = snap.version;
+    const isCurrent = Number(v) === Number(currentVersion);
+    const content = String(snap.content || '');
+    const truncated = content.length > 2000 ? content.slice(0, 2000) + '…' : content;
+    previewEl.classList.remove('hidden');
+    previewEl.innerHTML = `
+        <div class="doc-ver-preview-head">
+            <span class="font-semibold text-slate-200">v${v} ${escapeHtml(snap.title || '')}</span>
+            ${isCurrent ? '<span class="doc-ver-current-tag">目前</span>' : ''}
+            <button type="button" class="doc-ver-close-btn focus-ring"
+                ${luminaAction('closeDocumentVersionPreview', { arg: docId })}
+                aria-label="關閉預覽">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="text-[10px] text-slate-500 mb-1.5">
+            ${escapeHtml(snap.createdByName || '—')}
+            ${snap.createdAt ? ' · ' + new Date(snap.createdAt).toLocaleString('zh-TW') : ''}
+            ${snap.changeNote ? ' · ' + escapeHtml(snap.changeNote) : ''}
+            ${snap.filename ? ' · ' + escapeHtml(snap.filename) : ''}
+        </div>
+        <pre class="doc-ver-preview-body custom-scroll">${escapeHtml(truncated || '（此版本無文字內容）')}</pre>
+    `;
+}
+
+function closeDocumentVersionPreview(docId) {
+    const previewEl = document.getElementById(`doc-ver-preview-${docId}`);
+    if (previewEl) {
+        previewEl.classList.add('hidden');
+        previewEl.innerHTML = '';
+    }
+}
+
+async function publishDocumentVersion(docId) {
+    if (!S.enterpriseSession || !docId) return;
+    if (S.enterpriseSession.role !== 'manager') {
+        return showToast('僅主管可發新版本', 'error');
+    }
+
+    const docs = S.enterpriseGroupData?.documents || [];
+    const doc = docs.find(d => d.id === docId);
+    if (!doc) return showToast('找不到文件', 'error');
+
+    const titleEl = document.getElementById(`doc-newver-title-${docId}`);
+    const contentEl = document.getElementById(`doc-newver-content-${docId}`);
+    const noteEl = document.getElementById(`doc-newver-note-${docId}`);
+
+    const title = (titleEl?.value || '').trim() || doc.title;
+    const content = (contentEl?.value || '').trim();
+    const changeNote = (noteEl?.value || '').trim();
+
+    if (!content) {
+        return showToast('請輸入新版本內容', 'error');
+    }
+
+    // Offline: push local version snapshot
+    if (S.enterpriseSession.offline) {
+        try {
+            const store = loadLocalEnterpriseStore();
+            const group = store.groups[normalizeEnterpriseCode(S.enterpriseSession.groupCode)];
+            const localDoc = group?.documents?.find(d => d.id === docId);
+            if (!localDoc) throw new Error('找不到文件');
+            if (!Array.isArray(localDoc.versions)) localDoc.versions = [];
+            const nextV = (Number(localDoc.currentVersion) || localDoc.versions.length || 1) + 1;
+            const nowIso = new Date().toISOString();
+            const snap = {
+                version: nextV,
+                title,
+                content,
+                filename: localDoc.filename || null,
+                fileUrl: localDoc.fileUrl || null,
+                docType: localDoc.docType || 'text',
+                createdAt: nowIso,
+                createdByMemberId: S.enterpriseSession.memberId,
+                createdByName: S.enterpriseSession.name,
+                changeNote: changeNote || null
+            };
+            localDoc.versions.push(snap);
+            localDoc.currentVersion = nextV;
+            localDoc.title = title;
+            localDoc.content = content;
+            localDoc.updatedAt = nowIso;
+            localDoc.author = S.enterpriseSession.name;
+            saveLocalEnterpriseStore(store);
+            Object.assign(doc, {
+                currentVersion: nextV,
+                title,
+                content,
+                updatedAt: nowIso,
+                versions: localDoc.versions,
+                author: S.enterpriseSession.name
+            });
+            // Best-effort reindex latest for offline coach
+            applyLocalDocRagStatus(docId, 'pending');
+            const ragOk = await syncDocumentToRag({
+                groupCode: S.enterpriseSession.groupCode,
+                kbId: doc.kbId || 'general',
+                docType: doc.docType || 'text',
+                title,
+                content,
+                filename: getRagFilenameForDoc(doc),
+                fileData: null,
+                documentId: docId
+            }, { toastOnError: false });
+            applyLocalDocRagStatus(docId, ragOk ? 'indexed' : 'failed', {
+                lastError: ragOk ? null : 'RAG 索引失敗'
+            });
+            showToast(ragOk ? `已發布 v${nextV}，知識庫已更新` : `已發布 v${nextV}，但索引失敗`, ragOk ? 'success' : 'error');
+            toggleDocNewVersionForm(docId);
+            renderEnterpriseDocuments();
+            // Re-open version panel
+            const panel = document.getElementById(`doc-ver-panel-${docId}`);
+            if (panel) {
+                panel.classList.remove('hidden');
+                loadDocumentVersions(docId);
+            }
+            S.ragSyncedGroupKey = null;
+            return;
+        } catch (e) {
+            return showToast('本機發版失敗: ' + e.message, 'error');
+        }
+    }
+
+    const payload = {
+        groupCode: S.enterpriseSession.groupCode,
+        managerId: S.enterpriseSession.memberId,
+        documentId: docId,
+        title,
+        content,
+        docType: doc.docType || 'text',
+        changeNote: changeNote || null
+    };
+
+    const res = await enterpriseFetch('POST', '/api/enterprise/group/document/version', payload);
+    if (!res.ok) {
+        return showToast('發新版本失敗: ' + (res.error || '未知錯誤'), 'error');
+    }
+
+    const updated = res.data?.document;
+    const nextV = res.data?.currentVersion || updated?.currentVersion;
+    const ragStatus = res.data?.ragStatus || updated?.ragStatus || 'pending';
+    const ragOk = res.data?.ragOk;
+
+    if (updated) {
+        const idx = docs.findIndex(d => d.id === docId);
+        if (idx >= 0) {
+            docs[idx] = { ...docs[idx], ...updated, currentVersion: nextV || updated.currentVersion };
+        }
+    } else {
+        doc.currentVersion = nextV || (getDocCurrentVersion(doc) + 1);
+        doc.title = title;
+        doc.content = content;
+        doc.updatedAt = new Date().toISOString();
+    }
+
+    applyLocalDocRagStatus(docId, ragStatus === 'indexed' || ragOk === true
+        ? 'indexed'
+        : (ragStatus === 'failed' || ragOk === false ? 'failed' : 'pending'), {
+        lastError: ragOk === false ? (res.data?.warning || '索引失敗') : null
+    });
+
+    if (ragOk === true || ragStatus === 'indexed') {
+        showToast(`已發布 v${nextV}，知識庫已可檢索`, 'success');
+    } else if (ragOk === false || ragStatus === 'failed') {
+        showToast(`已發布 v${nextV}，但知識庫索引失敗`, 'error');
+    } else {
+        showToast(`已發布 v${nextV}，知識庫索引處理中`, 'success');
+    }
+
+    if (titleEl) titleEl.value = '';
+    if (contentEl) contentEl.value = '';
+    if (noteEl) noteEl.value = '';
+    toggleDocNewVersionForm(docId);
+    S.ragSyncedGroupKey = null;
+    renderEnterpriseDocuments();
+    const panel = document.getElementById(`doc-ver-panel-${docId}`);
+    if (panel) {
+        panel.classList.remove('hidden');
+        loadDocumentVersions(docId);
+    }
+    refreshEnterpriseData();
+}
+
 async function deleteTeamDocument(docId) {
     if (!S.enterpriseSession) return;
     if (!confirm('確定要刪除此文件嗎？刪除後將無法恢復，且 AI 也無法讀取該資料。')) return;
@@ -882,10 +1242,16 @@ async function deleteTeamKnowledgeBase(kbId) {
     if (!confirm(`確定刪除知識庫「${label}」？庫內文件將一併移除，且教練無法再檢索。`)) return;
 
     try {
-        await deleteRagKnowledgeBase({
+        const data = await deleteRagKnowledgeBase({
             groupCode: S.enterpriseSession.groupCode,
             kbId
         });
+        // Align with deleteTeamDocument: RAG wipe fail → error toast, no false success
+        if (data && (data.ragDeleteOk === false || data.ok === false)) {
+            const msg = data.warning || data.error || '知識庫索引清除失敗，知識庫仍保留，請重試刪除';
+            showToast(msg, 'error');
+            return;
+        }
         if (S.ragKbItemsById) delete S.ragKbItemsById[kbId];
         S.checkedRagKbs = (S.checkedRagKbs || []).filter(id => id !== kbId);
         showToast(`已刪除知識庫「${label}」`, 'success');
@@ -969,21 +1335,24 @@ function renderEnterpriseDocuments() {
         const kbName = getRagKbLabel(kbId).replace(/\s*\([^)]*\)\s*$/, '').trim() || kbId;
         const kbBadge = `<span class="px-2 py-0.5 rounded text-[9px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/20"><i class="fa-solid fa-tag mr-1"></i>${escapeHtml(kbName)}</span>`;
         const ragBadge = renderDocRagStatusBadge(d);
+        const versionBadge = renderDocVersionBadge(d);
         const ragStatus = resolveDocRagStatus(d);
         const nearEmpty = isNearEmptyDocContent(d);
         const canRetry = isManager && (ragStatus === 'failed' || ragStatus === 'pending');
+        const contentPreview = String(d.content || '');
         
         return `
-        <div class="p-4 rounded-2xl border border-slate-800 bg-slate-950/40 hover:bg-slate-900/50 transition-colors">
+        <div class="p-4 rounded-2xl border border-slate-800 bg-slate-950/40 hover:bg-slate-900/50 transition-colors" data-doc-id="${escapeHtml(d.id)}">
             <div class="flex items-start justify-between gap-3 mb-2">
                 <div class="min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
                         <h4 class="font-semibold text-sm text-slate-200">${escapeHtml(d.title)}</h4>
+                        ${versionBadge}
                         ${typeBadge}
                         ${kbBadge}
                         ${ragBadge}
                     </div>
-                    <div class="text-[10px] text-slate-500 mt-0.5">發布者：${escapeHtml(d.author || '主管')} · ${new Date(d.createdAt).toLocaleString('zh-TW')}</div>
+                    <div class="text-[10px] text-slate-500 mt-0.5">發布者：${escapeHtml(d.author || '主管')} · ${new Date(d.createdAt).toLocaleString('zh-TW')}${d.updatedAt && d.updatedAt !== d.createdAt ? ' · 更新 ' + new Date(d.updatedAt).toLocaleString('zh-TW') : ''}</div>
                     ${nearEmpty ? `
                         <div class="doc-near-empty-warn mt-1.5" role="status">
                             <i class="fa-solid fa-triangle-exclamation"></i>
@@ -1002,6 +1371,13 @@ function renderEnterpriseDocuments() {
                         </button>
                     ` : ''}
                     ${isManager ? `
+                        <button type="button" ${luminaAction('toggleDocNewVersionForm', { arg: d.id })}
+                            class="doc-ver-action-btn focus-ring"
+                            title="發新版本"
+                            aria-label="發新版本 ${escapeHtml(d.title)}">
+                            <i class="fa-solid fa-code-branch"></i>
+                            <span>發新版</span>
+                        </button>
                         <button type="button" ${luminaAction('deleteTeamDocument', { arg: d.id })}
                             class="text-red-400 hover:text-red-300 text-xs min-h-[44px] min-w-[44px] px-2 py-1 rounded hover:bg-red-500/10 transition-colors focus-ring"
                             aria-label="刪除文件 ${escapeHtml(d.title)}">
@@ -1012,7 +1388,7 @@ function renderEnterpriseDocuments() {
             </div>
             
             ${isText ? `
-                <p class="text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">${escapeHtml(d.content)}</p>
+                <p class="text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">${escapeHtml(contentPreview)}</p>
             ` : ''}
             
             ${isPdf ? `
@@ -1022,10 +1398,10 @@ function renderEnterpriseDocuments() {
                         <span>開啟 PDF 檔案 (${escapeHtml(d.filename || '檢視文件')})</span>
                     </a>
                 </div>
-                ${d.content ? `
+                ${contentPreview ? `
                     <div class="mt-3">
                         <div class="text-[10px] text-slate-500 mb-1">擷取文字內容預覽 (已自動導入 AI 教練)：</div>
-                        <p class="text-[11px] text-slate-400 max-h-24 overflow-y-auto bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 leading-relaxed custom-scroll font-mono">${escapeHtml(d.content.slice(0, 500))}${d.content.length > 500 ? '...' : ''}</p>
+                        <p class="text-[11px] text-slate-400 max-h-24 overflow-y-auto bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 leading-relaxed custom-scroll font-mono">${escapeHtml(contentPreview.slice(0, 500))}${contentPreview.length > 500 ? '...' : ''}</p>
                     </div>
                 ` : ''}
             ` : ''}
@@ -1037,10 +1413,10 @@ function renderEnterpriseDocuments() {
                         <span>開啟 Excel 檔案 (${escapeHtml(d.filename || '檢視資料')})</span>
                     </a>
                 </div>
-                ${d.content ? `
+                ${contentPreview ? `
                     <div class="mt-3">
                         <div class="text-[10px] text-slate-500 mb-1">擷取試算表內容預覽 (已自動導入 AI 教練)：</div>
-                        <p class="text-[11px] text-slate-400 max-h-24 overflow-y-auto bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 leading-relaxed custom-scroll font-mono">${escapeHtml(d.content.slice(0, 500))}${d.content.length > 500 ? '...' : ''}</p>
+                        <p class="text-[11px] text-slate-400 max-h-24 overflow-y-auto bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 leading-relaxed custom-scroll font-mono">${escapeHtml(contentPreview.slice(0, 500))}${contentPreview.length > 500 ? '...' : ''}</p>
                     </div>
                 ` : ''}
             ` : ''}
@@ -1049,8 +1425,48 @@ function renderEnterpriseDocuments() {
                 <div class="mt-3">
                     <img src="${resolveDocFileUrl(d.fileUrl)}" class="max-h-48 rounded-xl border border-slate-800/80 object-contain hover:scale-[1.01] transition-transform cursor-pointer" ${luminaAction('openSafeUrl', { argFrom: 'src' })}>
                 </div>
-                <p class="text-xs text-slate-400 mt-2.5 whitespace-pre-wrap leading-relaxed"><i class="fa-solid fa-circle-info mr-1 text-purple-400"></i>${escapeHtml(d.content)}</p>
+                <p class="text-xs text-slate-400 mt-2.5 whitespace-pre-wrap leading-relaxed"><i class="fa-solid fa-circle-info mr-1 text-purple-400"></i>${escapeHtml(contentPreview)}</p>
             ` : ''}
+
+            <div class="doc-ver-toolbar mt-3">
+                <button type="button" class="doc-ver-history-btn focus-ring"
+                    ${luminaAction('toggleDocVersionPanel', { arg: d.id })}
+                    aria-expanded="false"
+                    aria-controls="doc-ver-panel-${escapeHtml(d.id)}">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                    <span>版本歷史</span>
+                </button>
+            </div>
+
+            <div id="doc-newver-form-${escapeHtml(d.id)}" class="doc-newver-form hidden mt-3">
+                <div class="text-[11px] font-medium text-purple-300 mb-2">
+                    <i class="fa-solid fa-code-branch mr-1"></i>發佈新版本（目前 v${getDocCurrentVersion(d)}）
+                </div>
+                <input id="doc-newver-title-${escapeHtml(d.id)}" type="text" maxlength="100"
+                    class="w-full mb-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-slate-200 focus-ring"
+                    placeholder="標題（可留空沿用）" value="${escapeHtml(d.title || '')}">
+                <textarea id="doc-newver-content-${escapeHtml(d.id)}" rows="4" maxlength="10000"
+                    class="w-full mb-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-slate-200 focus-ring custom-scroll"
+                    placeholder="新版本內容">${escapeHtml(isText ? contentPreview : '')}</textarea>
+                <input id="doc-newver-note-${escapeHtml(d.id)}" type="text" maxlength="200"
+                    class="w-full mb-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-slate-200 focus-ring"
+                    placeholder="變更備註（選填，例如：更新 Q3 流程）">
+                <div class="flex gap-2">
+                    <button type="button" class="flex-1 min-h-[40px] py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-xs font-medium focus-ring"
+                        ${luminaAction('publishDocumentVersion', { arg: d.id })}>
+                        <i class="fa-solid fa-cloud-arrow-up mr-1"></i>發布 v${getDocCurrentVersion(d) + 1}
+                    </button>
+                    <button type="button" class="min-h-[40px] px-3 py-2 rounded-xl border border-slate-700 text-slate-400 text-xs hover:bg-slate-800 focus-ring"
+                        ${luminaAction('toggleDocNewVersionForm', { arg: d.id })}>
+                        取消
+                    </button>
+                </div>
+            </div>
+
+            <div id="doc-ver-panel-${escapeHtml(d.id)}" class="doc-ver-panel hidden mt-3">
+                <div id="doc-ver-list-${escapeHtml(d.id)}" class="doc-ver-list space-y-1.5"></div>
+                <div id="doc-ver-preview-${escapeHtml(d.id)}" class="doc-ver-preview hidden mt-2"></div>
+            </div>
         </div>
     `;
     }).join('');

@@ -120,6 +120,66 @@ assert(
     /async function reindexEnterpriseDocumentsToRag[\s\S]*?role\s*!==\s*['"]manager['"]/.test(clientSrc)
 );
 
+// --- W2-REV P0: delete vs index race + KB soft-delete RAG fail ---
+const applyMatch = apiSrc.match(
+    /async function applyDocumentRagIndexResult[\s\S]*?\nasync function orchestrateDocumentRagIndex/
+);
+assert('applyDocumentRagIndexResult found', !!applyMatch);
+if (applyMatch) {
+    const apply = applyMatch[0];
+    assert(
+        'applyDocumentRagIndexResult reloads store before writeback',
+        /loadStore\s*\(/.test(apply)
+    );
+    assert(
+        'applyDocumentRagIndexResult checks isActiveDocument',
+        /isActiveDocument\s*\(/.test(apply)
+    );
+    assert(
+        'applyDocumentRagIndexResult compensates with proxyRagDeleteIndex (or helper)',
+        /compensateRagIndexAfterDelete|proxyRagDeleteIndex/.test(apply)
+    );
+    assert(
+        'applyDocumentRagIndexResult does not blindly set indexed without active check',
+        apply.indexOf('isActiveDocument') < apply.indexOf("'indexed'")
+    );
+}
+assert(
+    'persistDocumentRagStatus refuses indexed for inactive docs',
+    /status\s*===\s*['"]indexed['"]\s*&&\s*!isActiveDocument/.test(apiSrc)
+        || /!isActiveDocument\(doc\)\s*&&\s*status\s*===\s*['"]indexed['"]/.test(apiSrc)
+);
+
+const softKbMatch = apiSrc.match(/async function softDeleteKnowledgeBase[\s\S]*?\nasync function proxyRagDeleteKb/);
+assert('softDeleteKnowledgeBase found', !!softKbMatch);
+if (softKbMatch) {
+    const soft = softKbMatch[0];
+    assert(
+        'softDeleteKnowledgeBase calls proxyRagDeleteKb before cascade soft-delete',
+        soft.indexOf('proxyRagDeleteKb') < soft.indexOf("doc.status = 'deleted'")
+    );
+    assert(
+        'softDeleteKnowledgeBase returns ragDeleteOk:false on RAG wipe fail',
+        /ragDeleteOk:\s*false/.test(soft) && /RAG_DELETE_FAILED|索引清除失敗/.test(soft)
+    );
+    assert(
+        'softDeleteKnowledgeBase does not soft-delete docs when RAG fails',
+        soft.indexOf('ragDeleteOk: false') < soft.indexOf("doc.status = 'deleted'")
+    );
+    assert(
+        'softDeleteKnowledgeBase cascade unlinks uploads',
+        /unlinkSync/.test(soft) && /fileUrl/.test(soft)
+    );
+}
+assert(
+    'deleteTeamKnowledgeBase reads ragDeleteOk',
+    /async function deleteTeamKnowledgeBase[\s\S]*?ragDeleteOk\s*===\s*false/.test(docsSrc)
+);
+assert(
+    'deleteTeamKnowledgeBase error toast on rag fail (no false success)',
+    /async function deleteTeamKnowledgeBase[\s\S]*?showToast\(\s*msg,\s*['"]error['"]\s*\)/.test(docsSrc)
+);
+
 if (failed) {
     console.error(`\n${failed} check(s) failed`);
     process.exit(1);

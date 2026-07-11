@@ -31,6 +31,8 @@
     "test:enterprise": "node scripts/test-enterprise.js",
     "test:coach-rag": "node scripts/test-coach-rag.js",
     "test:security-matrix": "node scripts/test-security-matrix.js",
+    "test:w2-kb": "node scripts/test-w2-kb-sync.js",
+    "test:w2-versions": "node scripts/test-w2-versions.js",
     "test:integration": "node scripts/test-integration.js",
     "seed:demo": "node scripts/seed-demo.js",
     "backup:rag": "node scripts/backup-rag-storage.js",

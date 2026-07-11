@@ -518,6 +518,146 @@ function getRagFilenameForDoc(doc) {
     return '';
 }
 
+// ── W2-F: Document version history (embedded on document) ──────────────────
+// RAG keeps a single active index for the latest version only (no multi-version vectors).
+
+function computeContentHash(content) {
+    return crypto.createHash('sha256').update(String(content || ''), 'utf8').digest('hex');
+}
+
+/**
+ * Snapshot of a document version for history (full content retained server-side).
+ * @returns {{ version, title, content, contentHash, filename, fileUrl, docType, createdAt, createdByMemberId, createdByName, changeNote, ragRefHint }}
+ */
+function buildDocumentVersionSnapshot(doc, fields = {}) {
+    const title = fields.title != null ? fields.title : (doc?.title || '');
+    const content = fields.content != null ? fields.content : (doc?.content || '');
+    const filename = fields.filename !== undefined ? fields.filename : (doc?.filename || null);
+    const fileUrl = fields.fileUrl !== undefined ? fields.fileUrl : (doc?.fileUrl || null);
+    const docType = fields.docType || doc?.docType || 'text';
+    const version = fields.version != null ? fields.version : (doc?.currentVersion || 1);
+    return {
+        version,
+        title,
+        content,
+        contentHash: fields.contentHash || computeContentHash(content),
+        filename,
+        fileUrl,
+        docType,
+        createdAt: fields.createdAt || new Date().toISOString(),
+        createdByMemberId: fields.createdByMemberId != null
+            ? fields.createdByMemberId
+            : (doc?.authorMemberId || null),
+        createdByName: fields.createdByName != null
+            ? fields.createdByName
+            : (doc?.author || null),
+        changeNote: fields.changeNote != null ? fields.changeNote : null,
+        ragRefHint: fields.ragRefHint != null
+            ? fields.ragRefHint
+            : (doc?.rag?.refDocId || null)
+    };
+}
+
+/**
+ * Ensure document has currentVersion + versions[] (lazy migrate legacy docs).
+ * Mutates doc in place.
+ */
+function ensureDocumentVersions(doc, authorMeta = {}) {
+    if (!doc) return doc;
+    if (!Array.isArray(doc.versions)) doc.versions = [];
+    const ver = Number(doc.currentVersion);
+    if (!Number.isFinite(ver) || ver < 1) {
+        doc.currentVersion = doc.versions.length
+            ? Math.max(...doc.versions.map(v => Number(v.version) || 0), 1)
+            : 1;
+    }
+    if (doc.versions.length === 0) {
+        doc.versions.push(buildDocumentVersionSnapshot(doc, {
+            version: doc.currentVersion || 1,
+            createdAt: doc.createdAt || new Date().toISOString(),
+            createdByMemberId: authorMeta.createdByMemberId || doc.authorMemberId || null,
+            createdByName: authorMeta.createdByName || doc.author || null,
+            changeNote: authorMeta.changeNote || 'initial'
+        }));
+    }
+    return doc;
+}
+
+/** List payload entry — no full content (hasContent flag only). */
+function summarizeVersionMeta(v) {
+    if (!v) return null;
+    const hasContent = !!(String(v.content || '').trim()) || !!(v.fileUrl);
+    return {
+        version: v.version,
+        title: v.title || '',
+        createdAt: v.createdAt || null,
+        createdByName: v.createdByName || null,
+        changeNote: v.changeNote || null,
+        hasContent,
+        docType: v.docType || null,
+        filename: v.filename || null
+    };
+}
+
+/**
+ * Resolve group membership for document read APIs (member-readable).
+ * Accepts memberId (enterprise session) and/or JWT (assertRagGroupAccess fallback).
+ */
+async function assertDocumentReadAccess(req, store, group, { memberId, groupCode } = {}) {
+    const authUser = await getOptionalAuth(req);
+    if (memberId) {
+        const memberCheck = await assertEnterpriseMember(group, memberId, authUser, { store, bind: false });
+        if (!memberCheck.ok) {
+            return {
+                ok: false,
+                status: memberCheck.status || 403,
+                error: memberCheck.error || '你不是此群組成員',
+                code: memberCheck.code || 'GROUP_FORBIDDEN'
+            };
+        }
+        return { ok: true, member: memberCheck.member, authUser, store };
+    }
+    const access = await assertRagGroupAccess(groupCode || group.code, authUser, { requireManager: false });
+    if (!access.ok) {
+        return { ok: false, status: access.status, error: access.error, code: access.code };
+    }
+    return { ok: true, member: access.member, authUser, store: access.store || store };
+}
+
+/**
+ * Save optional base64 upload for a document version; returns { ok, fileUrl?, filename?, error?, code? }.
+ */
+function trySaveDocumentUpload(body, docType) {
+    if (!(docType === 'pdf' || docType === 'image' || docType === 'excel')) {
+        return { ok: true, fileUrl: null, filename: body.filename || null };
+    }
+    if (!body.fileData || !body.filename) {
+        return { ok: true, fileUrl: null, filename: body.filename || null };
+    }
+    try {
+        const fileBuffer = Buffer.from(body.fileData, 'base64');
+        const ext = (path.extname(body.filename) || (docType === 'pdf' ? '.pdf' : docType === 'excel' ? '.xlsx' : '.png')).toLowerCase();
+        if (!ALLOWED_UPLOAD_EXT.has(ext)) {
+            return { ok: false, error: '不支援的檔案類型', code: 'VALIDATION_ERROR' };
+        }
+        if (fileBuffer.length > MAX_UPLOAD_BYTES) {
+            return { ok: false, error: '檔案過大（上限 5MB）', code: 'VALIDATION_ERROR' };
+        }
+        const safeBase = path.basename(body.filename, ext).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+        const uniqueFilename = `${uid()}-${safeBase}${ext}`;
+        const filePath = path.join(UPLOADS_DIR, uniqueFilename);
+        fs.writeFileSync(filePath, fileBuffer);
+        return {
+            ok: true,
+            fileUrl: `/uploads/${uniqueFilename}`,
+            filename: body.filename,
+            fileBuffer
+        };
+    } catch (e) {
+        return { ok: false, error: '檔案儲存失敗: ' + e.message, code: 'INTERNAL_ERROR' };
+    }
+}
+
 /** Align with rag_service.normalize_kb_id: [a-z0-9_-], default general. */
 function normalizeKbId(value) {
     const cleaned = String(value || 'general').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
@@ -657,9 +797,11 @@ function resolveKbForWrite(group, kbIdRaw, options = {}) {
 }
 
 /**
- * Soft-delete a KB: cascade soft-delete its documents, best-effort wipe RAG index, mark status=deleted.
- * Mutates group; caller must saveStore.
- * @returns {{ ok:true, kb_id, documentsSoftDeleted, ragDeleteOk, warning? } | { ok:false, status, error, code }}
+ * Soft-delete a KB: wipe RAG index first, then cascade soft-delete docs + mark status=deleted.
+ * Aligns with document/delete P0 — if RAG wipe fails, do NOT cascade soft-delete metadata.
+ * Mutates group only on success; caller must saveStore when ok:true.
+ * @returns {{ ok:true, kb_id, documentsSoftDeleted, ragDeleteOk:true }
+ *         | { ok:false, status, error, code, ragDeleteOk?, warning?, kb_id?, documentsSoftDeleted? }}
  */
 async function softDeleteKnowledgeBase(group, kbIdRaw) {
     const kbId = normalizeKbId(kbIdRaw);
@@ -675,20 +817,45 @@ async function softDeleteKnowledgeBase(group, kbIdRaw) {
         return { ok: false, status: 404, error: '知識庫不存在', code: 'KB_NOT_FOUND' };
     }
 
+    // Wipe RAG index before any metadata soft-delete (D2 consistency, same as document/delete).
+    const ragResult = await proxyRagDeleteKb(normalizeCode(group.code), kbId);
+    if (!ragResult.ok) {
+        console.warn('[Lumina API] RAG KB index delete failed — abort soft-delete:', ragResult.text);
+        return {
+            ok: false,
+            status: 200,
+            error: '知識庫索引清除失敗，知識庫仍保留，請重試刪除',
+            code: 'RAG_DELETE_FAILED',
+            kb_id: kbId,
+            documentsSoftDeleted: 0,
+            ragDeleteOk: false,
+            warning: '知識庫索引清除失敗，知識庫與文件仍保留於列表，請重試刪除'
+        };
+    }
+
     const now = new Date().toISOString();
     let documentsSoftDeleted = 0;
     for (const doc of group.documents || []) {
         if (!isActiveDocument(doc)) continue;
         if (normalizeKbId(doc.kbId || 'general') !== kbId) continue;
+
+        // Cascade unlink uploads when fileUrl points at local /uploads
+        if (doc.fileUrl) {
+            try {
+                const baseName = path.basename(doc.fileUrl);
+                const filePath = path.join(UPLOADS_DIR, baseName);
+                if (filePath.startsWith(UPLOADS_DIR) && fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            } catch (e) {
+                console.warn('[Lumina Backend] KB cascade 檔案刪除失敗:', e.message);
+            }
+        }
+
         doc.status = 'deleted';
         doc.deletedAt = now;
         setDocumentRagStatus(doc, 'deleted');
         documentsSoftDeleted++;
-    }
-
-    const ragResult = await proxyRagDeleteKb(normalizeCode(group.code), kbId);
-    if (!ragResult.ok) {
-        console.warn('[Lumina API] RAG KB index delete failed:', ragResult.text);
     }
 
     kb.status = 'deleted';
@@ -700,8 +867,7 @@ async function softDeleteKnowledgeBase(group, kbIdRaw) {
         ok: true,
         kb_id: kbId,
         documentsSoftDeleted,
-        ragDeleteOk: ragResult.ok,
-        warning: ragResult.ok ? undefined : '知識庫已軟刪，但索引目錄清除失敗'
+        ragDeleteOk: true
     };
 }
 
@@ -762,9 +928,36 @@ async function persistDocumentRagStatus(groupCode, lookup, status, extra = {}) {
     if (!group) return false;
     const doc = findGroupDocument(group, lookup);
     if (!doc) return false;
+    // Never mark soft-deleted documents as indexed (ghost-index race guard).
+    if (status === 'indexed' && !isActiveDocument(doc)) {
+        console.warn(
+            '[Lumina Backend] refuse to mark deleted doc as indexed:',
+            doc.id || lookup.documentId || lookup.filename
+        );
+        return false;
+    }
     setDocumentRagStatus(doc, status, extra);
     await saveStore(store);
     return true;
+}
+
+/**
+ * After a successful index that raced with soft-delete: purge the just-written vectors.
+ * Best-effort; logs on failure for observability.
+ */
+async function compensateRagIndexAfterDelete(groupCode, doc) {
+    if (!doc) return { ok: false, text: 'document missing' };
+    const kbId = doc.kbId || 'general';
+    const ragFilename = getRagFilenameForDoc(doc);
+    if (!ragFilename) return { ok: true, text: 'no filename' };
+    console.warn(
+        `[Lumina Backend] index completed after delete; compensating purge doc=${doc.id} file=${ragFilename}`
+    );
+    const purge = await proxyRagDeleteIndex(normalizeCode(groupCode), kbId, ragFilename);
+    if (!purge.ok) {
+        console.warn('[Lumina Backend] compensate index delete failed:', purge.text);
+    }
+    return purge;
 }
 
 async function proxyRagDeleteIndex(groupCode, kbId, filename) {
@@ -962,6 +1155,7 @@ function raceWithTimeout(promise, ms) {
 /**
  * Fire-and-forget completion after timed-out sync path.
  * Reloads store so concurrent writes are not clobbered by stale in-memory doc.
+ * Index writeback goes through applyDocumentRagIndexResult (reload + isActiveDocument + compensate).
  */
 async function runBackgroundRagIndex(groupCode, docId, options = {}) {
     const key = `${normalizeCode(groupCode)}:${docId}`;
@@ -977,24 +1171,27 @@ async function runBackgroundRagIndex(groupCode, docId, options = {}) {
         if (doc.ragStatus === 'indexed') return;
 
         const result = await indexDocumentWithRetry(groupCode, doc, options);
-        if (result.ok) {
-            await persistDocumentRagStatus(groupCode, { documentId: docId }, 'indexed', {
-                chunks: result.chunks,
-                lastError: null
-            });
+        // applyDocumentRagIndexResult reloads + aborts/compensates if soft-deleted during index
+        const applied = await applyDocumentRagIndexResult(groupCode, doc, result);
+        if (applied && applied.aborted) {
+            console.warn(`[Lumina Backend] background RAG index aborted (doc deleted): ${docId}`);
+        } else if (result.ok) {
             console.log(`[Lumina Backend] background RAG index ok: ${docId}`);
         } else {
-            await persistDocumentRagStatus(groupCode, { documentId: docId }, 'failed', {
-                lastError: String(result.lastError || 'RAG index failed').slice(0, 500)
-            });
             console.warn(`[Lumina Backend] background RAG index failed: ${docId}`, result.lastError);
         }
     } catch (e) {
         console.warn('[Lumina Backend] background RAG index error:', e.message);
         try {
-            await persistDocumentRagStatus(groupCode, { documentId: docId }, 'failed', {
-                lastError: String(e.message || 'RAG index failed').slice(0, 500)
-            });
+            // Only write failed if still active — avoid clobbering deleted status
+            const store2 = prepareStore(await loadStore());
+            const group2 = getGroup(store2, normalizeCode(groupCode));
+            const fresh = group2 ? findGroupDocument(group2, { documentId: docId }) : null;
+            if (fresh && isActiveDocument(fresh)) {
+                await persistDocumentRagStatus(groupCode, { documentId: docId }, 'failed', {
+                    lastError: String(e.message || 'RAG index failed').slice(0, 500)
+                });
+            }
         } catch (_) {}
     } finally {
         ragBackgroundIndexJobs.delete(key);
@@ -1004,20 +1201,45 @@ async function runBackgroundRagIndex(groupCode, docId, options = {}) {
 /**
  * Persist index result after work completes (used by both sync response and timeout tail).
  * Reloads store so concurrent enterprise writes are not clobbered.
+ * If doc was soft-deleted during index: never write indexed; compensate with proxyRagDeleteIndex.
  */
 async function applyDocumentRagIndexResult(groupCode, doc, result) {
     if (!doc?.id) return result;
+
+    // Reload so concurrent soft-delete wins over index writeback
+    const store = prepareStore(await loadStore());
+    const group = getGroup(store, normalizeCode(groupCode));
+    if (!group) {
+        if (result && result.ok) await compensateRagIndexAfterDelete(groupCode, doc);
+        return { ...(result || {}), ok: false, aborted: true, lastError: 'group missing after index' };
+    }
+    const fresh = findGroupDocument(group, { documentId: doc.id });
+    if (!fresh || !isActiveDocument(fresh)) {
+        // Soft-deleted while indexing — abort metadata write + purge vectors that just landed
+        if (result && result.ok) {
+            await compensateRagIndexAfterDelete(groupCode, fresh || doc);
+        }
+        console.warn(
+            `[Lumina Backend] skip index writeback — doc not active: ${doc.id}`
+        );
+        return {
+            ...(result || {}),
+            ok: false,
+            aborted: true,
+            lastError: 'document deleted during index'
+        };
+    }
+
     if (result && result.ok) {
+        setDocumentRagStatus(fresh, 'indexed', { chunks: result.chunks, lastError: null });
         setDocumentRagStatus(doc, 'indexed', { chunks: result.chunks, lastError: null });
-        await persistDocumentRagStatus(groupCode, { documentId: doc.id }, 'indexed', {
-            chunks: result.chunks,
-            lastError: null
-        });
+        await saveStore(store);
         return result;
     }
     const lastError = String((result && result.lastError) || 'RAG index failed').slice(0, 500);
+    setDocumentRagStatus(fresh, 'failed', { lastError });
     setDocumentRagStatus(doc, 'failed', { lastError });
-    await persistDocumentRagStatus(groupCode, { documentId: doc.id }, 'failed', { lastError });
+    await saveStore(store);
     return result;
 }
 
@@ -1460,6 +1682,7 @@ async function handleEnterprise(req, res, urlPath, method) {
             if (!kbResolve.ok) {
                 return sendError(res, kbResolve.status, kbResolve.error, kbResolve.code);
             }
+            const nowIso = new Date().toISOString();
             const doc = {
                 id: uid(),
                 title,
@@ -1469,7 +1692,14 @@ async function handleEnterprise(req, res, urlPath, method) {
                 filename: body.filename || null,
                 kbId: kbResolve.kb.id,
                 author: manager.name,
-                createdAt: new Date().toISOString(),
+                authorMemberId: manager.id,
+                createdAt: nowIso,
+                updatedAt: nowIso,
+                // W2-F: version history starts at v1
+                currentVersion: 1,
+                versions: [],
+                status: 'active',
+                deletedAt: null,
                 // D2: Enterprise success first; RAG index may lag
                 ragStatus: 'pending',
                 rag: {
@@ -1480,6 +1710,11 @@ async function handleEnterprise(req, res, urlPath, method) {
                     chunks: null
                 }
             };
+            ensureDocumentVersions(doc, {
+                createdByMemberId: manager.id,
+                createdByName: manager.name,
+                changeNote: clampText(body.changeNote, 200) || 'initial'
+            });
             group.documents.unshift(doc);
             ensureKnowledgeBases(group);
             await saveStore(store);
@@ -1628,6 +1863,346 @@ async function handleEnterprise(req, res, urlPath, method) {
                 ok: true,
                 ragDeleteOk: true,
                 ragStatus: doc.ragStatus
+            });
+        });
+    }
+
+    // ── W2-F: publish new document version (manager only) ──
+    // RAG: overwrite single active index with latest content (no multi-version vectors).
+    if (method === 'POST' && urlPath === '/api/enterprise/group/document/version') {
+        return readBody(req).then(async body => {
+            const code = normalizeCode(body.groupCode);
+            const managerId = body.managerId;
+            const docId = body.documentId || body.document_id;
+
+            const group = getGroup(store, code);
+            if (!group) return sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, managerId, authUser, { store });
+            if (!memberCheck.ok) {
+                return sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
+            }
+            if (memberCheck.member.role !== 'manager') {
+                return sendError(res, 403, '僅主管可管理知識庫', 'ROLE_FORBIDDEN');
+            }
+            if (!docId) {
+                return sendError(res, 400, '缺少 documentId', 'VALIDATION_ERROR');
+            }
+
+            const doc = findGroupDocument(group, { documentId: docId });
+            if (!doc || !isActiveDocument(doc)) {
+                return sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+            }
+
+            ensureDocumentVersions(doc, {
+                createdByMemberId: doc.authorMemberId || null,
+                createdByName: doc.author || null
+            });
+
+            const manager = memberCheck.member;
+            const prevRagFilename = getRagFilenameForDoc(doc);
+
+            // Merge fields: omitted fields keep current document values
+            const nextTitle = body.title != null
+                ? (clampText(body.title, 100) || doc.title)
+                : doc.title;
+            const nextDocType = body.docType != null
+                ? (clampText(body.docType, 10) || doc.docType || 'text')
+                : (doc.docType || 'text');
+            let nextContent = body.content != null
+                ? clampText(body.content, 10000)
+                : doc.content;
+            const changeNote = clampText(body.changeNote, 200) || null;
+
+            if (nextDocType === 'text' && body.content !== undefined && !String(nextContent || '').trim()) {
+                return sendError(res, 400, '請輸入文件內容', 'VALIDATION_ERROR');
+            }
+            if (body.title !== undefined && !String(nextTitle || '').trim()) {
+                return sendError(res, 400, '請輸入標題', 'VALIDATION_ERROR');
+            }
+
+            const upload = trySaveDocumentUpload(body, nextDocType);
+            if (!upload.ok) {
+                return sendError(res, 400, upload.error || '檔案儲存失敗', upload.code || 'VALIDATION_ERROR');
+            }
+
+            let nextFileUrl = doc.fileUrl || null;
+            let nextFilename = doc.filename || null;
+            if (upload.fileUrl) {
+                nextFileUrl = upload.fileUrl;
+                nextFilename = upload.filename || body.filename || nextFilename;
+            } else if (body.filename != null && body.filename !== '') {
+                nextFilename = clampText(body.filename, 200) || nextFilename;
+            }
+
+            const nextVersion = (Number(doc.currentVersion) || 1) + 1;
+            const nowIso = new Date().toISOString();
+            const snapshot = buildDocumentVersionSnapshot(doc, {
+                version: nextVersion,
+                title: nextTitle,
+                content: nextContent,
+                filename: nextFilename,
+                fileUrl: nextFileUrl,
+                docType: nextDocType,
+                createdAt: nowIso,
+                createdByMemberId: manager.id,
+                createdByName: manager.name,
+                changeNote
+            });
+
+            doc.versions.push(snapshot);
+            doc.currentVersion = nextVersion;
+            doc.title = nextTitle;
+            doc.content = nextContent;
+            doc.docType = nextDocType;
+            doc.filename = nextFilename;
+            doc.fileUrl = nextFileUrl;
+            doc.updatedAt = nowIso;
+            doc.author = manager.name;
+            doc.authorMemberId = manager.id;
+            setDocumentRagStatus(doc, 'pending', { lastError: null });
+
+            await saveStore(store);
+
+            // If RAG index key would change, best-effort purge old key before reindex
+            const nextRagFilename = getRagFilenameForDoc(doc);
+            if (prevRagFilename && nextRagFilename && prevRagFilename !== nextRagFilename) {
+                await proxyRagDeleteIndex(code, doc.kbId || 'general', prevRagFilename);
+            }
+
+            let fileBuffer = upload.fileBuffer || null;
+            if (!fileBuffer && body.fileData && typeof body.fileData === 'string') {
+                try {
+                    fileBuffer = Buffer.from(body.fileData, 'base64');
+                } catch (_) {
+                    fileBuffer = null;
+                }
+            }
+
+            const ragOrchestration = await orchestrateDocumentRagIndex(code, doc, {
+                fileData: body.fileData || null,
+                fileBuffer,
+                kbId: doc.kbId
+            });
+
+            sendJson(res, 200, {
+                ok: true,
+                document: ragOrchestration.document || doc,
+                currentVersion: doc.currentVersion,
+                ragStatus: ragOrchestration.ragStatus || doc.ragStatus || 'pending',
+                ragOk: ragOrchestration.ragOk,
+                ragPending: !!ragOrchestration.ragPending,
+                warning: ragOrchestration.warning
+            });
+        });
+    }
+
+    // ── W2-F: list document versions (group members, no full content) ──
+    if (
+        (method === 'GET' && urlPath === '/api/enterprise/group/document/versions')
+        || (method === 'POST' && urlPath === '/api/enterprise/group/document/versions')
+    ) {
+        const handleListVersions = async (body = {}) => {
+            const query = method === 'GET' ? parseQuery(req) : null;
+            const code = normalizeCode(
+                (query && (query.get('groupCode') || query.get('group_code'))) || body.groupCode || body.group_code
+            );
+            const docId = (query && (query.get('documentId') || query.get('document_id')))
+                || body.documentId || body.document_id;
+            const memberId = (query && (query.get('memberId') || query.get('member_id')))
+                || body.memberId || body.member_id;
+
+            if (!code) return sendError(res, 400, '缺少 groupCode', 'VALIDATION_ERROR');
+            if (!docId) return sendError(res, 400, '缺少 documentId', 'VALIDATION_ERROR');
+
+            const group = getGroup(store, code);
+            if (!group) return sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+
+            const access = await assertDocumentReadAccess(req, store, group, { memberId, groupCode: code });
+            if (!access.ok) {
+                return sendError(res, access.status, access.error, access.code);
+            }
+
+            // History is readable for soft-deleted docs too (audit); prefer active match
+            let doc = findGroupDocument(group, { documentId: docId });
+            if (!doc) {
+                doc = (group.documents || []).find(d => d.id === docId) || null;
+            }
+            if (!doc) return sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+
+            ensureDocumentVersions(doc, {
+                createdByMemberId: doc.authorMemberId || null,
+                createdByName: doc.author || null
+            });
+            // Persist lazy migration so subsequent reads are consistent
+            await saveStore(store);
+
+            const versions = (doc.versions || [])
+                .slice()
+                .sort((a, b) => (Number(b.version) || 0) - (Number(a.version) || 0))
+                .map(summarizeVersionMeta)
+                .filter(Boolean);
+
+            sendJson(res, 200, {
+                ok: true,
+                documentId: doc.id,
+                currentVersion: doc.currentVersion || 1,
+                versions
+            });
+        };
+
+        if (method === 'POST') {
+            return readBody(req).then(body => handleListVersions(body || {}));
+        }
+        return handleListVersions({});
+    }
+
+    // ── W2-F: get one document version (full content, members) ──
+    if (
+        (method === 'GET' && urlPath === '/api/enterprise/group/document/version')
+        || (method === 'POST' && urlPath === '/api/enterprise/group/document/version/get')
+    ) {
+        const handleGetVersion = async (body = {}) => {
+            const query = method === 'GET' ? parseQuery(req) : null;
+            const code = normalizeCode(
+                (query && (query.get('groupCode') || query.get('group_code'))) || body.groupCode || body.group_code
+            );
+            const docId = (query && (query.get('documentId') || query.get('document_id')))
+                || body.documentId || body.document_id;
+            const versionRaw = (query && (query.get('version') || query.get('v')))
+                || body.version || body.v;
+            const memberId = (query && (query.get('memberId') || query.get('member_id')))
+                || body.memberId || body.member_id;
+
+            if (!code) return sendError(res, 400, '缺少 groupCode', 'VALIDATION_ERROR');
+            if (!docId) return sendError(res, 400, '缺少 documentId', 'VALIDATION_ERROR');
+            const versionNum = parseInt(versionRaw, 10);
+            if (!Number.isFinite(versionNum) || versionNum < 1) {
+                return sendError(res, 400, '缺少或無效的 version', 'VALIDATION_ERROR');
+            }
+
+            const group = getGroup(store, code);
+            if (!group) return sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+
+            const access = await assertDocumentReadAccess(req, store, group, { memberId, groupCode: code });
+            if (!access.ok) {
+                return sendError(res, access.status, access.error, access.code);
+            }
+
+            let doc = findGroupDocument(group, { documentId: docId });
+            if (!doc) {
+                doc = (group.documents || []).find(d => d.id === docId) || null;
+            }
+            if (!doc) return sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+
+            ensureDocumentVersions(doc, {
+                createdByMemberId: doc.authorMemberId || null,
+                createdByName: doc.author || null
+            });
+
+            const snap = (doc.versions || []).find(v => Number(v.version) === versionNum);
+            if (!snap) {
+                return sendError(res, 404, '找不到該版本', 'DOC_VERSION_NOT_FOUND');
+            }
+
+            sendJson(res, 200, {
+                ok: true,
+                documentId: doc.id,
+                currentVersion: doc.currentVersion || 1,
+                version: {
+                    version: snap.version,
+                    title: snap.title,
+                    content: snap.content,
+                    contentHash: snap.contentHash || null,
+                    filename: snap.filename || null,
+                    fileUrl: snap.fileUrl || null,
+                    docType: snap.docType || 'text',
+                    createdAt: snap.createdAt,
+                    createdByMemberId: snap.createdByMemberId || null,
+                    createdByName: snap.createdByName || null,
+                    changeNote: snap.changeNote || null,
+                    ragRefHint: snap.ragRefHint || null
+                }
+            });
+        };
+
+        if (method === 'POST') {
+            return readBody(req).then(body => handleGetVersion(body || {}));
+        }
+        return handleGetVersion({});
+    }
+
+    // ── W2-F: restore soft-deleted document (manager only) ──
+    if (method === 'POST' && urlPath === '/api/enterprise/group/document/restore') {
+        return readBody(req).then(async body => {
+            const code = normalizeCode(body.groupCode);
+            const managerId = body.managerId;
+            const docId = body.documentId || body.document_id;
+            const reindex = body.reindex !== false && body.reIndex !== false;
+
+            const group = getGroup(store, code);
+            if (!group) return sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, managerId, authUser, { store });
+            if (!memberCheck.ok) {
+                return sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
+            }
+            if (memberCheck.member.role !== 'manager') {
+                return sendError(res, 403, '僅主管可管理知識庫', 'ROLE_FORBIDDEN');
+            }
+            if (!docId) {
+                return sendError(res, 400, '缺少 documentId', 'VALIDATION_ERROR');
+            }
+
+            const doc = (group.documents || []).find(d => d.id === docId);
+            if (!doc) return sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+
+            if (isActiveDocument(doc)) {
+                return sendJson(res, 200, {
+                    ok: true,
+                    document: doc,
+                    currentVersion: doc.currentVersion || 1,
+                    ragStatus: doc.ragStatus || doc.rag?.status || null,
+                    alreadyActive: true
+                });
+            }
+
+            doc.status = 'active';
+            doc.deletedAt = null;
+            doc.updatedAt = new Date().toISOString();
+            ensureDocumentVersions(doc, {
+                createdByMemberId: doc.authorMemberId || null,
+                createdByName: doc.author || null
+            });
+
+            if (reindex) {
+                setDocumentRagStatus(doc, 'pending', { lastError: null });
+                await saveStore(store);
+                const ragOrchestration = await orchestrateDocumentRagIndex(code, doc, {
+                    kbId: doc.kbId
+                });
+                return sendJson(res, 200, {
+                    ok: true,
+                    document: ragOrchestration.document || doc,
+                    currentVersion: doc.currentVersion || 1,
+                    ragStatus: ragOrchestration.ragStatus || doc.ragStatus || 'pending',
+                    ragOk: ragOrchestration.ragOk,
+                    ragPending: !!ragOrchestration.ragPending,
+                    warning: ragOrchestration.warning,
+                    restored: true
+                });
+            }
+
+            setDocumentRagStatus(doc, 'pending', { lastError: null });
+            await saveStore(store);
+            sendJson(res, 200, {
+                ok: true,
+                document: doc,
+                currentVersion: doc.currentVersion || 1,
+                ragStatus: doc.ragStatus || 'pending',
+                restored: true
             });
         });
     }
@@ -2118,6 +2693,22 @@ const server = http.createServer(async (req, res) => {
                 }
 
                 const result = await softDeleteKnowledgeBase(group, kbIdRaw);
+                // RAG wipe failed: no metadata mutation — surface ok:false + ragDeleteOk:false
+                if (result.ragDeleteOk === false) {
+                    console.warn(
+                        `[Lumina API] KB delete aborted (RAG wipe fail) group=${normalizeCode(groupCode)} kb=${result.kb_id}`
+                    );
+                    sendJson(res, 200, {
+                        ok: false,
+                        kb_id: result.kb_id,
+                        documentsSoftDeleted: 0,
+                        ragDeleteOk: false,
+                        warning: result.warning,
+                        error: result.error,
+                        code: result.code || 'RAG_DELETE_FAILED'
+                    });
+                    return;
+                }
                 if (!result.ok) {
                     sendError(res, result.status, result.error, result.code);
                     return;
@@ -2127,8 +2718,7 @@ const server = http.createServer(async (req, res) => {
                     ok: true,
                     kb_id: result.kb_id,
                     documentsSoftDeleted: result.documentsSoftDeleted,
-                    ragDeleteOk: result.ragDeleteOk,
-                    warning: result.warning
+                    ragDeleteOk: true
                 });
                 return;
             }
@@ -2478,6 +3068,10 @@ initDb().then(async connected => {
         console.log(`  POST /api/enterprise/group/join   → 加入群組`);
         console.log(`  GET  /api/enterprise/group/:code  → 群組資料`);
         console.log(`  POST /api/enterprise/group/document/add     → 文件 + server RAG 索引`);
+        console.log(`  POST /api/enterprise/group/document/version → 發新版本 + 覆寫 RAG 索引`);
+        console.log(`  GET  /api/enterprise/group/document/versions→ 列出版本歷史（成員可讀）`);
+        console.log(`  GET  /api/enterprise/group/document/version → 讀取單一版本內容`);
+        console.log(`  POST /api/enterprise/group/document/restore → 軟刪還原（manager）`);
         console.log(`  POST /api/enterprise/group/document/reindex → 重試 RAG 索引（manager）`);
         console.log(`  POST /api/enterprise/group/document/delete  → 清索引後 soft-delete`);
         console.log(`  POST /api/enterprise/task/assign  → 指派任務`);

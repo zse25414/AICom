@@ -78,6 +78,11 @@ jobs:
         env:
           REQUIRE_ENTERPRISE_AUTH: '1'
 
+      - name: W2-E KB sync security/contract
+        run: node scripts/test-w2-kb-sync.js
+        env:
+          REQUIRE_ENTERPRISE_AUTH: '1'
+
       - name: Coach RAG tests
         run: node scripts/test-coach-rag.js
 

@@ -1,5 +1,6 @@
 /**
- * 整合測試：register + enterprise + coach-rag（需 API；coach-rag 建議 RAG）
+ * 整合測試：register + enterprise + security-matrix + w2-kb + coach-rag
+ * （需 API；coach-rag / w2 document index 建議 RAG）
  */
 const { spawnSync } = require('child_process');
 const path = require('path');
@@ -10,6 +11,7 @@ const scripts = [
     'test-register.js',
     'test-enterprise.js',
     'test-security-matrix.js',
+    'test-w2-kb-sync.js',
     'test-coach-rag.js'
 ];
 
