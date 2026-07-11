@@ -30,9 +30,92 @@ function migrateTasks() {
     S.tasks = S.tasks.map(t => ({
         ...t,
         category: t.category || inferCategory(t.name, t.energy || 3),
+        kbIds: normalizeTaskKbIds(t.kbIds),
         updatedAt: t.updatedAt || now
     }));
     rebuildTaskIndex();
+}
+
+/** Normalize task-bound knowledge base ids (max 12). */
+function normalizeTaskKbIds(raw) {
+    if (!Array.isArray(raw)) return [];
+    return [...new Set(
+        raw.map(id => String(id || '').trim()).filter(Boolean)
+    )].slice(0, 12);
+}
+
+function getTaskBoundKbIds(task) {
+    return normalizeTaskKbIds(task?.kbIds);
+}
+
+function shortTaskKbLabel(kbId) {
+    const raw = typeof getRagKbLabel === 'function'
+        ? getRagKbLabel(kbId)
+        : (C.RAG_KB_LABELS?.[kbId] || kbId);
+    return String(raw || kbId).replace(/\s*\([^)]*\)\s*$/, '').trim() || String(kbId);
+}
+
+/** Available KB options for pickers (team context preferred). */
+function getAvailableKbOptions() {
+    const ids = new Set(Object.keys(C.RAG_KB_LABELS || {}));
+    Object.keys(S.ragKbItemsById || {}).forEach(id => ids.add(id));
+    (S.enterpriseGroupData?.documents || []).forEach(d => {
+        if (d && d.status !== 'deleted') ids.add(d.kbId || 'general');
+    });
+    const kbMap = S.enterpriseGroupData?.knowledgeBases;
+    if (kbMap && typeof kbMap === 'object') {
+        Object.entries(kbMap).forEach(([id, kb]) => {
+            if (kb && kb.status !== 'deleted') ids.add(id);
+        });
+    }
+    return [...ids].map(id => ({
+        id,
+        label: shortTaskKbLabel(id)
+    }));
+}
+
+/**
+ * Render multi-select KB chips into a container.
+ * @param {string} containerId
+ * @param {string[]} selectedIds
+ * @param {string} inputName  shared name for checkboxes
+ */
+function renderKbBindPicker(containerId, selectedIds, inputName) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const selected = new Set(normalizeTaskKbIds(selectedIds));
+    const opts = getAvailableKbOptions();
+    if (!opts.length) {
+        el.innerHTML = '<span class="text-[11px] text-slate-500">尚無可綁定知識庫</span>';
+        return;
+    }
+    el.innerHTML = opts.map(o => {
+        const checked = selected.has(o.id) ? 'checked' : '';
+        return `
+            <label class="task-kb-chip ${checked ? 'task-kb-chip-active' : ''}">
+                <input type="checkbox" name="${escapeHtml(inputName)}" value="${escapeHtml(o.id)}" ${checked}
+                    class="task-kb-chip-input accent-indigo-400"
+                    onchange="this.closest('.task-kb-chip')?.classList.toggle('task-kb-chip-active', this.checked)">
+                <span class="task-kb-chip-text">${escapeHtml(o.label)}</span>
+            </label>
+        `;
+    }).join('');
+}
+
+function readKbBindPicker(inputName) {
+    return normalizeTaskKbIds(
+        Array.from(document.querySelectorAll(`input[name="${inputName}"]:checked`)).map(el => el.value)
+    );
+}
+
+function renderTaskKbBadges(task) {
+    const ids = getTaskBoundKbIds(task);
+    if (!ids.length) return '';
+    const labels = ids.map(shortTaskKbLabel);
+    const title = `綁定知識庫：${labels.join('、')}`;
+    const shown = labels.slice(0, 2).join('、');
+    const more = labels.length > 2 ? ` +${labels.length - 2}` : '';
+    return `<span class="task-kb-bind-badge" title="${escapeHtml(title)}"><i class="fa-solid fa-database"></i> ${escapeHtml(shown)}${more}</span>`;
 }
 
 function touchTask(task) {
@@ -243,6 +326,7 @@ function renderTaskBadges(task) {
     if (task.parentGoalName) {
         html += `<span class="task-goal-badge" title="${escapeHtml(task.parentGoalName)}">🎯 ${escapeHtml(task.parentGoalName)}</span>`;
     }
+    html += renderTaskKbBadges(task);
     return html;
 }
 
@@ -256,6 +340,16 @@ function openTaskEdit(taskId) {
     document.getElementById('edit-task-energy').value = task.energy;
     document.getElementById('edit-task-category').value = task.category || inferCategory(task.name, task.energy);
     document.getElementById('edit-task-due').value = task.due;
+
+    const kbWrap = document.getElementById('edit-task-kb-wrap');
+    if (kbWrap) {
+        // Show KB bind when user is in a team (or task already has binds)
+        const showKb = !!S.enterpriseSession || getTaskBoundKbIds(task).length > 0;
+        kbWrap.classList.toggle('hidden', !showKb);
+        if (showKb) {
+            renderKbBindPicker('edit-task-kb-list', getTaskBoundKbIds(task), 'edit-task-kb');
+        }
+    }
     
     document.getElementById('task-edit-modal').classList.remove('hidden');
 }
@@ -282,6 +376,12 @@ function saveTaskEdit() {
     task.category = document.getElementById('edit-task-category').value;
     task.due = document.getElementById('edit-task-due').value || getTodayISO();
     if (task.due >= getTodayISO()) task.wasOverdue = false;
+
+    const kbWrap = document.getElementById('edit-task-kb-wrap');
+    if (kbWrap && !kbWrap.classList.contains('hidden')) {
+        task.kbIds = readKbBindPicker('edit-task-kb');
+    }
+    touchTask(task);
     
     saveState();
     closeTaskEdit();
@@ -312,7 +412,8 @@ function syncEnterpriseTaskToPersonal(enterpriseTaskId) {
         category: et.category || inferCategory(et.title, 3),
         due: et.due || getTodayISO(),
         completed: !!et.completed,
-        enterpriseTaskId: enterpriseTaskId
+        enterpriseTaskId: enterpriseTaskId,
+        kbIds: normalizeTaskKbIds(et.kbIds)
     });
     
     saveState();

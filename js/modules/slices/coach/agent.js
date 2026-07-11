@@ -233,14 +233,16 @@ function renderCoachKbUsageBadge(meta) {
         const kbIds = Array.isArray(meta.kbIds) ? meta.kbIds : [];
         const labels = kbIds.map(shortKbLabel).filter(Boolean);
         const srcN = typeof meta.sourceCount === 'number' ? meta.sourceCount : null;
-        const mention = meta.mentionOverride ? ' · 本則 @覆寫' : '';
+        const scopeHint = meta.mentionOverride
+            ? ' · 本則 @覆寫'
+            : (meta.taskBound ? ' · 任務綁定' : '');
 
         if (srcN === 0) {
             return `
                 <div class="coach-kb-used-badge coach-kb-nohit-badge" role="status">
                     <i class="fa-solid fa-magnifying-glass"></i>
                     <span>已查知識庫但無相關段落</span>
-                    <span class="coach-kb-unused-hint">（可換庫、補文件，或用 @知識庫 覆寫）${escapeHtml(mention)}</span>
+                    <span class="coach-kb-unused-hint">（可換庫、補文件，或用 @知識庫 覆寫）${escapeHtml(scopeHint)}</span>
                 </div>
             `;
         }
@@ -252,7 +254,7 @@ function renderCoachKbUsageBadge(meta) {
         return `
             <div class="coach-kb-used-badge" role="status">
                 <i class="fa-solid fa-database"></i>
-                <span>${kbPart}${srcPart}${escapeHtml(mention)}</span>
+                <span>${kbPart}${srcPart}${escapeHtml(scopeHint)}</span>
             </div>
         `;
     }
@@ -463,21 +465,64 @@ function isGenericCoachFallback(reply) {
     return /專注這一步就好|針對「[^」]+」：/.test(reply || '');
 }
 
-function resolveCoachKbSkipReason() {
+/**
+ * Resolve KB ids for a coach turn.
+ * Priority: @mention override → task-bound kbIds → checkbox selection.
+ */
+function resolveCoachQueryKbIds(task, mention) {
+    if (mention?.hadMentions && mention.kbIds?.length) {
+        return {
+            kbIds: mention.kbIds,
+            source: 'mention',
+            taskBound: false
+        };
+    }
+    const bound = typeof getTaskBoundKbIds === 'function'
+        ? getTaskBoundKbIds(task)
+        : (Array.isArray(task?.kbIds) ? task.kbIds.filter(Boolean) : []);
+    if (bound.length) {
+        return { kbIds: bound, source: 'task', taskBound: true };
+    }
+    const checked = Array.isArray(S.checkedRagKbs) ? [...S.checkedRagKbs] : [];
+    return { kbIds: checked, source: 'checkbox', taskBound: false };
+}
+
+function resolveCoachKbSkipReason(task) {
     if (!S.enterpriseSession) return 'no_team';
     if (!S.ragServiceActive) return 'offline';
+    const bound = typeof getTaskBoundKbIds === 'function' ? getTaskBoundKbIds(task) : [];
+    if (bound.length) return null;
     if (!S.checkedRagKbs?.length) return 'empty_selection';
     return null;
 }
 
+function updateCoachTaskKbBanner(task) {
+    const el = document.getElementById('coach-task-kb-banner');
+    if (!el) return;
+    const bound = typeof getTaskBoundKbIds === 'function' ? getTaskBoundKbIds(task) : [];
+    if (!task || !bound.length) {
+        el.classList.add('hidden');
+        el.innerHTML = '';
+        return;
+    }
+    const labels = bound.map(id =>
+        (typeof shortTaskKbLabel === 'function' ? shortTaskKbLabel(id) : id)
+    );
+    el.classList.remove('hidden');
+    el.innerHTML = `
+        <i class="fa-solid fa-link text-indigo-300"></i>
+        <span>本任務綁定知識庫：<strong>${escapeHtml(labels.join('、'))}</strong></span>
+        <span class="coach-task-kb-banner-hint">教練優先只查這些庫（可用 @庫名 單則覆寫）</span>
+    `;
+}
+
 async function coachAgentRespondWithAI(userMsg, task, session) {
     const mention = parseCoachKbMentions(userMsg);
-    const effectiveKbIds = mention.hadMentions
-        ? mention.kbIds
-        : (Array.isArray(S.checkedRagKbs) ? [...S.checkedRagKbs] : []);
+    const resolved = resolveCoachQueryKbIds(task, mention);
+    const effectiveKbIds = resolved.kbIds;
     const queryText = mention.hadMentions ? mention.cleanedMsg : userMsg;
 
-    // Mentions can override empty checkbox selection for this turn only
+    // Mentions / task binds can supply KBs even when checkbox empty
     let skipReason = null;
     if (!S.enterpriseSession) skipReason = 'no_team';
     else if (!S.ragServiceActive) skipReason = 'offline';
@@ -519,7 +564,9 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                         usedKnowledge: true,
                         kbIds: effectiveKbIds,
                         sourceCount: sources.length,
-                        mentionOverride: mention.hadMentions
+                        mentionOverride: mention.hadMentions,
+                        taskBound: resolved.taskBound && !mention.hadMentions,
+                        kbSource: resolved.source
                     },
                     ...inferAgentActionsFromUserMsg(userMsg, session)
                 };
@@ -535,7 +582,9 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
         usedKnowledge: false,
         kbSkipReason: ragDegraded ? 'degraded' : (skipReason || 'degraded'),
         kbIds: effectiveKbIds,
-        mentionOverride: mention.hadMentions
+        mentionOverride: mention.hadMentions,
+        taskBound: resolved.taskBound && !mention.hadMentions,
+        kbSource: resolved.source
     };
 
     const step = session.steps[session.currentStep];
@@ -952,8 +1001,11 @@ function renderCoachAgentView() {
     if (!task) {
         renderCoachEmptyState(ws);
         renderCoachAgentThread();
+        updateCoachTaskKbBanner(null);
         return;
     }
+
+    updateCoachTaskKbBanner(task);
     
     const session = S.focusSession?.taskId === task.id ? S.focusSession : null;
     const steps = session?.steps || getStepsForTask(task);
@@ -1071,12 +1123,13 @@ async function sendCoachAgentMessage(preset) {
             result = await coachAgentRespondWithAI(msg, task, S.focusSession);
         } else {
             result = buildOfflineAgentReply(msg, task, S.focusSession);
-            const skip = resolveCoachKbSkipReason();
+            const skip = resolveCoachKbSkipReason(task);
             // Offline coach path never hits RAG — surface trust badge when team KB is relevant
             if (S.enterpriseSession && !result.meta) {
                 result.meta = {
                     usedKnowledge: false,
-                    kbSkipReason: skip || 'degraded'
+                    kbSkipReason: skip || 'degraded',
+                    taskBound: !!(typeof getTaskBoundKbIds === 'function' && getTaskBoundKbIds(task).length)
                 };
             }
         }
@@ -1137,10 +1190,20 @@ ${pendingList || '（今日無待辦）'}
 ${next ? `系統推薦的今日第一步：「${next.name}」（${next.duration} 分鐘）` : '尚無推薦任務，建議先分解一個大目標'}
 ${ctx.activeGoals.length ? `進行中的大目標：${ctx.activeGoals.join('、')}` : ''}`;
 
-    if (S.enterpriseSession && S.enterpriseGroupData && S.enterpriseGroupData.documents && S.enterpriseGroupData.documents.length > 0) {
-        const docs = S.enterpriseGroupData.documents.slice(0, 10);
-        const docText = docs.map(d => `--- 文件名稱：${d.title} ---\n${d.content}`).join('\n\n');
-        text += `\n\n=== 團隊共享知識庫與新人資料 ===\n${docText}\n=================================\n注意：在回答時，若用戶的問題涉及此專案、流程或工作指南，請務必遵循並優先引用上方「團隊共享知識庫」的內容來進行回覆。`;
+    if (S.enterpriseSession && S.enterpriseGroupData?.documents?.length) {
+        const coachTask = typeof getCoachTask === 'function' ? getCoachTask() : null;
+        const bound = typeof getTaskBoundKbIds === 'function' ? getTaskBoundKbIds(coachTask) : [];
+        let docs = S.enterpriseGroupData.documents.filter(d => d && d.status !== 'deleted');
+        if (bound.length) {
+            const set = new Set(bound);
+            docs = docs.filter(d => set.has(d.kbId || 'general'));
+        }
+        docs = docs.slice(0, 10);
+        if (docs.length) {
+            const docText = docs.map(d => `--- 文件名稱：${d.title} ---\n${d.content}`).join('\n\n');
+            const scope = bound.length ? '（本任務綁定庫）' : '';
+            text += `\n\n=== 團隊共享知識庫與新人資料${scope} ===\n${docText}\n=================================\n注意：在回答時，若用戶的問題涉及此專案、流程或工作指南，請務必遵循並優先引用上方「團隊共享知識庫」的內容來進行回覆。`;
+        }
     }
     
     return text;
@@ -1161,11 +1224,19 @@ function updateCoachContextBar() {
 function getCoachReadinessChecks() {
     const hasTeam = !!S.enterpriseSession;
     const teamOnline = hasTeam && !S.enterpriseSession.offline;
+    const task = typeof getCoachTask === 'function' ? getCoachTask() : null;
+    const taskBound = typeof getTaskBoundKbIds === 'function' ? getTaskBoundKbIds(task) : [];
+    const kbOk = S.ragServiceActive && (taskBound.length > 0 || (S.checkedRagKbs?.length > 0));
     return [
         { id: 'login', label: '已登入', ok: isLoggedIn(), action: 'showAuthOverlay', actionArg: 'login' },
         { id: 'team', label: '已加入團隊', ok: teamOnline, action: 'showSection', actionArg: 'team' },
         { id: 'rag', label: 'RAG 服務', ok: S.ragServiceActive, action: null },
-        { id: 'kb', label: '已選知識庫', ok: S.ragServiceActive && S.checkedRagKbs.length > 0, action: null },
+        {
+            id: 'kb',
+            label: taskBound.length ? '任務已綁定庫' : '已選知識庫',
+            ok: kbOk,
+            action: taskBound.length ? null : null
+        },
         { id: 'api', label: 'AI 連線', ok: isApiReady(), action: 'showSection', actionArg: 'settings' }
     ];
 }

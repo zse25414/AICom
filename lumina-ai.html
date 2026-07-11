@@ -417,11 +417,12 @@
                             </div>
                             <div id="coach-agent-thread" class="coach-agent-thread custom-scroll"></div>
                             <div class="coach-chat-composer">
+                                <div id="coach-task-kb-banner" class="coach-task-kb-banner hidden" role="status"></div>
                                 <div id="rag-kb-selector-wrap" class="coach-rag-selector hidden" aria-disabled="false">
                                     <div class="coach-rag-selector-label">
                                         <i class="fa-solid fa-database text-purple-400"></i>
                                         <span>選用 RAG 知識庫</span>
-                                        <span class="coach-rag-selector-hint">可不選＝純教練 · 訊息可用 @庫名 單則覆寫</span>
+                                        <span class="coach-rag-selector-hint">可不選＝純教練 · 任務綁定優先 · 可用 @庫名 覆寫</span>
                                     </div>
                                     <div id="rag-kb-offline-banner" class="coach-rag-offline-banner hidden" role="status">
                                         <i class="fa-solid fa-triangle-exclamation"></i>
@@ -714,6 +715,11 @@
                             <div class="form-field">
                                 <label for="team-assign-duration">預估時長（分鐘）</label>
                                 <input id="team-assign-duration" type="number" value="45" class="form-input focus-ring">
+                            </div>
+                            <div class="form-field md:col-span-2">
+                                <label>綁定知識庫 <span class="text-slate-500 font-normal">（選填 · 教練帶做時優先只查這些庫）</span></label>
+                                <div id="team-assign-kb-list" class="task-kb-picker mt-1.5" role="group" aria-label="任務綁定知識庫"></div>
+                                <div class="text-[10px] text-slate-500 mt-1.5">不選＝成員可在教練自行勾選知識庫；綁定後教練以任務庫為準（仍可用 @庫名 單則覆寫）</div>
                             </div>
                         </div>
                         <button data-lumina-action="assignEnterpriseTask" class="btn-team mt-5 bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/20">
@@ -1559,6 +1565,10 @@
                         <input id="edit-task-due" type="date" class="w-full form-input focus-ring">
                     </div>
                 </div>
+                <div id="edit-task-kb-wrap" class="hidden">
+                    <label class="text-xs text-slate-400 mb-1 block">綁定知識庫 <span class="text-slate-500">（教練帶做時優先）</span></label>
+                    <div id="edit-task-kb-list" class="task-kb-picker" role="group" aria-label="編輯任務綁定知識庫"></div>
+                </div>
             </div>
             <div class="flex gap-2 mt-5">
                 <button data-lumina-action="closeTaskEdit" class="flex-1 py-2.5 rounded-xl text-sm text-slate-400 hover:text-slate-200 border border-slate-700">取消</button>
@@ -1679,7 +1689,7 @@
                 <div class="shortcuts-help-group">
                     <div class="shortcuts-help-group-title">教練</div>
                     <div class="shortcuts-help-row"><span class="shortcuts-help-note">回覆下方可「加到今日待辦」；主管可「指派給團隊」帶入任務表單。</span></div>
-                    <div class="shortcuts-help-row"><span class="shortcuts-help-note">訊息可用 <code>@庫名</code> 單則覆寫知識庫。</span></div>
+                    <div class="shortcuts-help-row"><span class="shortcuts-help-note">任務可綁定知識庫：教練帶做時優先只查綁定庫；訊息仍可用 <code>@庫名</code> 單則覆寫。</span></div>
                 </div>
             </div>
             <div class="shortcuts-help-footer">

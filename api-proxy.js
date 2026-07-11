@@ -2449,6 +2449,15 @@ async function handleEnterprise(req, res, urlPath, method) {
             if (!assignee) return sendJson(res, 404, { error: '找不到成員' });
             if (!title) return sendJson(res, 400, { error: '請輸入任務名稱' });
 
+            // Optional knowledge-base binding for coach RAG (task-scoped)
+            ensureKnowledgeBases(group);
+            const rawKbIds = Array.isArray(body.kbIds) ? body.kbIds : [];
+            const kbIds = [...new Set(
+                rawKbIds
+                    .map(id => normalizeKbId(id))
+                    .filter(id => id && group.knowledgeBases[id] && isActiveKb(group.knowledgeBases[id]))
+            )].slice(0, 12);
+
             const task = {
                 id: uid(),
                 title,
@@ -2461,6 +2470,7 @@ async function handleEnterprise(req, res, urlPath, method) {
                 category: ['deep', 'execution', 'meeting', 'learning', 'admin'].includes(body.category)
                     ? body.category : 'execution',
                 due: clampText(body.due, 12) || new Date().toISOString().split('T')[0],
+                kbIds,
                 completed: false,
                 completedAt: null,
                 createdAt: new Date().toISOString()
@@ -2515,6 +2525,16 @@ async function handleEnterprise(req, res, urlPath, method) {
 
             const canEdit = member.role === 'manager' || task.assigneeId === memberId;
             if (!canEdit) return sendJson(res, 403, { error: '無權限更新此任務' });
+
+            // Manager may rebind knowledge bases for coach scope
+            if (Array.isArray(body.kbIds) && member.role === 'manager') {
+                ensureKnowledgeBases(group);
+                task.kbIds = [...new Set(
+                    body.kbIds
+                        .map(id => normalizeKbId(id))
+                        .filter(id => id && group.knowledgeBases[id] && isActiveKb(group.knowledgeBases[id]))
+                )].slice(0, 12);
+            }
 
             let notifications = [];
             if (typeof body.completed === 'boolean') {

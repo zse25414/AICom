@@ -628,6 +628,9 @@ function renderEnterpriseTasks() {
 
     if (S.enterpriseSession.role === 'manager') {
         populateTeamOverviewMemberFilter(members);
+        // Preserve current KB selection when re-rendering
+        const prevKb = typeof readKbBindPicker === 'function' ? readKbBindPicker('team-assign-kb') : [];
+        populateTeamAssignKbPicker(prevKb);
     }
     
     const myTasksAll = groupTasks.filter(t => t.assigneeId === S.enterpriseSession.memberId);
@@ -720,9 +723,14 @@ function renderEnterpriseTasks() {
                     </div>
                 </td></tr>`;
         } else {
-            overviewBody.innerHTML = overviewTasks.map(t => `
+            overviewBody.innerHTML = overviewTasks.map(t => {
+                const kbBadge = typeof renderTaskKbBadges === 'function' ? renderTaskKbBadges(t) : '';
+                return `
                 <tr>
-                    <td class="px-4 py-3 font-medium">${escapeHtml(t.title)}</td>
+                    <td class="px-4 py-3 font-medium">
+                        <div>${escapeHtml(t.title)}</div>
+                        ${kbBadge ? `<div class="mt-1">${kbBadge}</div>` : ''}
+                    </td>
                     <td class="px-4 py-3">
                         <span class="inline-flex items-center gap-1.5 text-slate-400">
                             <span class="member-avatar bg-indigo-500/15 text-indigo-300 border border-indigo-500/20 text-[9px]">${escapeHtml(getMemberInitials(t.assigneeName))}</span>
@@ -736,14 +744,22 @@ function renderEnterpriseTasks() {
                         </span>
                     </td>
                 </tr>
-            `).join('');
+            `;
+            }).join('');
         }
     }
     renderEnterpriseDocuments();
 }
 
+function populateTeamAssignKbPicker(selectedIds) {
+    if (typeof renderKbBindPicker === 'function') {
+        renderKbBindPicker('team-assign-kb-list', selectedIds || [], 'team-assign-kb');
+    }
+}
+
 function renderEnterpriseTaskRow(task, canToggle, syncedIds) {
     const synced = syncedIds ? syncedIds.has(task.id) : buildSyncedEnterpriseIdSet().has(task.id);
+    const kbBadge = typeof renderTaskKbBadges === 'function' ? renderTaskKbBadges(task) : '';
     return `
         <div class="task-row ${task.completed ? 'task-row-done' : ''}" data-team-task-id="${task.id}">
             <input type="checkbox" ${task.completed ? 'checked' : ''} ${canToggle ? `${luminaChange('toggleEnterpriseTask', [task.id, '__checked__'])} data-lumina-stop` : 'disabled'}
@@ -758,6 +774,7 @@ function renderEnterpriseTaskRow(task, canToggle, syncedIds) {
                     <span class="cat-badge ${getCategoryColor(task.category)}">${getCategoryLabel(task.category)}</span>
                     <span>·</span>
                     <span>截止 ${task.due}</span>
+                    ${kbBadge ? `<span>·</span>${kbBadge}` : ''}
                 </div>
             </div>
             <div class="flex items-center gap-2 flex-shrink-0">
@@ -784,6 +801,10 @@ async function assignEnterpriseTask() {
     if (!title) return showToast('請輸入任務名稱', 'error');
     if (!assigneeId) return showToast('請選擇成員', 'error');
     
+    const kbIds = typeof readKbBindPicker === 'function'
+        ? readKbBindPicker('team-assign-kb')
+        : [];
+
     const payload = {
         groupCode: S.enterpriseSession.groupCode,
         managerId: S.enterpriseSession.memberId,
@@ -792,7 +813,8 @@ async function assignEnterpriseTask() {
         due: document.getElementById('team-assign-due').value || getTodayISO(),
         duration: parseInt(document.getElementById('team-assign-duration').value) || 30,
         category: document.getElementById('team-assign-category').value,
-        energy: 3
+        energy: 3,
+        kbIds
     };
 
     S._assignTaskInFlight = true;
@@ -831,6 +853,7 @@ async function assignEnterpriseTask() {
             energy: 3,
             category: payload.category,
             due: payload.due,
+            kbIds: Array.isArray(payload.kbIds) ? payload.kbIds : [],
             completed: false,
             completedAt: null,
             createdAt: new Date().toISOString()
@@ -888,7 +911,8 @@ async function assignEnterpriseTask() {
     if (dueEl) dueEl.value = (typeof getTomorrowISO === 'function' ? getTomorrowISO() : getTodayISO());
     const durEl = document.getElementById('team-assign-duration');
     if (durEl && !durEl.value) durEl.value = '30';
-    // keep assignee + category for bulk assign convenience
+    // keep assignee + category for bulk assign convenience; reset KB binds
+    populateTeamAssignKbPicker([]);
     titleEl?.focus();
 
     await refreshEnterpriseData(true);
