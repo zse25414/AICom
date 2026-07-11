@@ -529,6 +529,65 @@ function renderEnterprisePage() {
     refreshTeamNotifications();
 }
 
+function getTeamTaskFilterState() {
+    return {
+        myStatus: document.getElementById('team-my-tasks-status')?.value || '',
+        mySort: document.getElementById('team-my-tasks-sort')?.value || 'due_asc',
+        ovMember: document.getElementById('team-overview-member')?.value || '',
+        ovStatus: document.getElementById('team-overview-status')?.value || '',
+        ovSort: document.getElementById('team-overview-sort')?.value || 'due_asc'
+    };
+}
+
+function taskDueKey(t) {
+    return String(t?.due || '9999-99-99');
+}
+
+function taskCreatedTs(t) {
+    const n = Date.parse(t?.createdAt || 0);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function sortTeamTasks(tasks, sortKey) {
+    const list = [...(tasks || [])];
+    const key = sortKey || 'due_asc';
+    list.sort((a, b) => {
+        if (key === 'due_desc') return taskDueKey(b).localeCompare(taskDueKey(a));
+        if (key === 'newest') return taskCreatedTs(b) - taskCreatedTs(a);
+        if (key === 'status') {
+            const ca = a.completed ? 1 : 0;
+            const cb = b.completed ? 1 : 0;
+            if (ca !== cb) return ca - cb;
+            return taskDueKey(a).localeCompare(taskDueKey(b));
+        }
+        // due_asc
+        return taskDueKey(a).localeCompare(taskDueKey(b));
+    });
+    return list;
+}
+
+function filterTeamTasksByStatus(tasks, status) {
+    if (status === 'done') return (tasks || []).filter(t => t.completed);
+    if (status === 'pending') return (tasks || []).filter(t => !t.completed);
+    return tasks || [];
+}
+
+function onTeamTasksFilterChange() {
+    renderEnterpriseTasks();
+}
+
+function populateTeamOverviewMemberFilter(members) {
+    const el = document.getElementById('team-overview-member');
+    if (!el) return;
+    const prev = el.value || '';
+    const opts = ['<option value="">全部成員</option>'];
+    (members || []).forEach(m => {
+        opts.push(`<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`);
+    });
+    el.innerHTML = opts.join('');
+    if (prev && [...el.options].some(o => o.value === prev)) el.value = prev;
+}
+
 function renderEnterpriseTasks() {
     if (!S.enterpriseSession || !S.enterpriseGroupData) return;
     
@@ -537,6 +596,7 @@ function renderEnterpriseTasks() {
     const myTasksEl = document.getElementById('team-my-tasks');
     const overviewBody = document.getElementById('team-overview-body');
     const progressEl = document.getElementById('team-my-progress');
+    const filters = getTeamTaskFilterState();
     
     const members = S.enterpriseGroupData.members || [];
     const groupTasks = S.enterpriseGroupData.tasks || [];
@@ -565,18 +625,26 @@ function renderEnterpriseTasks() {
             .map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`)
             .join('') || '<option value="">（尚無成員，請邀請同事加入）</option>';
     }
+
+    if (S.enterpriseSession.role === 'manager') {
+        populateTeamOverviewMemberFilter(members);
+    }
     
-    const myTasks = groupTasks.filter(t => t.assigneeId === S.enterpriseSession.memberId);
-    const done = myTasks.filter(t => t.completed).length;
-    const myRate = myTasks.length ? Math.round((done / myTasks.length) * 100) : 0;
+    const myTasksAll = groupTasks.filter(t => t.assigneeId === S.enterpriseSession.memberId);
+    const done = myTasksAll.filter(t => t.completed).length;
+    const myRate = myTasksAll.length ? Math.round((done / myTasksAll.length) * 100) : 0;
+    const myTasks = sortTeamTasks(
+        filterTeamTasksByStatus(myTasksAll, filters.myStatus),
+        filters.mySort
+    );
     
     const progressWrap = document.getElementById('team-progress-wrap');
     const progressFill = document.getElementById('team-progress-fill');
     if (progressEl) {
-        progressEl.textContent = myTasks.length ? `已完成 ${done} / ${myTasks.length}（${myRate}%）` : '等待主管指派任務';
+        progressEl.textContent = myTasksAll.length ? `已完成 ${done} / ${myTasksAll.length}（${myRate}%）` : '等待主管指派任務';
     }
     if (progressWrap && progressFill) {
-        if (myTasks.length) {
+        if (myTasksAll.length) {
             progressWrap.classList.remove('hidden');
             progressFill.style.width = myRate + '%';
         } else {
@@ -584,14 +652,33 @@ function renderEnterpriseTasks() {
             progressFill.style.width = '0%';
         }
     }
+
+    const myMeta = document.getElementById('team-my-tasks-meta');
+    if (myMeta) {
+        const filtering = !!(filters.myStatus || (filters.mySort && filters.mySort !== 'due_asc'));
+        if (myTasksAll.length && filtering) {
+            myMeta.classList.remove('hidden');
+            myMeta.textContent = `顯示 ${myTasks.length} / ${myTasksAll.length} 項`;
+        } else {
+            myMeta.classList.add('hidden');
+            myMeta.textContent = '';
+        }
+    }
     
     if (myTasksEl) {
-        if (myTasks.length === 0) {
+        if (myTasksAll.length === 0) {
             myTasksEl.innerHTML = `
                 <div class="empty-state">
                     <div class="empty-state-icon"><i class="fa-solid fa-inbox"></i></div>
                     <div class="text-sm">目前沒有指派給你的任務</div>
                     <div class="text-xs text-slate-600 mt-1">完成後主管會即時看到更新</div>
+                </div>`;
+        } else if (myTasks.length === 0) {
+            myTasksEl.innerHTML = `
+                <div class="empty-state py-6">
+                    <div class="empty-state-icon"><i class="fa-solid fa-filter"></i></div>
+                    <div class="text-sm">沒有符合篩選的任務</div>
+                    <div class="text-xs text-slate-600 mt-1">試試改選「全部狀態」</div>
                 </div>`;
         } else {
             myTasksEl.innerHTML = myTasks.map(t => renderEnterpriseTaskRow(t, true, syncedIds)).join('');
@@ -599,6 +686,21 @@ function renderEnterpriseTasks() {
     }
     
     if (overviewBody && S.enterpriseSession.role === 'manager') {
+        let overviewTasks = groupTasks;
+        if (filters.ovMember) {
+            overviewTasks = overviewTasks.filter(t => t.assigneeId === filters.ovMember);
+        }
+        overviewTasks = filterTeamTasksByStatus(overviewTasks, filters.ovStatus);
+        overviewTasks = sortTeamTasks(overviewTasks, filters.ovSort);
+
+        const ovMeta = document.getElementById('team-overview-meta');
+        if (ovMeta) {
+            const filtering = !!(filters.ovMember || filters.ovStatus || (filters.ovSort && filters.ovSort !== 'due_asc'));
+            ovMeta.textContent = filtering
+                ? `顯示 ${overviewTasks.length} / 共 ${groupTasks.length} 項任務`
+                : (groupTasks.length ? `共 ${groupTasks.length} 項任務` : '');
+        }
+
         if (groupTasks.length === 0) {
             overviewBody.innerHTML = `
                 <tr><td colspan="4">
@@ -608,8 +710,17 @@ function renderEnterpriseTasks() {
                         <div class="text-xs text-slate-600 mt-1">在上方指派第一個任務</div>
                     </div>
                 </td></tr>`;
+        } else if (overviewTasks.length === 0) {
+            overviewBody.innerHTML = `
+                <tr><td colspan="4">
+                    <div class="empty-state py-8">
+                        <div class="empty-state-icon"><i class="fa-solid fa-filter"></i></div>
+                        <div class="text-sm">沒有符合篩選的任務</div>
+                        <div class="text-xs text-slate-600 mt-1">試試清除成員或狀態篩選</div>
+                    </div>
+                </td></tr>`;
         } else {
-            overviewBody.innerHTML = groupTasks.map(t => `
+            overviewBody.innerHTML = overviewTasks.map(t => `
                 <tr>
                     <td class="px-4 py-3 font-medium">${escapeHtml(t.title)}</td>
                     <td class="px-4 py-3">
@@ -618,7 +729,7 @@ function renderEnterpriseTasks() {
                             ${escapeHtml(t.assigneeName)}
                         </span>
                     </td>
-                    <td class="px-4 py-3 font-mono text-xs text-slate-400">${t.due}</td>
+                    <td class="px-4 py-3 font-mono text-xs text-slate-400">${escapeHtml(t.due || '')}</td>
                     <td class="px-4 py-3">
                         <span class="status-pill ${t.completed ? 'status-pill-done' : 'status-pill-pending'}">
                             ${t.completed ? '✓ 已完成' : '進行中'}

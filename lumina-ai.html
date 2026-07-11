@@ -722,7 +722,7 @@
                     </div>
                     
                     <div id="team-member-panel" class="panel-card panel-card-accent-sky p-6 sm:p-7">
-                        <div class="flex items-center justify-between mb-4 gap-3">
+                        <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
                             <div class="flex items-center gap-3">
                                 <div class="panel-icon bg-sky-500/15 text-sky-400"><i class="fa-solid fa-list-check"></i></div>
                                 <div>
@@ -730,23 +730,60 @@
                                     <div class="text-xs text-slate-500 mt-0.5" id="team-my-progress"></div>
                                 </div>
                             </div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <select id="team-my-tasks-status" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs focus-ring"
+                                    data-lumina-change="onTeamTasksFilterChange" aria-label="我的任務狀態篩選">
+                                    <option value="">全部狀態</option>
+                                    <option value="pending">進行中</option>
+                                    <option value="done">已完成</option>
+                                </select>
+                                <select id="team-my-tasks-sort" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs focus-ring"
+                                    data-lumina-change="onTeamTasksFilterChange" aria-label="我的任務排序">
+                                    <option value="due_asc">截止日近→遠</option>
+                                    <option value="due_desc">截止日遠→近</option>
+                                    <option value="newest">最新指派</option>
+                                </select>
+                            </div>
                         </div>
                         <div id="team-progress-wrap" class="hidden mb-4">
                             <div class="team-progress-track">
                                 <div id="team-progress-fill" class="team-progress-fill" style="width: 0%"></div>
                             </div>
                         </div>
+                        <div id="team-my-tasks-meta" class="text-[10px] text-slate-500 mb-2 hidden"></div>
                         <div id="team-my-tasks" class="space-y-2.5"></div>
                     </div>
                     
                     <div id="team-overview-panel" class="hidden panel-card panel-card-accent-purple p-6 sm:p-7">
-                        <div class="flex items-center gap-3 mb-5">
-                            <div class="panel-icon bg-purple-500/15 text-purple-400"><i class="fa-solid fa-chart-bar"></i></div>
-                            <div>
-                                <div class="font-semibold">團隊任務總覽</div>
-                                <div class="text-xs text-slate-500 mt-0.5">主管視角 · 即時追蹤完成狀態</div>
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                            <div class="flex items-center gap-3">
+                                <div class="panel-icon bg-purple-500/15 text-purple-400"><i class="fa-solid fa-chart-bar"></i></div>
+                                <div>
+                                    <div class="font-semibold">團隊任務總覽</div>
+                                    <div class="text-xs text-slate-500 mt-0.5">主管視角 · 即時追蹤完成狀態</div>
+                                </div>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <select id="team-overview-member" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs focus-ring min-w-[7rem]"
+                                    data-lumina-change="onTeamTasksFilterChange" aria-label="依負責人篩選">
+                                    <option value="">全部成員</option>
+                                </select>
+                                <select id="team-overview-status" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs focus-ring"
+                                    data-lumina-change="onTeamTasksFilterChange" aria-label="總覽狀態篩選">
+                                    <option value="">全部狀態</option>
+                                    <option value="pending">進行中</option>
+                                    <option value="done">已完成</option>
+                                </select>
+                                <select id="team-overview-sort" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs focus-ring"
+                                    data-lumina-change="onTeamTasksFilterChange" aria-label="總覽排序">
+                                    <option value="due_asc">截止日近→遠</option>
+                                    <option value="due_desc">截止日遠→近</option>
+                                    <option value="newest">最新指派</option>
+                                    <option value="status">未完成優先</option>
+                                </select>
                             </div>
                         </div>
+                        <div id="team-overview-meta" class="text-[10px] text-slate-500 mb-2"></div>
                         <div class="team-table-wrap overflow-x-auto">
                             <table class="team-table w-full text-sm text-left">
                                 <thead class="text-xs text-slate-500">
@@ -929,7 +966,7 @@
                                 </div>
                             </div>
 
-                            <!-- Document list toolbar: search / filter / batch retry -->
+                            <!-- Document list toolbar: search / filter / sort / batch retry -->
                             <div id="team-docs-toolbar" class="team-docs-toolbar mb-3 space-y-2">
                                 <div class="flex flex-col sm:flex-row gap-2">
                                     <div class="relative flex-1 min-w-0">
@@ -940,20 +977,35 @@
                                             data-lumina-change="onTeamDocsFilterChange"
                                             aria-label="搜尋文件">
                                     </div>
-                                    <select id="team-docs-filter-kb" class="sm:w-44 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm focus-ring"
+                                    <select id="team-docs-filter-kb" class="sm:w-40 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm focus-ring"
                                         data-lumina-change="onTeamDocsFilterChange" aria-label="依知識庫篩選">
                                         <option value="">全部知識庫</option>
                                     </select>
-                                    <select id="team-docs-filter-status" class="sm:w-36 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm focus-ring"
+                                    <select id="team-docs-filter-status" class="sm:w-32 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm focus-ring"
                                         data-lumina-change="onTeamDocsFilterChange" aria-label="依索引狀態篩選">
                                         <option value="">全部狀態</option>
                                         <option value="indexed">已索引</option>
                                         <option value="pending">索引中</option>
                                         <option value="failed">索引失敗</option>
                                     </select>
+                                    <select id="team-docs-sort" class="sm:w-36 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm focus-ring"
+                                        data-lumina-change="onTeamDocsFilterChange" aria-label="排序文件">
+                                        <option value="newest">最新在前</option>
+                                        <option value="oldest">最舊在前</option>
+                                        <option value="status">失敗優先</option>
+                                        <option value="title">標題 A→Z</option>
+                                    </select>
                                 </div>
                                 <div class="flex flex-wrap items-center justify-between gap-2">
-                                    <div id="team-docs-filter-meta" class="text-[10px] text-slate-500"></div>
+                                    <div class="flex flex-wrap items-center gap-2 min-w-0">
+                                        <div id="team-docs-filter-meta" class="text-[10px] text-slate-500"></div>
+                                        <button type="button" id="team-docs-clear-filters-btn"
+                                            class="hidden min-h-[32px] text-[11px] px-2.5 py-1 rounded-lg border border-slate-600 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 focus-ring"
+                                            data-lumina-action="clearTeamDocsFilters"
+                                            aria-label="清除文件篩選">
+                                            <i class="fa-solid fa-xmark mr-1"></i>清除篩選
+                                        </button>
+                                    </div>
                                     <button type="button" id="team-docs-retry-failed-btn"
                                         class="hidden min-h-[36px] text-[11px] px-3 py-1.5 rounded-lg border border-amber-500/35 text-amber-300 hover:bg-amber-500/10 focus-ring"
                                         data-lumina-action="retryAllFailedDocumentIndexes">

@@ -1547,16 +1547,45 @@ function getTeamDocsFilterState() {
     const searchEl = document.getElementById('team-docs-search');
     const kbEl = document.getElementById('team-docs-filter-kb');
     const stEl = document.getElementById('team-docs-filter-status');
+    const sortEl = document.getElementById('team-docs-sort');
     return {
         q: (searchEl?.value || '').trim().toLowerCase(),
         kbId: kbEl?.value || '',
-        status: stEl?.value || ''
+        status: stEl?.value || '',
+        sort: sortEl?.value || 'newest'
     };
 }
 
+function docSortTimestamp(d) {
+    const t = Date.parse(d.updatedAt || d.createdAt || 0);
+    return Number.isFinite(t) ? t : 0;
+}
+
+const RAG_STATUS_SORT_RANK = { failed: 0, pending: 1, indexed: 2 };
+
+function sortEnterpriseDocuments(docs, sortKey) {
+    const list = [...(docs || [])];
+    const key = sortKey || 'newest';
+    list.sort((a, b) => {
+        if (key === 'oldest') return docSortTimestamp(a) - docSortTimestamp(b);
+        if (key === 'title') {
+            return String(a.title || '').localeCompare(String(b.title || ''), 'zh-Hant', { sensitivity: 'base' });
+        }
+        if (key === 'status') {
+            const ra = RAG_STATUS_SORT_RANK[resolveDocRagStatus(a)] ?? 9;
+            const rb = RAG_STATUS_SORT_RANK[resolveDocRagStatus(b)] ?? 9;
+            if (ra !== rb) return ra - rb;
+            return docSortTimestamp(b) - docSortTimestamp(a);
+        }
+        // newest (default)
+        return docSortTimestamp(b) - docSortTimestamp(a);
+    });
+    return list;
+}
+
 function filterEnterpriseDocuments(docs) {
-    const { q, kbId, status } = getTeamDocsFilterState();
-    return (docs || []).filter(d => {
+    const { q, kbId, status, sort } = getTeamDocsFilterState();
+    const filtered = (docs || []).filter(d => {
         if (kbId && (d.kbId || 'general') !== kbId) return false;
         if (status) {
             const st = resolveDocRagStatus(d);
@@ -1568,6 +1597,19 @@ function filterEnterpriseDocuments(docs) {
         }
         return true;
     });
+    return sortEnterpriseDocuments(filtered, sort);
+}
+
+function clearTeamDocsFilters() {
+    const searchEl = document.getElementById('team-docs-search');
+    const kbEl = document.getElementById('team-docs-filter-kb');
+    const stEl = document.getElementById('team-docs-filter-status');
+    const sortEl = document.getElementById('team-docs-sort');
+    if (searchEl) searchEl.value = '';
+    if (kbEl) kbEl.value = '';
+    if (stEl) stEl.value = '';
+    if (sortEl) sortEl.value = 'newest';
+    onTeamDocsFilterChange();
 }
 
 function populateTeamDocsFilterKbOptions() {
@@ -1672,14 +1714,16 @@ function renderEnterpriseDocuments() {
         retryBtn.classList.toggle('hidden', !(isManager && failedCount > 0));
         retryBtn.innerHTML = `<i class="fa-solid fa-rotate-right mr-1"></i>重試全部失敗索引（${failedCount}）`;
     }
+    const { q, kbId, status, sort } = getTeamDocsFilterState();
+    const filtering = !!(q || kbId || status || (sort && sort !== 'newest'));
     const metaEl = document.getElementById('team-docs-filter-meta');
     if (metaEl) {
-        const { q, kbId, status } = getTeamDocsFilterState();
-        const filtering = !!(q || kbId || status);
         metaEl.textContent = filtering
-            ? `篩選結果 ${docsAll.length} / 共 ${docsSource.length} 份`
+            ? `顯示 ${docsAll.length} / 共 ${docsSource.length} 份`
             : `共 ${docsSource.length} 份文件${failedCount ? ` · ${failedCount} 份索引失敗` : ''}`;
     }
+    const clearBtn = document.getElementById('team-docs-clear-filters-btn');
+    if (clearBtn) clearBtn.classList.toggle('hidden', !filtering);
     
     const listEl = document.getElementById('team-docs-list');
     if (!listEl) return;
