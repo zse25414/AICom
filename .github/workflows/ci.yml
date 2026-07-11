@@ -101,3 +101,64 @@ jobs:
 
       - name: Post-test readiness gate
         run: node scripts/check-ready.js
+
+  # Production-like path: REQUIRE_MONGODB=1 (no JSON fallback)
+  integration-mongo:
+    runs-on: ubuntu-latest
+    needs: unit-test
+    env:
+      CI: 'true'
+      JWT_SECRET: lumina-ci-jwt-secret-long-enough-for-hs256
+      PIN_SALT: lumina-ci-pin-salt
+      RAG_API_KEY: lumina-ci-rag-key
+      DEEPSEEK_API_KEY: sk-ci-placeholder
+      REQUIRE_ENTERPRISE_AUTH: '1'
+      REQUIRE_MONGODB: '1'
+      MONGODB_URI: mongodb://127.0.0.1:27017/lumina_ci
+      MONGODB_DB: lumina_ci
+      API_PORT: '3001'
+      READY_TIMEOUT_SEC: '90'
+    services:
+      mongo:
+        image: mongo:6
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })' --quiet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Start API proxy (Mongo required)
+        run: node api-proxy.js &
+
+      - name: Wait for API readiness
+        run: node scripts/check-ready.js --wait
+
+      - name: Assert Mongo storage backend
+        run: node scripts/test-mongo-path.js
+
+      - name: Auth tests (Mongo)
+        run: node scripts/test-auth.js
+
+      - name: Enterprise tests (Mongo)
+        run: node scripts/test-enterprise.js
+
+      - name: Security matrix (Mongo)
+        run: node scripts/test-security-matrix.js
+
+      - name: W3 observability (Mongo)
+        run: node scripts/test-w3-observability.js
+
+      - name: Post-test readiness gate
+        run: node scripts/check-ready.js

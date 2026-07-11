@@ -42,6 +42,31 @@ npm run test:w3-obs          # 可觀測契約測（需 API）
 curl -s http://127.0.0.1:3001/api/ops/status | head
 ```
 
+## Mongo 路徑（生產對齊 / CI）
+
+生產與 `REQUIRE_MONGODB=1` 時**禁止**降級 JSON。CI job `integration-mongo` 使用 `mongo:6` service。
+
+本機驗證：
+
+```bash
+# 終端 A：Mongo（Docker）
+docker run --rm -p 27017:27017 --name lumina-mongo mongo:6
+
+# 終端 B：API
+set REQUIRE_MONGODB=1
+set MONGODB_URI=mongodb://127.0.0.1:27017/lumina_ci
+set MONGODB_DB=lumina_ci
+set JWT_SECRET=dev-jwt-secret-long-enough
+set PIN_SALT=dev-pin-salt
+set RAG_API_KEY=dev-rag-key
+node api-proxy.js
+
+# 終端 C
+npm run test:mongo
+```
+
+`GET /health` 應見 `"database": { "mode": "mongodb", ... }` 且 `storage` 為 `mongodb`。
+
 ```bash
 node scripts/check-ready.js                  # 單次（store + auth）
 node scripts/check-ready.js --wait           # 輪詢直到就緒

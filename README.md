@@ -61,7 +61,7 @@ docker compose -f docker-compose.prod.yml --profile full up -d
 
 - [ ] `.env` 已設定且**未**提交到 git
 - [ ] `JWT_SECRET`、`PIN_SALT`、`RAG_API_KEY`、`DEEPSEEK_API_KEY` 為長隨機／正式金鑰
-- [ ] `MONGODB_URI` 已設定（生產禁止 JSON 降級）
+- [ ] `MONGODB_URI` 已設定（生產禁止 JSON 降級；CI 見 job `integration-mongo`，本機 `npm run test:mongo`）
 - [ ] `ALLOWED_ORIGINS` 為實際前端 origin（逗號分隔）
 - [ ] `NODE_ENV=production`（或 `LUMINA_ENFORCE_SECRETS=1`）
 - [ ] uploads／RAG storage 有持久化 volume
