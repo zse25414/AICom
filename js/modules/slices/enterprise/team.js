@@ -664,6 +664,9 @@ async function assignEnterpriseTask() {
     if (!S.enterpriseSession || S.enterpriseSession.role !== 'manager') {
         return showToast('僅主管可指派任務', 'error');
     }
+    if (S._assignTaskInFlight) {
+        return showToast('任務指派中，請稍候…', 'error');
+    }
     
     const title = document.getElementById('team-assign-title').value.trim();
     const assigneeId = document.getElementById('team-assign-member').value;
@@ -680,8 +683,24 @@ async function assignEnterpriseTask() {
         category: document.getElementById('team-assign-category').value,
         energy: 3
     };
-    
-    const api = await enterpriseFetch('POST', '/api/enterprise/task/assign', payload);
+
+    S._assignTaskInFlight = true;
+    const assignBtn = document.querySelector('[data-lumina-action="assignEnterpriseTask"]');
+    if (assignBtn) {
+        assignBtn.disabled = true;
+        assignBtn.classList.add('opacity-60');
+    }
+
+    let api;
+    try {
+        api = await enterpriseFetch('POST', '/api/enterprise/task/assign', payload);
+    } finally {
+        S._assignTaskInFlight = false;
+        if (assignBtn) {
+            assignBtn.disabled = false;
+            assignBtn.classList.remove('opacity-60');
+        }
+    }
     
     const localAssignFallback = () => {
         const store = loadLocalEnterpriseStore();
@@ -735,6 +754,15 @@ async function assignEnterpriseTask() {
     
     if (api.ok) {
         ingestTeamNotificationsFromResponse(api.data.notifications || []);
+        // Optimistic: prepend server task if returned
+        const serverTask = api.data.task;
+        if (serverTask && S.enterpriseGroupData) {
+            if (!Array.isArray(S.enterpriseGroupData.tasks)) S.enterpriseGroupData.tasks = [];
+            if (!S.enterpriseGroupData.tasks.some(t => t.id === serverTask.id)) {
+                S.enterpriseGroupData.tasks.unshift(serverTask);
+            }
+            renderEnterpriseTasks();
+        }
         showToast('任務已指派！已發送通知', 'success');
     } else if (api.offline || S.enterpriseSession.offline) {
         localAssignFallback();

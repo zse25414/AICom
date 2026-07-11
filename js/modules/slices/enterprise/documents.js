@@ -664,41 +664,80 @@ function isNearEmptyDocContent(doc) {
 
 async function retryDocumentRagIndex(docId) {
     if (!S.enterpriseSession || !docId) return;
+    if (S._ragRetryInFlight && S._ragRetryInFlight.has(docId)) {
+        return showToast('此文件正在重試索引…', 'error');
+    }
     const docs = S.enterpriseGroupData?.documents || [];
     const doc = docs.find(d => d.id === docId);
     if (!doc) {
         showToast('找不到文件', 'error');
         return;
     }
+    if (S.enterpriseSession.role !== 'manager' && !S.enterpriseSession.offline) {
+        return showToast('僅主管可重試索引', 'error');
+    }
+
+    if (!S._ragRetryInFlight) S._ragRetryInFlight = new Set();
+    S._ragRetryInFlight.add(docId);
 
     applyLocalDocRagStatus(docId, 'pending');
     renderEnterpriseDocuments();
+    ensureRagStatusPolling();
 
     let ok = false;
+    let failCode = null;
+    let failMsg = '重試索引失敗';
 
-    if (!S.enterpriseSession.offline) {
-        // Online: prefer server reindex (manager only, W2-C)
-        const res = await enterpriseFetch('POST', '/api/enterprise/group/document/reindex', {
-            groupCode: S.enterpriseSession.groupCode,
-            managerId: S.enterpriseSession.memberId,
-            documentId: doc.id
-        });
-        if (res.ok) {
-            const status = res.data?.ragStatus || (res.data?.ragOk === true ? 'indexed' : null);
-            if (status === 'indexed' || res.data?.ragOk === true) {
-                ok = true;
-            } else if (res.data?.ragPending || status === 'pending') {
-                // Server still working — leave pending; list refresh will pick up status
-                applyLocalDocRagStatus(docId, 'pending');
+    try {
+        if (!S.enterpriseSession.offline) {
+            // Online: prefer server reindex (manager only, W2-C)
+            const res = await enterpriseFetch('POST', '/api/enterprise/group/document/reindex', {
+                groupCode: S.enterpriseSession.groupCode,
+                managerId: S.enterpriseSession.memberId,
+                documentId: doc.id
+            });
+            if (res.ok) {
+                const status = res.data?.ragStatus || (res.data?.ragOk === true ? 'indexed' : null);
+                if (status === 'indexed' || res.data?.ragOk === true) {
+                    ok = true;
+                } else if (res.data?.ragPending || status === 'pending') {
+                    applyLocalDocRagStatus(docId, 'pending');
+                    renderEnterpriseDocuments();
+                    ensureRagStatusPolling();
+                    showToast(`索引處理中：${doc.title}（完成後會自動更新）`, 'success');
+                    S.ragSyncedGroupKey = null;
+                    return;
+                } else {
+                    ok = false;
+                    failCode = res.data?.errorCode || res.data?.document?.rag?.lastErrorCode || null;
+                    failMsg = res.data?.lastError || res.data?.warning || failMsg;
+                }
+            } else if (res.status === 403) {
+                showToast(res.error || '僅主管可重試索引', 'error');
+                applyLocalDocRagStatus(docId, 'failed', {
+                    lastError: res.error,
+                    lastErrorCode: res.code || 'ROLE_FORBIDDEN'
+                });
                 renderEnterpriseDocuments();
-                showToast(`索引處理中：${doc.title}`, 'success');
-                S.ragSyncedGroupKey = null;
                 return;
             } else {
-                ok = false;
+                // Fallback: client best-effort if reindex endpoint unavailable
+                ok = await syncDocumentToRag({
+                    groupCode: S.enterpriseSession.groupCode,
+                    kbId: doc.kbId || 'general',
+                    docType: doc.docType || 'text',
+                    title: doc.title,
+                    content: doc.content,
+                    filename: getRagFilenameForDoc(doc),
+                    fileData: null,
+                    documentId: doc.id
+                }, { toastOnError: false });
+                if (!ok) {
+                    failCode = res.code || null;
+                    failMsg = res.error || failMsg;
+                }
             }
         } else {
-            // Fallback: client best-effort if reindex endpoint unavailable
             ok = await syncDocumentToRag({
                 groupCode: S.enterpriseSession.groupCode,
                 kbId: doc.kbId || 'general',
@@ -710,46 +749,39 @@ async function retryDocumentRagIndex(docId) {
                 documentId: doc.id
             }, { toastOnError: false });
         }
-    } else {
-        // Offline path: client best-effort RAG
-        ok = await syncDocumentToRag({
-            groupCode: S.enterpriseSession.groupCode,
-            kbId: doc.kbId || 'general',
-            docType: doc.docType || 'text',
-            title: doc.title,
-            content: doc.content,
-            filename: getRagFilenameForDoc(doc),
-            fileData: null,
-            documentId: doc.id
-        }, { toastOnError: false });
+
+        applyLocalDocRagStatus(docId, ok ? 'indexed' : 'failed', {
+            lastError: ok ? null : failMsg,
+            lastErrorCode: ok ? null : failCode,
+            retryable: ok ? null : true
+        });
+
+        if (S.enterpriseSession.offline) {
+            try {
+                const store = loadLocalEnterpriseStore();
+                const group = store.groups[normalizeEnterpriseCode(S.enterpriseSession.groupCode)];
+                const d = group?.documents?.find(x => x.id === docId);
+                if (d) {
+                    d.ragStatus = ok ? 'indexed' : 'failed';
+                    d.rag = {
+                        status: d.ragStatus,
+                        lastIndexedAt: ok ? new Date().toISOString() : d.rag?.lastIndexedAt || null,
+                        lastError: ok ? null : failMsg,
+                        lastErrorCode: ok ? null : failCode
+                    };
+                    if (!d.kbId) d.kbId = doc.kbId || 'general';
+                    saveLocalEnterpriseStore(store);
+                }
+            } catch (_) {}
+        }
+
+        renderEnterpriseDocuments();
+        if (ok) showToast(`已重新索引：${doc.title}`, 'success');
+        else showToast(`索引仍失敗：${doc.title}${failCode ? ' (' + failCode + ')' : ''}`, 'error');
+        S.ragSyncedGroupKey = null;
+    } finally {
+        S._ragRetryInFlight.delete(docId);
     }
-
-    applyLocalDocRagStatus(docId, ok ? 'indexed' : 'failed', {
-        lastError: ok ? null : '重試索引失敗'
-    });
-
-    if (S.enterpriseSession.offline) {
-        try {
-            const store = loadLocalEnterpriseStore();
-            const group = store.groups[normalizeEnterpriseCode(S.enterpriseSession.groupCode)];
-            const d = group?.documents?.find(x => x.id === docId);
-            if (d) {
-                d.ragStatus = ok ? 'indexed' : 'failed';
-                d.rag = {
-                    status: d.ragStatus,
-                    lastIndexedAt: ok ? new Date().toISOString() : d.rag?.lastIndexedAt || null,
-                    lastError: ok ? null : '重試索引失敗'
-                };
-                if (!d.kbId) d.kbId = doc.kbId || 'general';
-                saveLocalEnterpriseStore(store);
-            }
-        } catch (_) {}
-    }
-
-    renderEnterpriseDocuments();
-    if (ok) showToast(`已重新索引：${doc.title}`, 'success');
-    else showToast(`索引仍失敗：${doc.title}`, 'error');
-    S.ragSyncedGroupKey = null;
 }
 
 // ── W2-F: document version history (minimal UI) ────────────────────────────
@@ -1275,10 +1307,10 @@ function getFallbackKbItems() {
     }));
 }
 
-async function populateTeamDocKbSelect(items) {
+async function populateTeamDocKbSelect(items, preferredId) {
     const select = document.getElementById('team-doc-kb-select');
     if (!select) return;
-    const prev = select.value || 'general';
+    const prefer = preferredId || S.preferredUploadKbId || select.value || 'general';
     const list = (items && items.length) ? items : getFallbackKbItems();
     select.innerHTML = list.map(kb => {
         const label = (kb.displayName || getRagKbLabel(kb.id)).replace(/\s*\([^)]*\)\s*$/, '').trim();
@@ -1286,8 +1318,31 @@ async function populateTeamDocKbSelect(items) {
         const countHint = count > 0 ? `（${count} 份）` : '（空庫）';
         return `<option value="${escapeHtml(kb.id)}">${escapeHtml(label)} ${countHint}</option>`;
     }).join('');
-    if ([...select.options].some(o => o.value === prev)) select.value = prev;
-    else select.value = list[0]?.id || 'general';
+    if (prefer && [...select.options].some(o => o.value === prefer)) {
+        select.value = prefer;
+    } else if ([...select.options].some(o => o.value === 'general')) {
+        select.value = 'general';
+    } else {
+        select.value = list[0]?.id || 'general';
+    }
+}
+
+/** Click KB card → select as upload target + open add form (manager) */
+function selectTeamKnowledgeBase(kbId) {
+    if (!kbId || !S.enterpriseSession) return;
+    S.preferredUploadKbId = kbId;
+    const select = document.getElementById('team-doc-kb-select');
+    if (select) {
+        if ([...select.options].some(o => o.value === kbId)) select.value = kbId;
+    }
+    // Highlight selected card
+    document.querySelectorAll('.team-kb-card').forEach(el => {
+        el.classList.toggle('is-selected', el.getAttribute('data-kb-id') === kbId);
+    });
+    if (S.enterpriseSession.role === 'manager') {
+        toggleAddDocForm(true);
+        showToast(`已選擇知識庫，可上傳到此庫`, 'success');
+    }
 }
 
 async function renderTeamKnowledgeBases(options = {}) {
@@ -1354,7 +1409,7 @@ async function renderTeamKnowledgeBases(options = {}) {
         docCount: getKbDocCount(kb.id)
     }));
 
-    await populateTeamDocKbSelect(items);
+    await populateTeamDocKbSelect(items, S.preferredUploadKbId);
 
     listEl.innerHTML = items.map(kb => {
         const name = (kb.displayName || getRagKbLabel(kb.id)).replace(/\s*\([^)]*\)\s*$/, '').trim();
@@ -1362,8 +1417,13 @@ async function renderTeamKnowledgeBases(options = {}) {
         const countLabel = count > 0 ? `${count} 份文件` : '空庫';
         const isGeneral = kb.id === 'general';
         const canDelete = isManager && !offline && !isGeneral;
+        const selected = S.preferredUploadKbId === kb.id || (!S.preferredUploadKbId && isGeneral);
         return `
-            <div class="team-kb-card" data-kb-id="${escapeHtml(kb.id)}">
+            <div class="team-kb-card ${selected ? 'is-selected' : ''}" data-kb-id="${escapeHtml(kb.id)}"
+                ${luminaAction('selectTeamKnowledgeBase', { arg: kb.id })}
+                role="button" tabindex="0"
+                title="點擊選為上傳目標"
+                aria-label="選擇知識庫 ${escapeHtml(name)}">
                 <div class="team-kb-card-main">
                     <div class="team-kb-card-name">${escapeHtml(name)}</div>
                     <div class="team-kb-card-meta">
@@ -1375,7 +1435,7 @@ async function renderTeamKnowledgeBases(options = {}) {
                     <span class="team-kb-card-badge ${count === 0 ? 'is-empty' : ''}">${countLabel}</span>
                     ${canDelete ? `
                         <button type="button" class="team-kb-delete-btn focus-ring"
-                            ${luminaAction('deleteTeamKnowledgeBase', { arg: kb.id })}
+                            ${luminaAction('deleteTeamKnowledgeBase', { arg: kb.id, stop: true })}
                             aria-label="刪除知識庫 ${escapeHtml(name)}"
                             title="刪除知識庫（不可恢復）">
                             <i class="fa-solid fa-trash-can"></i>
@@ -1415,13 +1475,25 @@ async function createTeamKnowledgeBase() {
                 docCount: 0,
                 status: 'active'
             }]);
+            // Prefer new KB for next upload
+            S.preferredUploadKbId = kb.id;
         }
         if (nameEl) nameEl.value = '';
         if (descEl) descEl.value = '';
         toggleCreateKbForm(false);
-        showToast(`知識庫「${displayName}」已建立`, 'success');
+        showToast(
+            kb?.id
+                ? `知識庫「${displayName}」已建立，已選為上傳目標`
+                : `知識庫「${displayName}」已建立`,
+            'success'
+        );
         S._kbListCache = null;
         await renderTeamKnowledgeBases({ force: true });
+        await populateTeamDocKbSelect(
+            Object.values(S.ragKbItemsById || {}),
+            kb?.id
+        );
+        if (kb?.id) selectTeamKnowledgeBase(kb.id);
         window.renderRagKbCheckboxes?.();
     } catch (e) {
         if (e.status === 404 || e.code === 'NOT_FOUND') {
