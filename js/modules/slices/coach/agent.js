@@ -780,10 +780,86 @@ function addCoachMessageAsTodayTasks(msgIndex) {
     }
 }
 
+/**
+ * Prefill team assign form from a coach message (manager only).
+ * Uses first extracted action item as task title.
+ */
+function openCoachMessageAsTeamAssign(msgIndex) {
+    if (!S.enterpriseSession) {
+        return showToast('請先加入團隊', 'error');
+    }
+    if (S.enterpriseSession.role !== 'manager') {
+        return showToast('僅主管可指派團隊任務', 'error');
+    }
+    if (S.enterpriseSession.offline) {
+        return showToast('離線模式請至團隊頁本機指派', 'error');
+    }
+
+    const m = S.coachAgentMessages?.[msgIndex];
+    if (!m || m.role !== 'coach') {
+        return showToast('找不到教練訊息', 'error');
+    }
+    const candidates = extractTaskCandidatesFromCoachMessage(m.content);
+    if (!candidates.length) {
+        return showToast('無法從這則回覆抽出任務名稱', 'error');
+    }
+
+    const title = String(candidates[0]).slice(0, 100);
+    S._coachAssignDraft = {
+        title,
+        all: candidates,
+        msgIndex,
+        at: Date.now()
+    };
+
+    if (typeof showSection === 'function') showSection('team');
+    if (typeof switchTeamWorkspaceTab === 'function') switchTeamWorkspaceTab('members');
+
+    const applyDraft = (attempt = 0) => {
+        const titleEl = document.getElementById('team-assign-title');
+        const dueEl = document.getElementById('team-assign-due');
+        const panel = document.getElementById('team-manager-panel');
+        if (!titleEl && attempt < 8) {
+            setTimeout(() => applyDraft(attempt + 1), 50);
+            return;
+        }
+        if (titleEl) {
+            titleEl.value = title;
+            titleEl.classList.add('coach-assign-field-flash');
+            setTimeout(() => titleEl.classList.remove('coach-assign-field-flash'), 1800);
+            try { titleEl.focus(); } catch (_) {}
+        }
+        if (dueEl && !dueEl.value) {
+            dueEl.value = typeof getTodayISO === 'function' ? getTodayISO() : '';
+        }
+        panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        document.getElementById('team-assign-member')?.focus();
+
+        if (candidates.length > 1) {
+            showToast(`已帶入「${title}」（另有 ${candidates.length - 1} 項可手動再指派）`, 'success');
+        } else {
+            showToast(`已帶入「${title}」，請選擇成員後指派`, 'success');
+        }
+    };
+    setTimeout(() => applyDraft(0), 40);
+}
+
 function renderCoachAddTaskButton(msgIndex, content) {
     const n = extractTaskCandidatesFromCoachMessage(content).length;
     if (!n) return '';
     const label = n > 1 ? `加入 ${n} 項今日待辦` : '加到今日待辦';
+    const isManager = S.enterpriseSession?.role === 'manager' && !S.enterpriseSession?.offline;
+    const teamBtn = isManager ? `
+        <button type="button"
+            class="coach-assign-team-btn focus-ring"
+            data-lumina-action="openCoachMessageAsTeamAssign"
+            data-lumina-arg="${msgIndex}"
+            data-lumina-arg-type="number"
+            title="帶入團隊指派表單（需再選成員）">
+            <i class="fa-solid fa-user-tie"></i>
+            <span>指派給團隊</span>
+        </button>
+    ` : '';
     return `
         <div class="coach-msg-actions mt-2.5">
             <button type="button"
@@ -795,6 +871,7 @@ function renderCoachAddTaskButton(msgIndex, content) {
                 <i class="fa-solid fa-plus"></i>
                 <span>${label}</span>
             </button>
+            ${teamBtn}
         </div>
     `;
 }

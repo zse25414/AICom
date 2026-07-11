@@ -1209,8 +1209,9 @@
                         <div class="font-semibold mb-4 flex items-center gap-x-2"><i class="fa-solid fa-gear text-slate-400"></i><span>設定與快捷鍵</span></div>
                         <div class="space-y-3 text-sm text-slate-300">
                             <div class="flex gap-x-3"><span class="guide-step-num">⚙</span><span><strong>設定</strong>：調整工作節奏、DeepSeek API、連續天數門檻、匯出/匯入資料。</span></div>
-                            <div class="flex gap-x-3"><span class="guide-step-num">⌨</span><span><code class="text-indigo-300 bg-slate-950 px-1.5 py-0.5 rounded">Ctrl + /</code> 快速新增任務</span></div>
-                            <div class="flex gap-x-3"><span class="guide-step-num">⌨</span><span><code class="text-indigo-300 bg-slate-950 px-1.5 py-0.5 rounded">?</code> 開啟 AI 教練</span></div>
+                            <div class="flex gap-x-3"><span class="guide-step-num">⌨</span><span><code class="text-indigo-300 bg-slate-950 px-1.5 py-0.5 rounded">?</code> 快捷鍵說明</span></div>
+                            <div class="flex gap-x-3"><span class="guide-step-num">⌨</span><span><code class="text-indigo-300 bg-slate-950 px-1.5 py-0.5 rounded">1–5</code> 切換頁面（含團隊）</span></div>
+                            <div class="flex gap-x-3"><span class="guide-step-num">⌨</span><span><code class="text-indigo-300 bg-slate-950 px-1.5 py-0.5 rounded">Ctrl + /</code> 快速新增任務 · <code class="text-indigo-300 bg-slate-950 px-1.5 py-0.5 rounded">k</code> 知識庫</span></div>
                         </div>
                     </div>
                 </div>
@@ -1645,6 +1646,48 @@
         </div>
     </div>
     
+    <!-- Keyboard shortcuts help -->
+    <div id="shortcuts-help-overlay" class="shortcuts-help-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcuts-help-title" hidden>
+        <div class="shortcuts-help-backdrop" data-lumina-action="closeShortcutsHelp"></div>
+        <div class="shortcuts-help-panel">
+            <div class="shortcuts-help-header">
+                <div>
+                    <div class="shortcuts-help-kicker">Keyboard</div>
+                    <h2 id="shortcuts-help-title" class="shortcuts-help-title">快捷鍵一覽</h2>
+                </div>
+                <button type="button" class="shortcuts-help-close focus-ring" data-lumina-action="closeShortcutsHelp" aria-label="關閉">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="shortcuts-help-body custom-scroll">
+                <div class="shortcuts-help-group">
+                    <div class="shortcuts-help-group-title">導覽</div>
+                    <div class="shortcuts-help-row"><kbd>1</kbd><span>儀表板</span></div>
+                    <div class="shortcuts-help-row"><kbd>2</kbd><span>排程</span></div>
+                    <div class="shortcuts-help-row"><kbd>3</kbd><span>AI 教練</span></div>
+                    <div class="shortcuts-help-row"><kbd>4</kbd><span>洞察</span></div>
+                    <div class="shortcuts-help-row"><kbd>5</kbd><span>團隊</span></div>
+                    <div class="shortcuts-help-row"><kbd>t</kbd><span>團隊</span></div>
+                    <div class="shortcuts-help-row"><kbd>k</kbd><span>團隊知識庫</span></div>
+                </div>
+                <div class="shortcuts-help-group">
+                    <div class="shortcuts-help-group-title">操作</div>
+                    <div class="shortcuts-help-row"><kbd>Ctrl</kbd><kbd>/</kbd><span>快速新增任務</span></div>
+                    <div class="shortcuts-help-row"><kbd>?</kbd><span>開啟此說明</span></div>
+                    <div class="shortcuts-help-row"><kbd>Esc</kbd><span>關閉彈層／抽屜</span></div>
+                </div>
+                <div class="shortcuts-help-group">
+                    <div class="shortcuts-help-group-title">教練</div>
+                    <div class="shortcuts-help-row"><span class="shortcuts-help-note">回覆下方可「加到今日待辦」；主管可「指派給團隊」帶入任務表單。</span></div>
+                    <div class="shortcuts-help-row"><span class="shortcuts-help-note">訊息可用 <code>@庫名</code> 單則覆寫知識庫。</span></div>
+                </div>
+            </div>
+            <div class="shortcuts-help-footer">
+                <button type="button" class="shortcuts-help-primary focus-ring" data-lumina-action="closeShortcutsHelp">知道了</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div id="toast-container" class="fixed bottom-20 md:bottom-5 right-5 z-[100] space-y-2" aria-live="polite" aria-relevant="additions"></div>
     <script src="js/lumina-app.js" defer></script>

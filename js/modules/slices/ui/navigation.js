@@ -178,11 +178,62 @@ function showSection(section) {
     }
 }
 
+function isTypingTarget(el) {
+    if (!el || el === document.body) return false;
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    if (el.isContentEditable) return true;
+    return false;
+}
+
+function isShortcutsHelpOpen() {
+    const el = document.getElementById('shortcuts-help-overlay');
+    return !!(el && !el.classList.contains('hidden') && !el.hasAttribute('hidden'));
+}
+
+function openShortcutsHelp() {
+    const el = document.getElementById('shortcuts-help-overlay');
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.removeAttribute('hidden');
+    el.querySelector('.shortcuts-help-close')?.focus();
+}
+
+function closeShortcutsHelp() {
+    const el = document.getElementById('shortcuts-help-overlay');
+    if (!el) return;
+    el.classList.add('hidden');
+    el.setAttribute('hidden', '');
+}
+
+function toggleShortcutsHelp() {
+    if (isShortcutsHelpOpen()) closeShortcutsHelp();
+    else openShortcutsHelp();
+}
+
 function setupKeyboardShortcuts() {
-    const NAV_KEYS = { '1': 'dashboard', '2': 'scheduler', '3': 'coach', '4': 'insights' };
-    
-    document.addEventListener('keydown', function(e) {
+    const NAV_KEYS = {
+        '1': 'dashboard',
+        '2': 'scheduler',
+        '3': 'coach',
+        '4': 'insights',
+        '5': 'team'
+    };
+
+    document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
+            if (isShortcutsHelpOpen()) {
+                closeShortcutsHelp();
+                return;
+            }
+            if (document.getElementById('coach-source-drawer')) {
+                if (typeof closeCoachSourcePreview === 'function') closeCoachSourcePreview();
+                return;
+            }
+            if (document.getElementById('document-version-preview-modal') ||
+                document.querySelector('.doc-ver-preview:not(.hidden)')) {
+                if (typeof closeDocumentVersionPreview === 'function') closeDocumentVersionPreview();
+            }
             if (!document.getElementById('task-edit-modal')?.classList.contains('hidden')) {
                 closeTaskEdit();
                 return;
@@ -195,33 +246,61 @@ function setupKeyboardShortcuts() {
                 skipOnboarding();
                 return;
             }
+            if (typeof closeNotificationPanel === 'function' && S.notifPanelOpen) {
+                closeNotificationPanel();
+                return;
+            }
             closeNavMore();
             closeMobileMore();
             return;
         }
-        
+
+        // Don't steal keys while typing in fields
+        if (isTypingTarget(document.activeElement)) return;
+
         if ((e.metaKey || e.ctrlKey) && e.key === '/') {
             e.preventDefault();
             const dashboard = document.getElementById('dashboard');
-            if (dashboard.classList.contains('active')) {
-                document.getElementById('quick-task-input').focus();
+            if (dashboard?.classList.contains('active')) {
+                document.getElementById('quick-task-input')?.focus();
             } else {
-
-/* Lumina module: init, shortcuts, boot */
                 showSection('dashboard');
-                setTimeout(() => document.getElementById('quick-task-input').focus(), 300);
+                setTimeout(() => document.getElementById('quick-task-input')?.focus(), 300);
             }
+            return;
         }
-        
-        if (e.key === '?' && document.activeElement.tagName === 'BODY') {
+
+        // ? or Shift+/ → shortcuts help
+        if (e.key === '?' || (e.shiftKey && e.key === '/')) {
             e.preventDefault();
-            showSection('coach');
+            toggleShortcutsHelp();
+            return;
         }
-        
-        if (!e.metaKey && !e.ctrlKey && !e.altKey && NAV_KEYS[e.key] && document.activeElement.tagName === 'BODY') {
+
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+        if (NAV_KEYS[e.key]) {
+            e.preventDefault();
             showSection(NAV_KEYS[e.key]);
+            return;
+        }
+
+        if (e.key === 't' || e.key === 'T') {
+            e.preventDefault();
+            showSection('team');
+            return;
+        }
+
+        if (e.key === 'k' || e.key === 'K') {
+            e.preventDefault();
+            if (typeof openTeamKnowledgeTab === 'function') openTeamKnowledgeTab();
+            else {
+                showSection('team');
+                if (typeof switchTeamWorkspaceTab === 'function') switchTeamWorkspaceTab('knowledge');
+            }
+            return;
         }
     });
-    
-    console.log('%c[Lumina AI] 快捷鍵：1-4 切換頁面，Cmd/Ctrl+/ 新增任務，? 開啟 AI 教練，Esc 關閉', 'color:#64748b');
+
+    console.log('%c[Lumina AI] 快捷鍵：? 說明 · 1-5 切換頁面 · t 團隊 · k 知識庫 · Ctrl+/ 新增任務 · Esc 關閉', 'color:#64748b');
 }
