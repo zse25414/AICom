@@ -79,7 +79,14 @@ const AUTH_RATE_LIMIT_MAX = 20;
 const PIN_MAX_ATTEMPTS = 5;
 const PIN_LOCK_MS = 15 * 60 * 1000;
 const AI_RATE_LIMIT_MAX = 30;
-const AI_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const AI_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour — must be passed into AI bucket checks
+const DEFAULT_LLM_API_BASE = 'https://api.deepseek.com/v1';
+const ALLOWED_LLM_API_BASES = new Set(
+    (process.env.ALLOWED_LLM_API_BASES || 'https://api.deepseek.com,https://api.deepseek.com/v1')
+        .split(',')
+        .map(s => s.trim().replace(/\/+$/, ''))
+        .filter(Boolean)
+);
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const ALLOWED_UPLOAD_EXT = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.xlsx', '.xls', '.csv']);
 const WEAK_PINS = new Set(['0000', '1234', '1111', '9999', '4321', '1212', 'password', 'admin']);
@@ -163,10 +170,10 @@ function getClientIp(req) {
     return req.socket.remoteAddress || 'unknown';
 }
 
-function checkRateLimitBucket(map, key, max) {
+function checkRateLimitBucket(map, key, max, windowMs = RATE_LIMIT_WINDOW_MS) {
     const now = Date.now();
     let bucket = map.get(key);
-    if (!bucket || now - bucket.start > RATE_LIMIT_WINDOW_MS) {
+    if (!bucket || now - bucket.start > windowMs) {
         bucket = { start: now, count: 0 };
         map.set(key, bucket);
     }
@@ -175,11 +182,43 @@ function checkRateLimitBucket(map, key, max) {
 }
 
 function checkRateLimit(req) {
-    return checkRateLimitBucket(rateBuckets, getClientIp(req), RATE_LIMIT_MAX);
+    return checkRateLimitBucket(rateBuckets, getClientIp(req), RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
 }
 
 function checkAuthRateLimit(req) {
-    return checkRateLimitBucket(authRateBuckets, 'auth:' + getClientIp(req), AUTH_RATE_LIMIT_MAX);
+    return checkRateLimitBucket(authRateBuckets, 'auth:' + getClientIp(req), AUTH_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
+}
+
+/** Normalize LLM api_base for allowlist comparison (strip trailing slash). */
+function normalizeLlmApiBase(url) {
+    return String(url || '').trim().replace(/\/+$/, '');
+}
+
+/** True if url is on the LLM api_base allowlist (env-extensible). */
+function isAllowedLlmApiBase(url) {
+    const n = normalizeLlmApiBase(url);
+    if (!n) return false;
+    if (ALLOWED_LLM_API_BASES.has(n)) return true;
+    // Accept host without /v1 if allowlist has either form
+    if (ALLOWED_LLM_API_BASES.has(n + '/v1')) return true;
+    if (n.endsWith('/v1') && ALLOWED_LLM_API_BASES.has(n.slice(0, -3))) return true;
+    return false;
+}
+
+/**
+ * Resolve a safe api_base. When using server key, always force default.
+ * When client provides base outside allowlist, returns null (caller should 400).
+ */
+function resolveLlmApiBase(requested, { forceDefault = false } = {}) {
+    if (forceDefault) return DEFAULT_LLM_API_BASE;
+    const n = normalizeLlmApiBase(requested);
+    if (!n) return DEFAULT_LLM_API_BASE;
+    if (!isAllowedLlmApiBase(n)) return null;
+    // Prefer canonical deepseek base with /v1 when matching deepseek host
+    if (n === 'https://api.deepseek.com' || n === 'http://api.deepseek.com') {
+        return DEFAULT_LLM_API_BASE;
+    }
+    return n;
 }
 
 function getPinAttemptKey(code, ip) {
@@ -306,7 +345,7 @@ function sanitizeChatBody(body) {
 
 function checkAiRateLimit(userId) {
     const key = userId || 'anonymous';
-    return checkRateLimitBucket(aiRateBuckets, key, AI_RATE_LIMIT_MAX);
+    return checkRateLimitBucket(aiRateBuckets, key, AI_RATE_LIMIT_MAX, AI_RATE_LIMIT_WINDOW_MS);
 }
 
 function prepareStore(store) {
@@ -1217,9 +1256,28 @@ const server = http.createServer(async (req, res) => {
                     sendJson(res, access.status, { error: access.error });
                     return;
                 }
-                if (!body.deepseek_api_key && !body.openai_api_key && API_KEY) {
+                // Prevent key exfiltration via attacker-controlled api_base:
+                // - server key path: always force allowlisted default base
+                // - client key path: still require allowlist (400 if not)
+                const hasClientLlmKey = !!(
+                    (body.deepseek_api_key && String(body.deepseek_api_key).trim()) ||
+                    (body.openai_api_key && String(body.openai_api_key).trim())
+                );
+                if (!hasClientLlmKey && API_KEY) {
                     body.deepseek_api_key = API_KEY;
-                    body.api_base = body.api_base || 'https://api.deepseek.com/v1';
+                    body.api_base = resolveLlmApiBase(null, { forceDefault: true });
+                } else if (body.api_base != null && String(body.api_base).trim()) {
+                    const resolved = resolveLlmApiBase(body.api_base);
+                    if (!resolved) {
+                        sendJson(res, 400, {
+                            error: 'api_base is not allowed',
+                            code: 'API_BASE_FORBIDDEN'
+                        });
+                        return;
+                    }
+                    body.api_base = resolved;
+                } else if (hasClientLlmKey) {
+                    body.api_base = DEFAULT_LLM_API_BASE;
                 }
                 const proxied = await proxyRagJson('/api/rag/query', body);
                 res.writeHead(proxied.status, { 'Content-Type': 'application/json' });
@@ -1383,6 +1441,8 @@ initDb().then(async connected => {
             console.log(`  Database stats: users=${dbStats.collections.users}, user_data=${dbStats.collections.user_data}, groups=${dbStats.collections.enterprise_groups}`);
         }
         console.log(`  Allowed origins: ${ALLOWED_ORIGINS.join(', ')}`);
+        console.log(`  AI rate limit: ${AI_RATE_LIMIT_MAX} requests / ${AI_RATE_LIMIT_WINDOW_MS / 60000} min / user`);
+        console.log(`  LLM api_base allowlist: ${[...ALLOWED_LLM_API_BASES].join(', ')}`);
         if (!API_KEY) console.warn('  ⚠️  DEEPSEEK_API_KEY not set (AI chat proxy disabled)');
         if (PIN_SALT === 'lumina-pin-salt-change-in-production') {
             console.warn('  ⚠️  Using default PIN_SALT — set PIN_SALT env in production');

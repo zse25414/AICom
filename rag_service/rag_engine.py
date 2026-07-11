@@ -87,6 +87,7 @@ from config import (
     OPENAI_API_KEY,
     STORAGE_DIR,
     VECTOR_TOP_K,
+    resolve_llm_api_base,
 )
 
 _embed_model_name: Optional[str] = None
@@ -176,12 +177,16 @@ def configure_llm(
     if not llm_key:
         raise ValueError("未設定 LLM API Key，請在環境變數設定 DEEPSEEK_API_KEY 或 OPENAI_API_KEY")
 
-    use_deepseek = bool((deepseek_api_key or "").strip()) or "deepseek" in (api_base or DEEPSEEK_API_BASE).lower()
+    # Never honor untrusted client api_base (SSRF / key exfiltration defense).
+    has_deepseek_key = bool((deepseek_api_key or "").strip())
+    has_openai_key = bool((openai_api_key or "").strip())
+    # Prefer DeepSeek when its key is present, or when only server/env keys apply.
+    use_deepseek = has_deepseek_key or not has_openai_key
     if use_deepseek:
-        _llm_api_base = (api_base or DEEPSEEK_API_BASE).strip().rstrip("/")
+        _llm_api_base = resolve_llm_api_base(api_base, DEEPSEEK_API_BASE)
         _llm_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
     else:
-        _llm_api_base = "https://api.openai.com/v1"
+        _llm_api_base = resolve_llm_api_base(api_base, "https://api.openai.com/v1")
         _llm_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     _llm_api_key = llm_key
 
