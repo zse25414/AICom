@@ -817,9 +817,36 @@ async function softDeleteKnowledgeBase(group, kbIdRaw) {
         return { ok: false, status: 404, error: '知識庫不存在', code: 'KB_NOT_FOUND' };
     }
 
-    // Wipe RAG index before any metadata soft-delete (D2 consistency, same as document/delete).
+    // Active docs on this KB (before soft-delete)
+    const activeOnKb = (group.documents || []).filter(
+        d => isActiveDocument(d) && normalizeKbId(d.kbId || 'general') === kbId
+    );
+
+    // Wipe RAG index before metadata soft-delete when possible (D2 consistency).
     const ragResult = await proxyRagDeleteKb(normalizeCode(group.code), kbId);
     if (!ragResult.ok) {
+        // Empty KB + RAG unreachable/missing: allow metadata-only soft-delete (no vectors to protect).
+        // Non-empty KB still fail-closed so we never hide documents while index may remain.
+        const unreachable = !ragResult.status || ragResult.status === 0 || ragResult.status >= 500;
+        const missing = ragResult.status === 404;
+        if (activeOnKb.length === 0 && (unreachable || missing)) {
+            console.warn(
+                '[Lumina API] RAG KB wipe skipped for empty KB (unreachable/missing) — metadata soft-delete only:',
+                ragResult.text || ragResult.status
+            );
+            const nowEmpty = new Date().toISOString();
+            kb.status = 'deleted';
+            kb.deletedAt = nowEmpty;
+            kb.updatedAt = nowEmpty;
+            kb.docCount = 0;
+            return {
+                ok: true,
+                kb_id: kbId,
+                documentsSoftDeleted: 0,
+                ragDeleteOk: false,
+                warning: '知識庫索引服務不可用；空知識庫已僅從列表移除（無文件需級聯）'
+            };
+        }
         console.warn('[Lumina API] RAG KB index delete failed — abort soft-delete:', ragResult.text);
         return {
             ok: false,
@@ -2917,8 +2944,8 @@ const server = http.createServer(async (req, res) => {
                 }
 
                 const result = await softDeleteKnowledgeBase(group, kbIdRaw);
-                // RAG wipe failed: no metadata mutation — surface ok:false + ragDeleteOk:false
-                if (result.ragDeleteOk === false) {
+                // Fail-closed wipe (non-empty KB): no metadata mutation
+                if (!result.ok && result.ragDeleteOk === false) {
                     console.warn(
                         `[Lumina API] KB delete aborted (RAG wipe fail) group=${normalizeCode(groupCode)} kb=${result.kb_id}`
                     );
@@ -2937,12 +2964,14 @@ const server = http.createServer(async (req, res) => {
                     sendError(res, result.status, result.error, result.code);
                     return;
                 }
+                // ok:true may still have ragDeleteOk:false (empty KB, RAG unreachable — metadata-only)
                 await saveStore(store);
                 sendJson(res, 200, {
                     ok: true,
                     kb_id: result.kb_id,
                     documentsSoftDeleted: result.documentsSoftDeleted,
-                    ragDeleteOk: true
+                    ragDeleteOk: result.ragDeleteOk !== false,
+                    warning: result.warning
                 });
                 return;
             }

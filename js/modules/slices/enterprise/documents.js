@@ -768,12 +768,21 @@ function renderDocVersionBadge(doc) {
     return `<span class="doc-version-badge" title="目前版本">v${v}</span>`;
 }
 
+function ensureDocUiState() {
+    if (!S.docUiOpen) S.docUiOpen = { versionPanels: {}, newVerForms: {} };
+    return S.docUiOpen;
+}
+
 function toggleDocVersionPanel(docId) {
     if (!docId) return;
+    const ui = ensureDocUiState();
     const panel = document.getElementById(`doc-ver-panel-${docId}`);
     if (!panel) return;
     const opening = panel.classList.contains('hidden');
     panel.classList.toggle('hidden', !opening);
+    ui.versionPanels[docId] = opening;
+    const btn = document.querySelector(`[aria-controls="doc-ver-panel-${docId}"]`);
+    if (btn) btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
     if (opening) {
         loadDocumentVersions(docId);
     }
@@ -781,12 +790,35 @@ function toggleDocVersionPanel(docId) {
 
 function toggleDocNewVersionForm(docId) {
     if (!docId) return;
+    const ui = ensureDocUiState();
     const form = document.getElementById(`doc-newver-form-${docId}`);
     if (!form) return;
     form.classList.toggle('hidden');
-    if (!form.classList.contains('hidden')) {
+    const open = !form.classList.contains('hidden');
+    ui.newVerForms[docId] = open;
+    if (open) {
         document.getElementById(`doc-newver-title-${docId}`)?.focus();
     }
+}
+
+/** Restore open version panels / new-version forms after list re-render */
+function restoreDocUiPanels() {
+    const ui = S.docUiOpen;
+    if (!ui) return;
+    Object.keys(ui.versionPanels || {}).forEach(docId => {
+        if (!ui.versionPanels[docId]) return;
+        const panel = document.getElementById(`doc-ver-panel-${docId}`);
+        if (!panel) return;
+        panel.classList.remove('hidden');
+        const btn = document.querySelector(`[aria-controls="doc-ver-panel-${docId}"]`);
+        if (btn) btn.setAttribute('aria-expanded', 'true');
+        loadDocumentVersions(docId);
+    });
+    Object.keys(ui.newVerForms || {}).forEach(docId => {
+        if (!ui.newVerForms[docId]) return;
+        const form = document.getElementById(`doc-newver-form-${docId}`);
+        if (form) form.classList.remove('hidden');
+    });
 }
 
 async function loadDocumentVersions(docId) {
@@ -1588,4 +1620,7 @@ function renderEnterpriseDocuments() {
         </div>
     `;
     }).join('');
+
+    // Wave 3 polish: keep version/history UI open across re-renders (rag poll, etc.)
+    try { restoreDocUiPanels(); } catch (e) { console.warn('[Lumina] restoreDocUiPanels', e); }
 }
