@@ -1571,6 +1571,15 @@ body {
     font-weight: 600;
 }
 
+.coach-rag-at-hint {
+    font-size: 0.65rem;
+    padding: 0.05rem 0.3rem;
+    border-radius: 0.25rem;
+    background: rgba(99, 102, 241, 0.15);
+    color: #c7d2fe;
+    border: 1px solid rgba(129, 140, 248, 0.25);
+}
+
 .coach-rag-query-empty-hint {
     color: #fbbf24;
 }
@@ -1642,9 +1651,72 @@ body {
     font-weight: 500;
 }
 
+.coach-kb-used-badge {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.45rem;
+    margin-top: 0.65rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 9999px;
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(129, 140, 248, 0.35);
+    color: #c7d2fe;
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
+.coach-kb-used-badge strong {
+    color: #e0e7ff;
+    font-weight: 600;
+}
+
+.coach-kb-used-badge i {
+    color: #a5b4fc;
+}
+
+.coach-kb-nohit-badge {
+    background: rgba(245, 158, 11, 0.1);
+    border-color: rgba(245, 158, 11, 0.35);
+    color: #fcd34d;
+}
+
+.coach-kb-nohit-badge i {
+    color: #fbbf24;
+}
+
 .coach-kb-unused-hint {
     color: #64748b;
     font-weight: 400;
+}
+
+.coach-kb-nohit-badge .coach-kb-unused-hint {
+    color: rgba(253, 230, 138, 0.75);
+}
+
+/* Flash highlight when jumping from coach source → team doc */
+.doc-highlight-pulse {
+    animation: doc-highlight-pulse 2s ease-out;
+    border-color: rgba(129, 140, 248, 0.7) !important;
+    box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.35), 0 0 24px rgba(99, 102, 241, 0.2);
+}
+
+@keyframes doc-highlight-pulse {
+    0% {
+        background-color: rgba(99, 102, 241, 0.22);
+        transform: scale(1.01);
+    }
+    100% {
+        background-color: transparent;
+        transform: scale(1);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .doc-highlight-pulse {
+        animation: none;
+        background-color: rgba(99, 102, 241, 0.12);
+    }
 }
 
 .coach-source-drawer {

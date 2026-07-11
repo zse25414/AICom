@@ -108,6 +108,11 @@ function openCoachSourcePreview(msgIndex, srcIndex) {
                         <i class="fa-solid fa-arrow-up-right-from-square"></i> 開啟檔案
                        </a>`
                     : ''}
+                ${s.document_id
+                    ? `<button type="button" class="coach-source-open-btn focus-ring" data-lumina-action="openCoachSourceInTeamDocs" data-lumina-arg="${escapeHtml(s.document_id)}" title="在團隊知識庫定位此文件">
+                        <i class="fa-solid fa-folder-open"></i> 在知識庫中查看
+                       </button>`
+                    : ''}
                 <button type="button" class="coach-source-secondary-btn focus-ring" data-lumina-action="closeCoachSourcePreview">關閉</button>
             </div>
         </div>
@@ -151,14 +156,116 @@ function renderCoachSourceChips(sources, msgIndex) {
     `;
 }
 
+function shortKbLabel(kbId) {
+    const label = typeof getRagKbLabel === 'function' ? getRagKbLabel(kbId) : String(kbId || '');
+    return label.replace(/\s*\([^)]*\)\s*$/, '').trim() || String(kbId || '');
+}
+
+/** Build alias → kbId map for @mention resolution (id + short display name). */
+function getCoachKbAliasMap() {
+    const map = new Map();
+    const add = (alias, id) => {
+        const k = String(alias || '').trim().toLowerCase();
+        if (k) map.set(k, id);
+    };
+    const ids = new Set([
+        ...Object.keys(C.RAG_KB_LABELS || {}),
+        ...Object.keys(S.ragKbItemsById || {}),
+        ...(S.checkedRagKbs || []),
+        ...((S.enterpriseGroupData?.documents || []).map(d => d.kbId || 'general'))
+    ]);
+    for (const id of ids) {
+        if (!id) continue;
+        add(id, id);
+        const short = shortKbLabel(id);
+        add(short, id);
+        add(short.replace(/\s+/g, ''), id);
+    }
+    return map;
+}
+
+/**
+ * Parse @知識庫 mentions for one-shot KB override.
+ * e.g. 「@新人培訓 環境怎麼裝」→ kbIds: [onboarding]
+ */
+function parseCoachKbMentions(userMsg) {
+    const text = String(userMsg || '');
+    const aliasMap = getCoachKbAliasMap();
+    const aliases = [...aliasMap.keys()].sort((a, b) => b.length - a.length);
+    const found = [];
+    const spans = [];
+    const re = /@([^\s@，,。.!！?？:：;；"'「」『』()（）\[\]{}<>]+)/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        const token = String(m[1] || '').toLowerCase();
+        if (!token) continue;
+        let id = aliasMap.get(token) || null;
+        if (!id) {
+            for (const a of aliases) {
+                if (token === a || (a.length >= 2 && (token.startsWith(a) || a.startsWith(token)))) {
+                    id = aliasMap.get(a);
+                    break;
+                }
+            }
+        }
+        if (id) {
+            found.push(id);
+            spans.push({ start: m.index, end: m.index + m[0].length });
+        }
+    }
+    let cleaned = text;
+    for (let i = spans.length - 1; i >= 0; i--) {
+        cleaned = cleaned.slice(0, spans[i].start) + cleaned.slice(spans[i].end);
+    }
+    cleaned = cleaned.replace(/\s{2,}/g, ' ').trim();
+    return {
+        kbIds: [...new Set(found)],
+        cleanedMsg: cleaned || text.trim(),
+        hadMentions: found.length > 0
+    };
+}
+
 function renderCoachKbUsageBadge(meta) {
-    if (!meta || meta.usedKnowledge !== false) return '';
+    if (!meta) return '';
+
+    // Success path: show which KBs answered this turn
+    if (meta.usedKnowledge === true) {
+        const kbIds = Array.isArray(meta.kbIds) ? meta.kbIds : [];
+        const labels = kbIds.map(shortKbLabel).filter(Boolean);
+        const srcN = typeof meta.sourceCount === 'number' ? meta.sourceCount : null;
+        const mention = meta.mentionOverride ? ' · 本則 @覆寫' : '';
+
+        if (srcN === 0) {
+            return `
+                <div class="coach-kb-used-badge coach-kb-nohit-badge" role="status">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <span>已查知識庫但無相關段落</span>
+                    <span class="coach-kb-unused-hint">（可換庫、補文件，或用 @知識庫 覆寫）${escapeHtml(mention)}</span>
+                </div>
+            `;
+        }
+
+        const kbPart = labels.length
+            ? `依 <strong>${escapeHtml(labels.join('、'))}</strong> 回答`
+            : '已使用知識庫';
+        const srcPart = srcN != null ? ` · ${srcN} 則來源` : '';
+        return `
+            <div class="coach-kb-used-badge" role="status">
+                <i class="fa-solid fa-database"></i>
+                <span>${kbPart}${srcPart}${escapeHtml(mention)}</span>
+            </div>
+        `;
+    }
+
+    if (meta.usedKnowledge !== false) return '';
+
     const reason = meta.kbSkipReason || 'degraded';
     const hints = {
         offline: 'RAG 離線',
-        empty_selection: '未選知識庫',
+        empty_selection: '未選知識庫（可用 @庫名 單則覆寫）',
         degraded: '查詢降級',
-        no_team: '未加入團隊'
+        no_team: '未加入團隊',
+        no_mention_match: '未辨識到有效 @知識庫'
     };
     const hint = hints[reason] || '未檢索';
     return `
@@ -168,6 +275,39 @@ function renderCoachKbUsageBadge(meta) {
             <span class="coach-kb-unused-hint">（${escapeHtml(hint)}）</span>
         </div>
     `;
+}
+
+function openCoachSourceInTeamDocs(documentId) {
+    const id = String(documentId || '');
+    closeCoachSourcePreview();
+    if (!id) {
+        if (typeof openTeamKnowledgeTab === 'function') openTeamKnowledgeTab();
+        return;
+    }
+    if (typeof openTeamKnowledgeTab === 'function') openTeamKnowledgeTab();
+
+    const docs = S.enterpriseGroupData?.documents || [];
+    const doc = docs.find(d => d.id === id);
+    const searchEl = document.getElementById('team-docs-search');
+    if (doc && searchEl) {
+        searchEl.value = doc.title || '';
+        if (typeof onTeamDocsFilterChange === 'function') onTeamDocsFilterChange();
+    } else if (typeof renderEnterpriseDocuments === 'function') {
+        renderEnterpriseDocuments();
+    }
+
+    const tryHighlight = (attempt = 0) => {
+        const el = document.querySelector(`[data-doc-id="${CSS.escape(id)}"]`);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.classList.add('doc-highlight-pulse');
+            setTimeout(() => el.classList.remove('doc-highlight-pulse'), 2200);
+            return;
+        }
+        if (attempt < 6) setTimeout(() => tryHighlight(attempt + 1), 80);
+        else if (typeof showToast === 'function') showToast('已開啟知識庫；若未見該文件，請調整篩選', 'success');
+    };
+    setTimeout(() => tryHighlight(0), 60);
 }
 
 function getOpeningCoachMessage(task, steps) {
@@ -331,15 +471,26 @@ function resolveCoachKbSkipReason() {
 }
 
 async function coachAgentRespondWithAI(userMsg, task, session) {
-    const skipReason = resolveCoachKbSkipReason();
+    const mention = parseCoachKbMentions(userMsg);
+    const effectiveKbIds = mention.hadMentions
+        ? mention.kbIds
+        : (Array.isArray(S.checkedRagKbs) ? [...S.checkedRagKbs] : []);
+    const queryText = mention.hadMentions ? mention.cleanedMsg : userMsg;
+
+    // Mentions can override empty checkbox selection for this turn only
+    let skipReason = null;
+    if (!S.enterpriseSession) skipReason = 'no_team';
+    else if (!S.ragServiceActive) skipReason = 'offline';
+    else if (!effectiveKbIds.length) skipReason = 'empty_selection';
+
     let ragDegraded = false;
 
     if (!skipReason) {
         try {
             const payload = {
-                query: userMsg,
+                query: queryText,
                 group_code: S.enterpriseSession.groupCode,
-                kb_ids: S.checkedRagKbs,
+                kb_ids: effectiveKbIds,
                 ...getRagLlmCredentials()
             };
             
@@ -364,7 +515,12 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                 return {
                     reply: clampText(reply, 5000),
                     sources,
-                    meta: { usedKnowledge: true },
+                    meta: {
+                        usedKnowledge: true,
+                        kbIds: effectiveKbIds,
+                        sourceCount: sources.length,
+                        mentionOverride: mention.hadMentions
+                    },
                     ...inferAgentActionsFromUserMsg(userMsg, session)
                 };
             }
@@ -377,7 +533,9 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
 
     const kbMeta = {
         usedKnowledge: false,
-        kbSkipReason: ragDegraded ? 'degraded' : (skipReason || 'degraded')
+        kbSkipReason: ragDegraded ? 'degraded' : (skipReason || 'degraded'),
+        kbIds: effectiveKbIds,
+        mentionOverride: mention.hadMentions
     };
 
     const step = session.steps[session.currentStep];

@@ -421,7 +421,7 @@
                                     <div class="coach-rag-selector-label">
                                         <i class="fa-solid fa-database text-purple-400"></i>
                                         <span>選用 RAG 知識庫</span>
-                                        <span class="coach-rag-selector-hint">可不選＝純教練</span>
+                                        <span class="coach-rag-selector-hint">可不選＝純教練 · 訊息可用 @庫名 單則覆寫</span>
                                     </div>
                                     <div id="rag-kb-offline-banner" class="coach-rag-offline-banner hidden" role="status">
                                         <i class="fa-solid fa-triangle-exclamation"></i>
@@ -435,7 +435,7 @@
                                     <div id="rag-kb-query-summary" class="coach-rag-query-summary hidden" aria-live="polite"></div>
                                 </div>
                                 <div class="coach-chat-input-row">
-                                    <textarea id="chat-input" rows="2" placeholder="跟教練說：卡住了、做完了、換個做法…"
+                                    <textarea id="chat-input" rows="2" placeholder="跟教練說：卡住了、做完了… 或 @新人培訓 環境怎麼裝"
                                               class="coach-chat-input focus-ring"
                                               onkeydown="if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendCoachAgentMessage(); }"></textarea>
                                     <button type="button" data-lumina-action="sendCoachAgentMessage"

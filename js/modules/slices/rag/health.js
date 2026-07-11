@@ -79,7 +79,7 @@ function updateRagQuerySummary() {
 
     const ids = Array.isArray(S.checkedRagKbs) ? S.checkedRagKbs : [];
     if (!ids.length) {
-        el.innerHTML = '<i class="fa-solid fa-comments mr-1 opacity-70"></i>目前查：<strong>純教練</strong>（未勾選知識庫）';
+        el.innerHTML = '<i class="fa-solid fa-comments mr-1 opacity-70"></i>目前查：<strong>純教練</strong>（未勾選 · 可用 <code class="coach-rag-at-hint">@庫名</code> 單則覆寫）';
         updateRagEmptyBanner([]);
         return;
     }
