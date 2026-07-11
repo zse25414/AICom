@@ -20,22 +20,49 @@ function normalizeEnterpriseCode(code) {
     return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+/**
+ * Enterprise HTTP helper.
+ * - offline:true  only for network / unreachable (not HTTP 4xx/5xx business errors)
+ * - returns { ok, data, error, code, status, offline }
+ */
 async function enterpriseFetch(method, path, body) {
     const url = getEnterpriseBaseUrl() + path;
     try {
         const res = await fetch(url, {
             method,
             headers: {
-                ...getAuthHeaders(!!body),
-                ...(body ? { 'Content-Type': 'application/json' } : {})
+                ...getAuthHeaders(false),
+                ...(body != null ? { 'Content-Type': 'application/json' } : {})
             },
-            body: body ? JSON.stringify(body) : undefined
+            body: body != null ? JSON.stringify(body) : undefined
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '請求失敗');
-        return { ok: true, data, offline: false };
+        let data = {};
+        try {
+            data = await res.json();
+        } catch (_) {
+            data = {};
+        }
+        if (!res.ok) {
+            return {
+                ok: false,
+                data,
+                error: data.error || data.message || `HTTP ${res.status}`,
+                code: data.code || null,
+                status: res.status,
+                offline: false
+            };
+        }
+        return { ok: true, data, offline: false, status: res.status, error: null, code: null };
     } catch (err) {
-        return { ok: false, error: err.message, offline: true };
+        // Network failure / DNS / CORS / connection refused only
+        return {
+            ok: false,
+            data: null,
+            error: err.message || '網路錯誤',
+            code: 'NETWORK_ERROR',
+            status: 0,
+            offline: true
+        };
     }
 }
 
@@ -251,13 +278,15 @@ async function createEnterpriseGroup() {
     
     if (api.ok) {
         result = api.data;
-    } else {
+    } else if (api.offline) {
         try {
             result = { ok: true, ...(await enterpriseLocalCreate(payload)) };
             showToast('已建立群組（本機離線模式）', 'success');
         } catch (e) {
             return showToast(e.message, 'error');
         }
+    } else {
+        return showToast(api.error || '建立群組失敗', 'error');
     }
     
     S.enterpriseSession = {
@@ -266,7 +295,7 @@ async function createEnterpriseGroup() {
         role: result.member.role,
         groupCode: result.group.code,
         groupName: result.group.name,
-        offline: !api.ok
+        offline: !!api.offline
     };
     localStorage.setItem('lumina_enterprise_session', JSON.stringify(S.enterpriseSession));
     loadLocallyReadNotificationIds();
@@ -297,13 +326,15 @@ async function joinEnterpriseGroup() {
     
     if (api.ok) {
         result = api.data;
-    } else {
+    } else if (api.offline) {
         try {
             result = { ok: true, ...(await enterpriseLocalJoin(payload)) };
             showToast('已加入群組（本機離線模式）', 'success');
         } catch (e) {
             return showToast(e.message, 'error');
         }
+    } else {
+        return showToast(api.error || '加入群組失敗', 'error');
     }
     
     S.enterpriseSession = {
@@ -312,7 +343,7 @@ async function joinEnterpriseGroup() {
         role: result.member.role,
         groupCode: result.group.code,
         groupName: result.group.name,
-        offline: !api.ok
+        offline: !!api.offline
     };
     localStorage.setItem('lumina_enterprise_session', JSON.stringify(S.enterpriseSession));
     loadLocallyReadNotificationIds();
@@ -395,12 +426,32 @@ async function refreshEnterpriseData(force = false) {
     const api = await enterpriseFetch('GET', `/api/enterprise/group/${code}${memberQ}`);
     
     if (api.ok) {
+        // Preserve local ragStatus overrides when server lags (pending poll)
+        const prevDocs = S.enterpriseGroupData?.documents || [];
+        const prevById = Object.fromEntries(prevDocs.map(d => [d.id, d]));
         S.enterpriseGroupData = api.data.group;
+        if (Array.isArray(S.enterpriseGroupData.documents)) {
+            S.enterpriseGroupData.documents = S.enterpriseGroupData.documents.map(d => {
+                const prev = prevById[d.id];
+                if (!prev) return d;
+                const localSt = prev.ragStatus || prev.rag?.status;
+                const serverSt = d.ragStatus || d.rag?.status;
+                // Keep more specific local failure/index codes if server still pending
+                if (localSt && localSt !== 'pending' && serverSt === 'pending') {
+                    return {
+                        ...d,
+                        ragStatus: localSt,
+                        rag: { ...(d.rag || {}), ...(prev.rag || {}), status: localSt }
+                    };
+                }
+                return d;
+            });
+        }
         cacheEnterpriseGroupLocally(api.data.group);
         if (api.data.group.notifications) {
             processIncomingTeamNotifications(api.data.group.notifications);
         }
-    } else {
+    } else if (api.offline || S.enterpriseSession.offline) {
         try {
             S.enterpriseGroupData = enterpriseLocalGetGroup(code, S.enterpriseSession.memberId).group;
             if (S.enterpriseGroupData.notifications) {
@@ -410,6 +461,9 @@ async function refreshEnterpriseData(force = false) {
             showToast('同步失敗：' + e.message, 'error');
             return;
         }
+    } else {
+        showToast(api.error || '同步失敗', 'error');
+        return;
     }
     S.enterpriseDataFetchedAt = Date.now();
     renderEnterpriseTasks();
@@ -682,8 +736,10 @@ async function assignEnterpriseTask() {
     if (api.ok) {
         ingestTeamNotificationsFromResponse(api.data.notifications || []);
         showToast('任務已指派！已發送通知', 'success');
-    } else {
+    } else if (api.offline || S.enterpriseSession.offline) {
         localAssignFallback();
+    } else {
+        return showToast(api.error || '指派失敗', 'error');
     }
     
     document.getElementById('team-assign-title').value = '';
@@ -767,7 +823,7 @@ async function toggleEnterpriseTask(taskId, completed) {
             succeeded = true;
             if (api.data.task) applyEnterpriseTaskToCache(taskId, completed, api.data.task);
             ingestTeamNotificationsFromResponse(api.data.notifications || []);
-        } else {
+        } else if (api.offline || S.enterpriseSession.offline) {
             const local = persistEnterpriseTaskToggle(taskId, completed);
             if (local.ok) {
                 succeeded = true;

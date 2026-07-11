@@ -769,8 +769,40 @@ function renderDocVersionBadge(doc) {
 }
 
 function ensureDocUiState() {
-    if (!S.docUiOpen) S.docUiOpen = { versionPanels: {}, newVerForms: {} };
+    if (!S.docUiOpen) {
+        S.docUiOpen = { versionPanels: {}, newVerForms: {}, drafts: {}, previewVersion: {} };
+    }
+    if (!S.docUiOpen.drafts) S.docUiOpen.drafts = {};
+    if (!S.docUiOpen.previewVersion) S.docUiOpen.previewVersion = {};
     return S.docUiOpen;
+}
+
+function captureDocNewVersionDraft(docId) {
+    if (!docId) return;
+    const ui = ensureDocUiState();
+    const titleEl = document.getElementById(`doc-newver-title-${docId}`);
+    const contentEl = document.getElementById(`doc-newver-content-${docId}`);
+    const noteEl = document.getElementById(`doc-newver-note-${docId}`);
+    if (!titleEl && !contentEl && !noteEl) return;
+    ui.drafts[docId] = {
+        title: titleEl ? titleEl.value : '',
+        content: contentEl ? contentEl.value : '',
+        note: noteEl ? noteEl.value : ''
+    };
+}
+
+function bindDocNewVersionDraftCapture(docId) {
+    ['title', 'content', 'note'].forEach(field => {
+        const id = field === 'title'
+            ? `doc-newver-title-${docId}`
+            : field === 'content'
+                ? `doc-newver-content-${docId}`
+                : `doc-newver-note-${docId}`;
+        const el = document.getElementById(id);
+        if (!el || el.dataset.draftBound) return;
+        el.dataset.draftBound = '1';
+        el.addEventListener('input', () => captureDocNewVersionDraft(docId));
+    });
 }
 
 function toggleDocVersionPanel(docId) {
@@ -793,10 +825,22 @@ function toggleDocNewVersionForm(docId) {
     const ui = ensureDocUiState();
     const form = document.getElementById(`doc-newver-form-${docId}`);
     if (!form) return;
+    const willOpen = form.classList.contains('hidden');
+    if (!willOpen) captureDocNewVersionDraft(docId);
     form.classList.toggle('hidden');
     const open = !form.classList.contains('hidden');
     ui.newVerForms[docId] = open;
     if (open) {
+        const draft = ui.drafts[docId];
+        if (draft) {
+            const titleEl = document.getElementById(`doc-newver-title-${docId}`);
+            const contentEl = document.getElementById(`doc-newver-content-${docId}`);
+            const noteEl = document.getElementById(`doc-newver-note-${docId}`);
+            if (titleEl && draft.title != null) titleEl.value = draft.title;
+            if (contentEl && draft.content != null) contentEl.value = draft.content;
+            if (noteEl && draft.note != null) noteEl.value = draft.note;
+        }
+        bindDocNewVersionDraftCapture(docId);
         document.getElementById(`doc-newver-title-${docId}`)?.focus();
     }
 }
@@ -817,7 +861,18 @@ function restoreDocUiPanels() {
     Object.keys(ui.newVerForms || {}).forEach(docId => {
         if (!ui.newVerForms[docId]) return;
         const form = document.getElementById(`doc-newver-form-${docId}`);
-        if (form) form.classList.remove('hidden');
+        if (!form) return;
+        form.classList.remove('hidden');
+        const draft = ui.drafts && ui.drafts[docId];
+        if (draft) {
+            const titleEl = document.getElementById(`doc-newver-title-${docId}`);
+            const contentEl = document.getElementById(`doc-newver-content-${docId}`);
+            const noteEl = document.getElementById(`doc-newver-note-${docId}`);
+            if (titleEl && draft.title != null) titleEl.value = draft.title;
+            if (contentEl && draft.content != null) contentEl.value = draft.content;
+            if (noteEl && draft.note != null) noteEl.value = draft.note;
+        }
+        bindDocNewVersionDraftCapture(docId);
     });
 }
 
@@ -1080,6 +1135,11 @@ async function publishDocumentVersion(docId) {
     if (!res.ok) {
         return showToast('發新版本失敗: ' + (res.error || '未知錯誤'), 'error');
     }
+
+    // Clear draft after successful publish
+    const ui = ensureDocUiState();
+    delete ui.drafts[docId];
+    ui.newVerForms[docId] = false;
 
     const updated = res.data?.document;
     const nextV = res.data?.currentVersion || updated?.currentVersion;
