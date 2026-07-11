@@ -1543,13 +1543,112 @@ async function deleteTeamKnowledgeBase(kbId) {
 
 const DOC_LIST_PAGE_SIZE = 25;
 
+function getTeamDocsFilterState() {
+    const searchEl = document.getElementById('team-docs-search');
+    const kbEl = document.getElementById('team-docs-filter-kb');
+    const stEl = document.getElementById('team-docs-filter-status');
+    return {
+        q: (searchEl?.value || '').trim().toLowerCase(),
+        kbId: kbEl?.value || '',
+        status: stEl?.value || ''
+    };
+}
+
+function filterEnterpriseDocuments(docs) {
+    const { q, kbId, status } = getTeamDocsFilterState();
+    return (docs || []).filter(d => {
+        if (kbId && (d.kbId || 'general') !== kbId) return false;
+        if (status) {
+            const st = resolveDocRagStatus(d);
+            if (st !== status) return false;
+        }
+        if (q) {
+            const hay = `${d.title || ''} ${d.content || ''} ${d.filename || ''} ${d.author || ''}`.toLowerCase();
+            if (!hay.includes(q)) return false;
+        }
+        return true;
+    });
+}
+
+function populateTeamDocsFilterKbOptions() {
+    const kbEl = document.getElementById('team-docs-filter-kb');
+    if (!kbEl) return;
+    const prev = kbEl.value || '';
+    const items = Object.values(S.ragKbItemsById || {});
+    const fromDocs = (S.enterpriseGroupData?.documents || []).map(d => d.kbId || 'general');
+    const ids = new Set(['general', ...items.map(i => i.id), ...fromDocs]);
+    const opts = ['<option value="">全部知識庫</option>'];
+    [...ids].forEach(id => {
+        const label = (S.ragKbItemsById?.[id]?.displayName || getRagKbLabel(id) || id)
+            .replace(/\s*\([^)]*\)\s*$/, '').trim();
+        opts.push(`<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`);
+    });
+    kbEl.innerHTML = opts.join('');
+    if (prev && [...kbEl.options].some(o => o.value === prev)) kbEl.value = prev;
+}
+
+function onTeamDocsFilterChange() {
+    S._docListVisible = DOC_LIST_PAGE_SIZE;
+    renderEnterpriseDocuments();
+}
+
+async function retryAllFailedDocumentIndexes() {
+    if (!S.enterpriseSession || S.enterpriseSession.role !== 'manager') {
+        return showToast('僅主管可批次重試索引', 'error');
+    }
+    if (S._batchRetryInFlight) {
+        return showToast('批次重試進行中…', 'error');
+    }
+    const failed = (S.enterpriseGroupData?.documents || [])
+        .filter(d => resolveDocRagStatus(d) === 'failed');
+    if (!failed.length) {
+        return showToast('目前沒有索引失敗的文件', 'success');
+    }
+    if (!confirm(`將重試 ${failed.length} 份失敗文件的索引，是否繼續？`)) return;
+
+    S._batchRetryInFlight = true;
+    const btn = document.getElementById('team-docs-retry-failed-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60');
+    }
+    let okCount = 0;
+    let failCount = 0;
+    try {
+        // Sequential to avoid hammering RAG
+        for (const doc of failed.slice(0, 20)) {
+            try {
+                await retryDocumentRagIndex(doc.id);
+                const st = resolveDocRagStatus(
+                    (S.enterpriseGroupData?.documents || []).find(d => d.id === doc.id) || doc
+                );
+                if (st === 'indexed' || st === 'pending') okCount++;
+                else failCount++;
+            } catch (_) {
+                failCount++;
+            }
+        }
+        const more = failed.length > 20 ? `（僅處理前 20 份，共 ${failed.length}）` : '';
+        showToast(`批次重試完成：成功/處理中 ${okCount}，仍失敗 ${failCount}${more}`, failCount ? 'error' : 'success');
+        ensureRagStatusPolling();
+        renderEnterpriseDocuments();
+        try { renderCoachReadinessBar?.(); } catch (_) {}
+    } finally {
+        S._batchRetryInFlight = false;
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-60');
+        }
+    }
+}
+
 function renderEnterpriseDocuments() {
     if (!S.enterpriseSession || !S.enterpriseGroupData) return;
-    const docsAll = S.enterpriseGroupData.documents || [];
+    const docsSource = S.enterpriseGroupData.documents || [];
     const isManager = S.enterpriseSession.role === 'manager';
 
     // Wave 3: keep polling while any doc is pending
-    if (docsAll.some(d => resolveDocRagStatus(d) === 'pending')) {
+    if (docsSource.some(d => resolveDocRagStatus(d) === 'pending')) {
         ensureRagStatusPolling();
     }
     // Refresh coach bar so failed-index shortcuts stay current
@@ -1564,17 +1663,44 @@ function renderEnterpriseDocuments() {
     } else {
         populateTeamDocKbSelect(Object.values(S.ragKbItemsById || {}));
     }
+
+    populateTeamDocsFilterKbOptions();
+    const docsAll = filterEnterpriseDocuments(docsSource);
+    const failedCount = docsSource.filter(d => resolveDocRagStatus(d) === 'failed').length;
+    const retryBtn = document.getElementById('team-docs-retry-failed-btn');
+    if (retryBtn) {
+        retryBtn.classList.toggle('hidden', !(isManager && failedCount > 0));
+        retryBtn.innerHTML = `<i class="fa-solid fa-rotate-right mr-1"></i>重試全部失敗索引（${failedCount}）`;
+    }
+    const metaEl = document.getElementById('team-docs-filter-meta');
+    if (metaEl) {
+        const { q, kbId, status } = getTeamDocsFilterState();
+        const filtering = !!(q || kbId || status);
+        metaEl.textContent = filtering
+            ? `篩選結果 ${docsAll.length} / 共 ${docsSource.length} 份`
+            : `共 ${docsSource.length} 份文件${failedCount ? ` · ${failedCount} 份索引失敗` : ''}`;
+    }
     
     const listEl = document.getElementById('team-docs-list');
     if (!listEl) return;
     
-    if (docsAll.length === 0) {
+    if (docsSource.length === 0) {
         S._docListVisible = DOC_LIST_PAGE_SIZE;
         listEl.innerHTML = `
             <div class="empty-state py-8">
                 <div class="empty-state-icon bg-purple-500/10 text-purple-400" style="background-color: rgba(168, 85, 247, 0.1); color: rgb(192, 132, 252);"><i class="fa-solid fa-folder-open"></i></div>
                 <div class="text-sm text-slate-400">目前沒有知識庫文件</div>
                 <div class="text-xs text-slate-500 mt-1">${isManager ? '點擊「新增文件」發布專案指南；空庫時教練勾選該庫可能查不到內容' : '主管發布指南後將顯示於此。教練選庫時若顯示「空庫」表示尚無可檢索文件'}</div>
+            </div>`;
+        return;
+    }
+
+    if (docsAll.length === 0) {
+        listEl.innerHTML = `
+            <div class="empty-state py-8">
+                <div class="empty-state-icon bg-slate-500/10 text-slate-400"><i class="fa-solid fa-filter"></i></div>
+                <div class="text-sm text-slate-400">沒有符合篩選的文件</div>
+                <div class="text-xs text-slate-500 mt-1">試試清除搜尋或改選「全部知識庫／全部狀態」</div>
             </div>`;
         return;
     }

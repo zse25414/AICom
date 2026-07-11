@@ -2191,6 +2191,10 @@ body {
     background: rgba(49, 46, 129, 0.35);
 }
 
+.team-docs-toolbar input[type="search"]::-webkit-search-cancel-button {
+    cursor: pointer;
+}
+
 .team-offline-banner {
     display: flex;
     align-items: flex-start;

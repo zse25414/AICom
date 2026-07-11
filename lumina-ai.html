@@ -929,6 +929,39 @@
                                 </div>
                             </div>
 
+                            <!-- Document list toolbar: search / filter / batch retry -->
+                            <div id="team-docs-toolbar" class="team-docs-toolbar mb-3 space-y-2">
+                                <div class="flex flex-col sm:flex-row gap-2">
+                                    <div class="relative flex-1 min-w-0">
+                                        <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
+                                        <input type="search" id="team-docs-search" maxlength="80"
+                                            class="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-sm focus-ring"
+                                            placeholder="搜尋標題或內容…"
+                                            data-lumina-change="onTeamDocsFilterChange"
+                                            aria-label="搜尋文件">
+                                    </div>
+                                    <select id="team-docs-filter-kb" class="sm:w-44 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm focus-ring"
+                                        data-lumina-change="onTeamDocsFilterChange" aria-label="依知識庫篩選">
+                                        <option value="">全部知識庫</option>
+                                    </select>
+                                    <select id="team-docs-filter-status" class="sm:w-36 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm focus-ring"
+                                        data-lumina-change="onTeamDocsFilterChange" aria-label="依索引狀態篩選">
+                                        <option value="">全部狀態</option>
+                                        <option value="indexed">已索引</option>
+                                        <option value="pending">索引中</option>
+                                        <option value="failed">索引失敗</option>
+                                    </select>
+                                </div>
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div id="team-docs-filter-meta" class="text-[10px] text-slate-500"></div>
+                                    <button type="button" id="team-docs-retry-failed-btn"
+                                        class="hidden min-h-[36px] text-[11px] px-3 py-1.5 rounded-lg border border-amber-500/35 text-amber-300 hover:bg-amber-500/10 focus-ring"
+                                        data-lumina-action="retryAllFailedDocumentIndexes">
+                                        <i class="fa-solid fa-rotate-right mr-1"></i>重試全部失敗索引
+                                    </button>
+                                </div>
+                            </div>
+
                             <div id="team-docs-list" class="space-y-3">
                                 <!-- 由 JS 動態渲染 -->
                             </div>
