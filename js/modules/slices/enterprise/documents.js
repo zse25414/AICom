@@ -1541,15 +1541,19 @@ async function deleteTeamKnowledgeBase(kbId) {
     }
 }
 
+const DOC_LIST_PAGE_SIZE = 25;
+
 function renderEnterpriseDocuments() {
     if (!S.enterpriseSession || !S.enterpriseGroupData) return;
-    const docs = S.enterpriseGroupData.documents || [];
+    const docsAll = S.enterpriseGroupData.documents || [];
     const isManager = S.enterpriseSession.role === 'manager';
 
     // Wave 3: keep polling while any doc is pending
-    if (docs.some(d => resolveDocRagStatus(d) === 'pending')) {
+    if (docsAll.some(d => resolveDocRagStatus(d) === 'pending')) {
         ensureRagStatusPolling();
     }
+    // Refresh coach bar so failed-index shortcuts stay current
+    try { if (typeof renderCoachReadinessBar === 'function') renderCoachReadinessBar(); } catch (_) {}
     
     const addBtn = document.getElementById('team-add-doc-btn');
     if (addBtn) addBtn.classList.toggle('hidden', !isManager);
@@ -1564,7 +1568,8 @@ function renderEnterpriseDocuments() {
     const listEl = document.getElementById('team-docs-list');
     if (!listEl) return;
     
-    if (docs.length === 0) {
+    if (docsAll.length === 0) {
+        S._docListVisible = DOC_LIST_PAGE_SIZE;
         listEl.innerHTML = `
             <div class="empty-state py-8">
                 <div class="empty-state-icon bg-purple-500/10 text-purple-400" style="background-color: rgba(168, 85, 247, 0.1); color: rgb(192, 132, 252);"><i class="fa-solid fa-folder-open"></i></div>
@@ -1573,6 +1578,14 @@ function renderEnterpriseDocuments() {
             </div>`;
         return;
     }
+
+    // Cap DOM nodes for large libraries (load more)
+    if (!S._docListVisible || S._docListVisible < DOC_LIST_PAGE_SIZE) {
+        S._docListVisible = DOC_LIST_PAGE_SIZE;
+    }
+    const visibleCount = Math.min(S._docListVisible, docsAll.length);
+    const docs = docsAll.slice(0, visibleCount);
+    const hasMore = docsAll.length > visibleCount;
     
     function resolveDocFileUrl(fileUrl) {
         if (!fileUrl) return '';
@@ -1751,8 +1764,23 @@ function renderEnterpriseDocuments() {
             </div>
         </div>
     `;
-    }).join('');
+    }).join('') + (hasMore ? `
+        <div class="doc-list-more py-3 text-center">
+            <button type="button" class="doc-list-more-btn focus-ring"
+                ${luminaAction('showMoreEnterpriseDocuments')}>
+                顯示更多（還有 ${docsAll.length - visibleCount} 份）
+            </button>
+            <div class="text-[10px] text-slate-600 mt-1">已顯示 ${visibleCount} / ${docsAll.length}</div>
+        </div>
+    ` : (docsAll.length > DOC_LIST_PAGE_SIZE ? `
+        <div class="text-[10px] text-slate-600 text-center py-2">共 ${docsAll.length} 份文件</div>
+    ` : ''));
 
     // Wave 3 polish: keep version/history UI open across re-renders (rag poll, etc.)
     try { restoreDocUiPanels(); } catch (e) { console.warn('[Lumina] restoreDocUiPanels', e); }
+}
+
+function showMoreEnterpriseDocuments() {
+    S._docListVisible = (S._docListVisible || DOC_LIST_PAGE_SIZE) + DOC_LIST_PAGE_SIZE;
+    renderEnterpriseDocuments();
 }

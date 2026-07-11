@@ -2129,6 +2129,68 @@ body {
     background: rgba(245, 158, 11, 0.2);
 }
 
+.coach-failed-docs {
+    margin-top: 0.65rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.coach-failed-docs-title {
+    font-size: 0.7rem;
+    color: #fcd34d;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.coach-failed-doc-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+}
+
+.coach-failed-doc-title {
+    font-size: 0.7rem;
+    color: #cbd5e1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coach-failed-retry-btn {
+    flex-shrink: 0;
+    font-size: 0.65rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(129, 140, 248, 0.4);
+    color: #a5b4fc;
+    background: rgba(49, 46, 129, 0.25);
+    min-height: 28px;
+}
+
+.coach-failed-retry-btn:hover {
+    background: rgba(79, 70, 229, 0.35);
+}
+
+.doc-list-more-btn {
+    font-size: 0.75rem;
+    padding: 0.5rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    color: #a5b4fc;
+    background: rgba(15, 23, 42, 0.6);
+    min-height: 40px;
+}
+
+.doc-list-more-btn:hover {
+    background: rgba(49, 46, 129, 0.35);
+}
+
 .team-offline-banner {
     display: flex;
     align-items: flex-start;

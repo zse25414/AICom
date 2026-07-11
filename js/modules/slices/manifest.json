@@ -185,6 +185,8 @@
     "publishDocumentVersion",
     "deleteTeamDocument",
     "renderEnterpriseDocuments",
+    "showMoreEnterpriseDocuments",
+    "getCoachFailedIndexDocs",
     "renderEnterpriseTaskRow",
     "assignEnterpriseTask",
     "applyEnterpriseTaskToCache",

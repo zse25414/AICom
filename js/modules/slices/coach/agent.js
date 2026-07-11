@@ -832,17 +832,33 @@ function getCoachReadinessChecks() {
     ];
 }
 
+/** Manager-only: failed index docs that hurt coach answers */
+function getCoachFailedIndexDocs(limit = 5) {
+    if (!S.enterpriseSession || S.enterpriseSession.role !== 'manager') return [];
+    if (typeof resolveDocRagStatus !== 'function') return [];
+    const docs = S.enterpriseGroupData?.documents || [];
+    return docs
+        .filter(d => resolveDocRagStatus(d) === 'failed')
+        .slice(0, limit);
+}
+
 function renderCoachReadinessBar() {
     const bar = document.getElementById('coach-readiness-bar');
     if (!bar) return;
     const checks = getCoachReadinessChecks();
-    if (checks.every(c => c.ok)) {
+    const failedDocs = getCoachFailedIndexDocs(5);
+    const allReady = checks.every(c => c.ok);
+
+    if (allReady && failedDocs.length === 0) {
         bar.classList.add('hidden');
         bar.innerHTML = '';
         return;
     }
+
     bar.classList.remove('hidden');
-    bar.innerHTML = `
+    const readinessBlock = allReady
+        ? ''
+        : `
         <div class="coach-readiness-title">知識庫教練就緒檢查</div>
         <div class="coach-readiness-chips">
             ${checks.map(c => `
@@ -854,6 +870,35 @@ function renderCoachReadinessBar() {
                 </button>
             `).join('')}
         </div>`;
+
+    const failedBlock = failedDocs.length === 0
+        ? ''
+        : `
+        <div class="coach-failed-docs">
+            <div class="coach-failed-docs-title">
+                <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+                ${failedDocs.length} 份文件索引失敗（教練可能查不到）
+            </div>
+            <div class="coach-failed-docs-list">
+                ${failedDocs.map(d => {
+                    const code = d.rag?.lastErrorCode ? ` · ${escapeHtml(d.rag.lastErrorCode)}` : '';
+                    return `
+                    <div class="coach-failed-doc-row">
+                        <span class="coach-failed-doc-title" title="${escapeHtml(d.rag?.lastError || '')}">${escapeHtml(d.title || '未命名')}${code}</span>
+                        <button type="button" class="coach-failed-retry-btn focus-ring"
+                            ${luminaAction('retryDocumentRagIndex', { arg: d.id })}>
+                            <i class="fa-solid fa-rotate-right"></i> 重試
+                        </button>
+                    </div>`;
+                }).join('')}
+            </div>
+            <button type="button" class="coach-failed-goto-team text-[10px] text-indigo-300 hover:text-indigo-200 mt-1"
+                ${luminaAction('openTeamKnowledgeTab')}>
+                前往團隊知識庫 →
+            </button>
+        </div>`;
+
+    bar.innerHTML = readinessBlock + failedBlock;
 }
 
 function renderCoachQuickActions() {

@@ -769,8 +769,17 @@ async function assignEnterpriseTask() {
     } else {
         return showToast(api.error || '指派失敗', 'error');
     }
-    
-    document.getElementById('team-assign-title').value = '';
+
+    // Clear form for next assign
+    const titleEl = document.getElementById('team-assign-title');
+    if (titleEl) titleEl.value = '';
+    const dueEl = document.getElementById('team-assign-due');
+    if (dueEl) dueEl.value = (typeof getTomorrowISO === 'function' ? getTomorrowISO() : getTodayISO());
+    const durEl = document.getElementById('team-assign-duration');
+    if (durEl && !durEl.value) durEl.value = '30';
+    // keep assignee + category for bulk assign convenience
+    titleEl?.focus();
+
     await refreshEnterpriseData(true);
     await refreshTeamNotifications(true);
 }
