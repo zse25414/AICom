@@ -138,16 +138,18 @@ async function refreshServiceStatus() {
     const apiStatus = await fetchApiReadiness();
     const apiReady = apiStatus.ready;
     const apiReachable = apiStatus.reachable;
+    const details = apiStatus.details || {};
     const apiEl = document.getElementById('status-api');
     if (apiEl) {
         if (apiReady) {
-            apiEl.textContent = '● 已就緒';
+            const backend = details.store?.backend || details.auth?.backend || '';
+            apiEl.textContent = backend ? `● 已就緒 (${backend})` : '● 已就緒';
             apiEl.className = 'service-status-dot service-status-ok';
-            apiEl.title = formatReadinessHint(apiStatus.checks) || 'API 已就緒';
+            apiEl.title = formatReadinessHint(apiStatus.checks, details) || 'API 已就緒';
         } else if (apiReachable) {
             apiEl.textContent = '● 未就緒';
             apiEl.className = 'service-status-dot service-status-off';
-            apiEl.title = formatReadinessHint(apiStatus.checks) || 'API 已連線但子系統未就緒';
+            apiEl.title = formatReadinessHint(apiStatus.checks, details) || 'API 已連線但子系統未就緒';
         } else {
             apiEl.textContent = '● 未連線';
             apiEl.className = 'service-status-dot service-status-off';
@@ -165,37 +167,96 @@ async function refreshServiceStatus() {
         setStatus('status-sync', false, '', '● 需啟動 API');
     }
 
-    // Prefer /ready checks.rag (enterprise base); avoid hardcoding only 127.0.0.1:8000
     try {
         let ragOk = false;
-        let mode = '';
         if (apiStatus.checks && 'rag' in apiStatus.checks) {
             ragOk = !!apiStatus.checks.rag;
-        } else {
-            const base = typeof getEnterpriseBaseUrl === 'function' ? getEnterpriseBaseUrl() : '';
-            const res = await fetch((base || '') + '/ready', { method: 'GET' });
-            const data = res.ok ? await res.json().catch(() => ({})) : null;
-            if (data?.checks && 'rag' in data.checks) {
-                ragOk = !!data.checks.rag;
-            }
         }
+        const ragDetail = details.rag || {};
         const ragEl = document.getElementById('status-rag');
         if (ragEl) {
             if (ragOk) {
-                ragEl.textContent = mode ? `● 已連線 (${mode})` : '● 已連線';
+                const bits = [];
+                if (ragDetail.retrieval) bits.push(ragDetail.retrieval);
+                if (ragDetail.latencyMs != null) bits.push(`${ragDetail.latencyMs}ms`);
+                ragEl.textContent = bits.length ? `● 已連線 (${bits.join(' · ')})` : '● 已連線';
                 ragEl.className = 'service-status-dot service-status-ok';
-                ragEl.title = '經 API /ready 檢查';
+                ragEl.title = formatReadinessHint(apiStatus.checks, details) || '經 API /ready 檢查';
             } else {
-                ragEl.textContent = '● 未連線';
+                const errHint = ragDetail.errorCode || ragDetail.error || '';
+                ragEl.textContent = errHint ? `● 未連線 (${errHint})` : '● 未連線';
                 ragEl.className = 'service-status-dot service-status-off';
-                ragEl.title = apiReachable ? 'API 已連線，RAG 子系統未就緒' : '請執行 npm run dev';
+                ragEl.title = apiReachable
+                    ? (`API 已連線，RAG 未就緒` + (errHint ? ` — ${errHint}` : ''))
+                    : '請執行 npm run dev';
             }
         }
     } catch (_) {
         setStatus('status-rag', false, '', '● 未連線');
     }
 
+    // Wave 3: expand ops detail panel when present
+    try {
+        await renderServiceOpsPanel(apiStatus);
+    } catch (e) {
+        console.warn('[Lumina] ops panel', e);
+    }
+
     renderCoachReadinessBar();
+}
+
+async function renderServiceOpsPanel(apiStatus) {
+    const detailEl = document.getElementById('service-status-detail');
+    const eventsEl = document.getElementById('service-index-events');
+    if (!detailEl && !eventsEl) return;
+
+    const ops = await fetchOpsStatus(10);
+    const details = (ops && ops.details) || apiStatus.details || {};
+    const rag = details.rag || {};
+    const uptime = ops?.uptimeSec != null ? ops.uptimeSec : apiStatus.uptimeSec;
+    const jobs = ops?.backgroundIndexJobs != null
+        ? ops.backgroundIndexJobs
+        : apiStatus.backgroundIndexJobs;
+
+    if (detailEl) {
+        const lines = [
+            `uptime: ${uptime != null ? uptime + 's' : '—'}`,
+            `store: ${details.store?.backend || '—'}`,
+            `auth: ${details.auth?.backend || '—'}`,
+            `rag: ${rag.ok ? 'up' : 'down'}` +
+                (rag.latencyMs != null ? ` ${rag.latencyMs}ms` : '') +
+                (rag.embedding ? ` · ${rag.embedding}` : '') +
+                (rag.retrieval ? ` · ${rag.retrieval}` : '') +
+                (rag.errorCode ? ` · ${rag.errorCode}` : ''),
+            `indexJobs: ${jobs != null ? jobs : 0}`
+        ];
+        detailEl.textContent = lines.join('\n');
+        detailEl.classList.remove('hidden');
+    }
+
+    if (eventsEl) {
+        const events = Array.isArray(ops?.recentIndexEvents) ? ops.recentIndexEvents : [];
+        if (!events.length) {
+            eventsEl.innerHTML = '<div class="text-[10px] text-slate-500">尚無近期索引事件（服務重啟後清空）</div>';
+        } else {
+            eventsEl.innerHTML = events.slice(0, 8).map(ev => {
+                const outcome = escapeHtml(ev.outcome || '—');
+                const code = ev.errorCode ? ` · ${escapeHtml(ev.errorCode)}` : '';
+                const title = escapeHtml((ev.title || ev.documentId || '').toString().slice(0, 40));
+                const ts = ev.ts ? escapeHtml(String(ev.ts).replace('T', ' ').slice(0, 19)) : '';
+                const ms = ev.durationMs != null ? ` · ${ev.durationMs}ms` : '';
+                const color = ev.outcome === 'indexed'
+                    ? 'text-emerald-400'
+                    : (ev.outcome === 'failed' ? 'text-rose-400' : 'text-amber-300');
+                return `<div class="text-[10px] py-1 border-b border-slate-800/80 last:border-0">
+                    <span class="${color} font-medium">${outcome}</span>${code}${ms}
+                    <span class="text-slate-500"> · ${title}</span>
+                    <div class="text-slate-600">${ts}</div>
+                </div>`;
+            }).join('');
+        }
+        eventsEl.classList.remove('hidden');
+    }
 }
 
 // Keyboard shortcuts hint

@@ -88,6 +88,11 @@ jobs:
         env:
           REQUIRE_ENTERPRISE_AUTH: '1'
 
+      - name: W3 observability contract
+        run: node scripts/test-w3-observability.js
+        env:
+          REQUIRE_ENTERPRISE_AUTH: '1'
+
       - name: Coach RAG tests
         run: node scripts/test-coach-rag.js
 

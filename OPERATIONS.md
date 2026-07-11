@@ -26,12 +26,21 @@ docker compose --profile full up   # 同上 + RAG
 
 升級 RAG 向量檢索後請重新執行：`npm run rag:setup && npm run rag`
 
-## 健康檢查
+## 健康檢查與可觀測（Wave 3）
 
 | 端點 | 用途 |
 |------|------|
-| `GET /health` | 服務資訊與儲存後端狀態 |
-| `GET /ready` | 就緒探針（store + auth；RAG 為附加檢查） |
+| `GET /health` | 服務資訊、儲存後端、**RAG probe**（latency / embedding / retrieval） |
+| `GET /ready` | 就緒探針：`checks` + **`details`**（store/auth/rag）+ `uptimeSec` + `backgroundIndexJobs` |
+| `GET /api/ops/status?limit=20` | 運維快照：ready 詳情 + **近期索引事件**（無密鑰）+ rate limit 設定 |
+| `GET /api/enterprise/group/document/status` | 輪詢單文件 `ragStatus` / `lastErrorCode`（成員） |
+
+索引失敗時 document.rag 會帶穩定錯誤碼：`RAG_UNREACHABLE`、`RAG_AUTH`、`RAG_UPSTREAM`、`RAG_NO_CONTENT` 等（`retryable` 供 UI 提示）。
+
+```bash
+npm run test:w3-obs          # 可觀測契約測（需 API）
+curl -s http://127.0.0.1:3001/api/ops/status | head
+```
 
 ```bash
 node scripts/check-ready.js                  # 單次（store + auth）

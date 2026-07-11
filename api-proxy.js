@@ -889,15 +889,82 @@ async function proxyRagDeleteKb(groupCode, kbId) {
     }
 }
 
+/**
+ * Wave 3: classify RAG index errors for operators and UI (stable codes, retryable flag).
+ * @returns {{ code: string, category: string, message: string, retryable: boolean }}
+ */
+function classifyRagError(lastError, httpStatus) {
+    const raw = String(lastError || '').trim();
+    const msg = raw.slice(0, 500) || 'Unknown RAG error';
+    const lower = msg.toLowerCase();
+    const status = Number(httpStatus) || 0;
+
+    if (!raw && !status) {
+        return { code: 'RAG_UNREACHABLE', category: 'availability', message: 'RAG service unreachable', retryable: true };
+    }
+    if (status === 401 || /invalid or missing rag api key|unauthorized|api key/i.test(msg)) {
+        return { code: 'RAG_AUTH', category: 'config', message: msg, retryable: false };
+    }
+    if (status === 400 || /empty|無效|invalid|validation|missing/i.test(msg)) {
+        return { code: 'RAG_BAD_REQUEST', category: 'content', message: msg, retryable: false };
+    }
+    if (status === 413 || /too large|payload|body too large/i.test(msg)) {
+        return { code: 'RAG_PAYLOAD_TOO_LARGE', category: 'content', message: msg, retryable: false };
+    }
+    if (status === 404 || /not found|找不到/i.test(msg)) {
+        return { code: 'RAG_NOT_FOUND', category: 'content', message: msg, retryable: false };
+    }
+    if (status === 429 || /rate|頻繁|throttle/i.test(msg)) {
+        return { code: 'RAG_RATE_LIMITED', category: 'availability', message: msg, retryable: true };
+    }
+    if (status >= 500 || /internal server error|econnrefused|fetch failed|socket|timeout|aborted|etimedout/i.test(lower)) {
+        return { code: 'RAG_UPSTREAM', category: 'availability', message: msg, retryable: true };
+    }
+    if (/document missing|沒有可索引/i.test(msg)) {
+        return { code: 'RAG_NO_CONTENT', category: 'content', message: msg, retryable: false };
+    }
+    if (/deleted during index|not active|group missing/i.test(msg)) {
+        return { code: 'RAG_ABORTED', category: 'lifecycle', message: msg, retryable: false };
+    }
+    return { code: 'RAG_UNKNOWN', category: 'unknown', message: msg, retryable: true };
+}
+
+/** In-memory ring of recent index outcomes (Wave 3 ops). */
+const RAG_INDEX_EVENT_LIMIT = 40;
+/** @type {Array<object>} */
+const ragIndexEvents = [];
+const serviceStartedAt = Date.now();
+
+function pushRagIndexEvent(evt) {
+    ragIndexEvents.unshift({
+        ts: new Date().toISOString(),
+        ...evt
+    });
+    if (ragIndexEvents.length > RAG_INDEX_EVENT_LIMIT) {
+        ragIndexEvents.length = RAG_INDEX_EVENT_LIMIT;
+    }
+}
+
 function setDocumentRagStatus(doc, status, extra = {}) {
     if (!doc) return;
     const now = new Date().toISOString();
+    const lastError = extra.lastError != null
+        ? extra.lastError
+        : (status === 'failed' ? (extra.lastError || null) : null);
+    let errorMeta = null;
+    if (status === 'failed' && (lastError || extra.errorCode)) {
+        errorMeta = classifyRagError(lastError, extra.httpStatus);
+        if (extra.errorCode) errorMeta.code = extra.errorCode;
+    }
     doc.ragStatus = status;
     doc.rag = {
         ...(doc.rag && typeof doc.rag === 'object' ? doc.rag : {}),
         status,
         lastIndexedAt: status === 'indexed' ? now : (doc.rag?.lastIndexedAt || null),
-        lastError: extra.lastError != null ? extra.lastError : (status === 'failed' ? (extra.lastError || null) : null),
+        lastError: status === 'failed' ? (lastError || errorMeta?.message || null) : (status === 'indexed' ? null : (doc.rag?.lastError || null)),
+        lastErrorCode: status === 'failed' ? (errorMeta?.code || extra.errorCode || null) : null,
+        lastErrorCategory: status === 'failed' ? (errorMeta?.category || null) : null,
+        retryable: status === 'failed' ? (errorMeta ? errorMeta.retryable : true) : null,
         refDocId: extra.refDocId != null ? extra.refDocId : (doc.rag?.refDocId || null),
         chunks: extra.chunks != null ? extra.chunks : (doc.rag?.chunks || null)
     };
@@ -1106,10 +1173,13 @@ async function indexEnterpriseDocumentToRag(groupCode, doc, options = {}) {
 
 async function indexDocumentWithRetry(groupCode, doc, options = {}) {
     const maxAttempts = options.maxAttempts || RAG_INDEX_MAX_ATTEMPTS;
+    const t0 = Date.now();
     let last = { ok: false, status: 0, chunks: null, lastError: 'RAG index not attempted' };
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         last = await indexEnterpriseDocumentToRag(groupCode, doc, options);
-        if (last.ok) return last;
+        if (last.ok) {
+            return { ...last, durationMs: Date.now() - t0, attempts: attempt + 1 };
+        }
         if (attempt + 1 < maxAttempts) {
             console.warn(
                 `[Lumina Backend] RAG index attempt ${attempt + 1} failed for doc ${doc?.id}:`,
@@ -1117,7 +1187,7 @@ async function indexDocumentWithRetry(groupCode, doc, options = {}) {
             );
         }
     }
-    return last;
+    return { ...last, durationMs: Date.now() - t0, attempts: maxAttempts };
 }
 
 /** Resolve when promise settles or timeout elapses (does not cancel work). */
@@ -1234,13 +1304,35 @@ async function applyDocumentRagIndexResult(groupCode, doc, result) {
         setDocumentRagStatus(fresh, 'indexed', { chunks: result.chunks, lastError: null });
         setDocumentRagStatus(doc, 'indexed', { chunks: result.chunks, lastError: null });
         await saveStore(store);
+        pushRagIndexEvent({
+            groupCode: normalizeCode(groupCode),
+            documentId: doc.id,
+            title: doc.title || null,
+            outcome: 'indexed',
+            chunks: result.chunks,
+            httpStatus: result.status || 200,
+            durationMs: result.durationMs != null ? result.durationMs : null
+        });
         return result;
     }
     const lastError = String((result && result.lastError) || 'RAG index failed').slice(0, 500);
-    setDocumentRagStatus(fresh, 'failed', { lastError });
-    setDocumentRagStatus(doc, 'failed', { lastError });
+    const classified = classifyRagError(lastError, result && result.status);
+    setDocumentRagStatus(fresh, 'failed', { lastError, httpStatus: result && result.status });
+    setDocumentRagStatus(doc, 'failed', { lastError, httpStatus: result && result.status });
     await saveStore(store);
-    return result;
+    pushRagIndexEvent({
+        groupCode: normalizeCode(groupCode),
+        documentId: doc.id,
+        title: doc.title || null,
+        outcome: result && result.aborted ? 'aborted' : 'failed',
+        errorCode: classified.code,
+        errorCategory: classified.category,
+        retryable: classified.retryable,
+        lastError,
+        httpStatus: result && result.status,
+        durationMs: result && result.durationMs != null ? result.durationMs : null
+    });
+    return { ...result, lastError, errorCode: classified.code, errorCategory: classified.category, retryable: classified.retryable };
 }
 
 /**
@@ -1285,16 +1377,43 @@ async function orchestrateDocumentRagIndex(groupCode, doc, options = {}) {
             ragOk: true,
             ragStatus: 'indexed',
             ragPending: false,
-            document: doc
+            document: doc,
+            errorCode: null,
+            errorCategory: null,
+            retryable: null
         };
     }
 
+    const classified = classifyRagError(result.lastError, result.status);
     return {
         ragOk: false,
         ragStatus: 'failed',
+        errorCode: result.errorCode || classified.code,
+        errorCategory: result.errorCategory || classified.category,
+        retryable: result.retryable != null ? result.retryable : classified.retryable,
         ragPending: false,
         warning: '文件已存檔，但知識庫索引失敗',
         document: doc
+    };
+}
+
+/** Build client-facing RAG orchestration fields (Wave 3 observability). */
+function buildRagOrchestrationResponse(ragOrchestration, doc) {
+    const d = (ragOrchestration && ragOrchestration.document) || doc;
+    const rag = d && d.rag && typeof d.rag === 'object' ? d.rag : {};
+    return {
+        ok: true,
+        document: d,
+        ragStatus: (ragOrchestration && ragOrchestration.ragStatus) || d?.ragStatus || 'pending',
+        ragOk: ragOrchestration ? ragOrchestration.ragOk : null,
+        ragPending: !!(ragOrchestration && ragOrchestration.ragPending),
+        warning: ragOrchestration ? ragOrchestration.warning : undefined,
+        errorCode: (ragOrchestration && ragOrchestration.errorCode) || rag.lastErrorCode || null,
+        errorCategory: (ragOrchestration && ragOrchestration.errorCategory) || rag.lastErrorCategory || null,
+        retryable: ragOrchestration && ragOrchestration.retryable != null
+            ? ragOrchestration.retryable
+            : (rag.retryable != null ? rag.retryable : null),
+        lastError: rag.lastError || null
     };
 }
 
@@ -1401,24 +1520,74 @@ async function serveUploadFile(req, res, urlPath) {
     return true;
 }
 
-async function getReadiness() {
-    const checks = { store: false, auth: false, rag: false };
-    try {
-        await loadStore();
-        checks.store = true;
-    } catch (_) {}
-    try {
-        checks.auth = !!getAuthBackend();
-    } catch (_) {}
+async function probeRagHealthDetail() {
+    const detail = {
+        ok: false,
+        url: RAG_SERVICE_URL,
+        latencyMs: null,
+        embedding: null,
+        retrieval: null,
+        version: null,
+        error: null,
+        errorCode: null
+    };
+    const t0 = Date.now();
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 2000);
         const response = await fetch(`${RAG_SERVICE_URL}/health`, { signal: controller.signal });
         clearTimeout(timer);
-        checks.rag = response.ok;
-    } catch (_) {}
+        detail.latencyMs = Date.now() - t0;
+        detail.ok = response.ok;
+        if (response.ok) {
+            try {
+                const data = await response.json();
+                detail.embedding = data.embedding || data.embed || null;
+                detail.retrieval = data.retrieval || null;
+                detail.version = data.version || null;
+            } catch (_) {}
+        } else {
+            detail.error = `HTTP ${response.status}`;
+            detail.errorCode = classifyRagError(detail.error, response.status).code;
+        }
+    } catch (e) {
+        detail.latencyMs = Date.now() - t0;
+        detail.error = e.name === 'AbortError' ? 'timeout' : (e.message || 'unreachable');
+        detail.errorCode = classifyRagError(detail.error, 0).code;
+    }
+    return detail;
+}
+
+async function getReadiness() {
+    const checks = { store: false, auth: false, rag: false };
+    const details = {
+        store: { backend: null, error: null },
+        auth: { backend: null, error: null },
+        rag: null
+    };
+    try {
+        await loadStore();
+        checks.store = true;
+        details.store.backend = getStoreBackend();
+    } catch (e) {
+        details.store.error = e.message || 'store load failed';
+    }
+    try {
+        details.auth.backend = getAuthBackend();
+        checks.auth = !!details.auth.backend;
+    } catch (e) {
+        details.auth.error = e.message || 'auth backend failed';
+    }
+    details.rag = await probeRagHealthDetail();
+    checks.rag = !!details.rag.ok;
     const ready = checks.store && checks.auth;
-    return { ready, checks };
+    return {
+        ready,
+        checks,
+        details,
+        uptimeSec: Math.floor((Date.now() - serviceStartedAt) / 1000),
+        backgroundIndexJobs: ragBackgroundIndexJobs.size
+    };
 }
 
 async function handleUserData(req, res, urlPath, method) {
@@ -1735,13 +1904,53 @@ async function handleEnterprise(req, res, urlPath, method) {
                 kbId: doc.kbId
             });
 
+            sendJson(res, 200, buildRagOrchestrationResponse(ragOrchestration, doc));
+        });
+    }
+
+    // Wave 3: poll single document ragStatus (group members)
+    if (
+        (method === 'GET' && urlPath === '/api/enterprise/group/document/status')
+        || (method === 'POST' && urlPath === '/api/enterprise/group/document/status')
+    ) {
+        return Promise.resolve().then(async () => {
+            const q = parseQuery(req);
+            let body = {};
+            if (method === 'POST') {
+                try { body = await readBody(req); } catch (_) { body = {}; }
+            }
+            const code = normalizeCode(body.groupCode || q.get('groupCode') || q.get('group_code'));
+            const memberId = body.memberId || q.get('memberId') || '';
+            const docId = body.documentId || body.document_id || q.get('documentId') || q.get('document_id') || '';
+
+            const group = getGroup(store, code);
+            if (!group) return sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+
+            const authUser = await getOptionalAuth(req);
+            const memberCheck = await assertEnterpriseMember(group, memberId, authUser, { store, bind: false });
+            if (!memberCheck.ok) {
+                return sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
+            }
+            if (!docId) return sendError(res, 400, '缺少 documentId', 'VALIDATION_ERROR');
+
+            const doc = findGroupDocument(group, { documentId: docId });
+            if (!doc) return sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+
+            const rag = doc.rag && typeof doc.rag === 'object' ? doc.rag : {};
+            const status = doc.ragStatus || rag.status || 'pending';
             sendJson(res, 200, {
                 ok: true,
-                document: ragOrchestration.document || doc,
-                ragStatus: ragOrchestration.ragStatus || doc.ragStatus || 'pending',
-                ragOk: ragOrchestration.ragOk,
-                ragPending: !!ragOrchestration.ragPending,
-                warning: ragOrchestration.warning
+                documentId: doc.id,
+                title: doc.title || null,
+                ragStatus: status,
+                currentVersion: doc.currentVersion || 1,
+                lastError: rag.lastError || null,
+                lastErrorCode: rag.lastErrorCode || null,
+                lastErrorCategory: rag.lastErrorCategory || null,
+                retryable: rag.retryable != null ? rag.retryable : null,
+                lastIndexedAt: rag.lastIndexedAt || null,
+                chunks: rag.chunks != null ? rag.chunks : null,
+                indexing: ragBackgroundIndexJobs.has(`${code}:${doc.id}`)
             });
         });
     }
@@ -1779,14 +1988,9 @@ async function handleEnterprise(req, res, urlPath, method) {
                 kbId: doc.kbId
             });
 
-            sendJson(res, 200, {
-                ok: ragOrchestration.ragOk !== false || !!ragOrchestration.ragPending,
-                document: ragOrchestration.document || doc,
-                ragStatus: ragOrchestration.ragStatus || doc.ragStatus || 'pending',
-                ragOk: ragOrchestration.ragOk,
-                ragPending: !!ragOrchestration.ragPending,
-                warning: ragOrchestration.warning
-            });
+            const payload = buildRagOrchestrationResponse(ragOrchestration, doc);
+            payload.ok = ragOrchestration.ragOk !== false || !!ragOrchestration.ragPending;
+            sendJson(res, 200, payload);
         });
     }
 
@@ -1987,13 +2191,8 @@ async function handleEnterprise(req, res, urlPath, method) {
             });
 
             sendJson(res, 200, {
-                ok: true,
-                document: ragOrchestration.document || doc,
-                currentVersion: doc.currentVersion,
-                ragStatus: ragOrchestration.ragStatus || doc.ragStatus || 'pending',
-                ragOk: ragOrchestration.ragOk,
-                ragPending: !!ragOrchestration.ragPending,
-                warning: ragOrchestration.warning
+                ...buildRagOrchestrationResponse(ragOrchestration, doc),
+                currentVersion: doc.currentVersion
             });
         });
     }
@@ -2184,13 +2383,8 @@ async function handleEnterprise(req, res, urlPath, method) {
                     kbId: doc.kbId
                 });
                 return sendJson(res, 200, {
-                    ok: true,
-                    document: ragOrchestration.document || doc,
+                    ...buildRagOrchestrationResponse(ragOrchestration, doc),
                     currentVersion: doc.currentVersion || 1,
-                    ragStatus: ragOrchestration.ragStatus || doc.ragStatus || 'pending',
-                    ragOk: ragOrchestration.ragOk,
-                    ragPending: !!ragOrchestration.ragPending,
-                    warning: ragOrchestration.warning,
                     restored: true
                 });
             }
@@ -2497,6 +2691,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && urlPath === '/health') {
         const dbStats = await getDatabaseStats();
+        const ragDetail = await probeRagHealthDetail();
         sendJson(res, 200, {
             ok: true,
             service: 'lumina-api-proxy',
@@ -2506,17 +2701,46 @@ const server = http.createServer(async (req, res) => {
             storage: getStoreBackend(),
             authStorage: getAuthBackend(),
             userDataStorage: getUserDataBackend(),
-            database: dbStats
+            database: dbStats,
+            rag: ragDetail,
+            uptimeSec: Math.floor((Date.now() - serviceStartedAt) / 1000),
+            backgroundIndexJobs: ragBackgroundIndexJobs.size,
+            observability: 'w3'
         });
         return;
     }
 
     if (req.method === 'GET' && urlPath === '/ready') {
-        const { ready, checks } = await getReadiness();
-        sendJson(res, ready ? 200 : 503, {
-            ok: ready,
+        const readiness = await getReadiness();
+        sendJson(res, readiness.ready ? 200 : 503, {
+            ok: readiness.ready,
             service: 'lumina-api-proxy',
-            checks
+            checks: readiness.checks,
+            details: readiness.details,
+            uptimeSec: readiness.uptimeSec,
+            backgroundIndexJobs: readiness.backgroundIndexJobs
+        });
+        return;
+    }
+
+    // Wave 3: operator snapshot (no secrets). Public — same surface as /health.
+    if (req.method === 'GET' && urlPath === '/api/ops/status') {
+        const readiness = await getReadiness();
+        const limit = Math.min(40, Math.max(1, Number(parseQuery(req).get('limit')) || 20));
+        sendJson(res, 200, {
+            ok: true,
+            service: 'lumina-api-proxy',
+            ready: readiness.ready,
+            checks: readiness.checks,
+            details: readiness.details,
+            uptimeSec: readiness.uptimeSec,
+            backgroundIndexJobs: readiness.backgroundIndexJobs,
+            recentIndexEvents: ragIndexEvents.slice(0, limit),
+            aiRateLimit: {
+                max: AI_RATE_LIMIT_MAX,
+                windowMs: AI_RATE_LIMIT_WINDOW_MS
+            },
+            ragIndexTimeoutMs: RAG_INDEX_TIMEOUT_MS
         });
         return;
     }
@@ -3073,6 +3297,8 @@ initDb().then(async connected => {
         console.log(`  GET  /api/enterprise/group/document/version → 讀取單一版本內容`);
         console.log(`  POST /api/enterprise/group/document/restore → 軟刪還原（manager）`);
         console.log(`  POST /api/enterprise/group/document/reindex → 重試 RAG 索引（manager）`);
+        console.log(`  GET  /api/enterprise/group/document/status  → 輪詢 ragStatus（成員）`);
+        console.log(`  GET  /api/ops/status                       → 可觀測快照（ready + 近期索引事件）`);
         console.log(`  POST /api/enterprise/group/document/delete  → 清索引後 soft-delete`);
         console.log(`  POST /api/enterprise/task/assign  → 指派任務`);
         console.log(`  PATCH /api/enterprise/task/:id    → 更新任務`);

@@ -33,6 +33,7 @@
     "test:security-matrix": "node scripts/test-security-matrix.js",
     "test:w2-kb": "node scripts/test-w2-kb-sync.js",
     "test:w2-versions": "node scripts/test-w2-versions.js",
+    "test:w3-obs": "node scripts/test-w3-observability.js",
     "test:integration": "node scripts/test-integration.js",
     "seed:demo": "node scripts/seed-demo.js",
     "backup:rag": "node scripts/backup-rag-storage.js",

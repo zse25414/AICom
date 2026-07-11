@@ -141,19 +141,45 @@ async function fetchApiReadiness() {
         return {
             reachable: true,
             ready: res.ok && !!data.ok,
-            checks: data.checks || null
+            checks: data.checks || null,
+            details: data.details || null,
+            uptimeSec: data.uptimeSec != null ? data.uptimeSec : null,
+            backgroundIndexJobs: data.backgroundIndexJobs != null ? data.backgroundIndexJobs : null
         };
     } catch (_) {
-        return { reachable: false, ready: false, checks: null };
+        return {
+            reachable: false,
+            ready: false,
+            checks: null,
+            details: null,
+            uptimeSec: null,
+            backgroundIndexJobs: null
+        };
     }
 }
 
-function formatReadinessHint(checks) {
+async function fetchOpsStatus(limit = 12) {
+    try {
+        const res = await fetch(
+            getEnterpriseBaseUrl() + '/api/ops/status?limit=' + encodeURIComponent(String(limit)),
+            { method: 'GET' }
+        );
+        if (!res.ok) return null;
+        return await res.json().catch(() => null);
+    } catch (_) {
+        return null;
+    }
+}
+
+function formatReadinessHint(checks, details) {
     if (!checks) return '';
     const parts = [];
     if ('store' in checks) parts.push(`store:${checks.store ? '✓' : '✗'}`);
     if ('auth' in checks) parts.push(`auth:${checks.auth ? '✓' : '✗'}`);
     if ('rag' in checks) parts.push(`rag:${checks.rag ? '✓' : '✗'}`);
+    if (details?.rag?.latencyMs != null) parts.push(`ragLatency:${details.rag.latencyMs}ms`);
+    if (details?.rag?.embedding) parts.push(`embed:${details.rag.embedding}`);
+    if (details?.rag?.retrieval) parts.push(`retrieval:${details.rag.retrieval}`);
     return parts.join(' ');
 }
 

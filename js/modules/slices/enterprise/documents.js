@@ -440,13 +440,17 @@ async function saveTeamDocument() {
                     documentId: newDoc?.id
                 }, { toastOnError: false });
                 applyLocalDocRagStatus(newDoc?.id, ragOk ? 'indexed' : 'failed', {
-                    lastError: ragOk ? null : (res.data?.warning || 'RAG 索引失敗')
+                    lastError: ragOk ? null : (res.data?.lastError || res.data?.warning || 'RAG 索引失敗'),
+                    lastErrorCode: res.data?.errorCode || null,
+                    lastErrorCategory: res.data?.errorCategory || null,
+                    retryable: res.data?.retryable
                 });
             } else {
                 // pending / async server indexing — do not double-write from client
                 ragOk = null;
                 applyLocalDocRagStatus(newDoc?.id, 'pending');
                 if (serverPending && newDoc) newDoc.ragStatus = 'pending';
+                ensureRagStatusPolling();
             }
             S.ragSyncedGroupKey = null;
         } else {
@@ -524,16 +528,125 @@ function applyLocalDocRagStatus(docId, status, extra = {}) {
         ...(doc.rag && typeof doc.rag === 'object' ? doc.rag : {}),
         status,
         lastIndexedAt: status === 'indexed' ? new Date().toISOString() : (doc.rag?.lastIndexedAt || null),
-        lastError: extra.lastError != null ? extra.lastError : (status === 'failed' ? (extra.lastError || '索引失敗') : null)
+        lastError: extra.lastError != null ? extra.lastError : (status === 'failed' ? (extra.lastError || '索引失敗') : null),
+        lastErrorCode: extra.lastErrorCode != null ? extra.lastErrorCode : (status === 'failed' ? (doc.rag?.lastErrorCode || null) : null),
+        lastErrorCategory: extra.lastErrorCategory != null ? extra.lastErrorCategory : (status === 'failed' ? (doc.rag?.lastErrorCategory || null) : null),
+        retryable: extra.retryable != null ? extra.retryable : (status === 'failed' ? (doc.rag?.retryable != null ? doc.rag.retryable : true) : null)
     };
+    if (status === 'pending') ensureRagStatusPolling();
+}
+
+/** Wave 3: poll pending documents until indexed/failed */
+const RAG_STATUS_POLL_MS = 4000;
+const RAG_STATUS_POLL_MAX = 45; // ~3 min
+
+function ensureRagStatusPolling() {
+    if (S._ragStatusPollTimer) return;
+    S._ragStatusPollTicks = 0;
+    S._ragStatusPollTimer = setInterval(() => {
+        pollPendingDocumentRagStatus().catch(err => {
+            console.warn('[Lumina] rag status poll', err);
+        });
+    }, RAG_STATUS_POLL_MS);
+}
+
+function stopRagStatusPolling() {
+    if (S._ragStatusPollTimer) {
+        clearInterval(S._ragStatusPollTimer);
+        S._ragStatusPollTimer = null;
+    }
+    S._ragStatusPollTicks = 0;
+}
+
+async function pollPendingDocumentRagStatus() {
+    if (!S.enterpriseSession || S.enterpriseSession.offline) {
+        stopRagStatusPolling();
+        return;
+    }
+    const docs = S.enterpriseGroupData?.documents || [];
+    const pending = docs.filter(d => resolveDocRagStatus(d) === 'pending');
+    if (!pending.length) {
+        stopRagStatusPolling();
+        return;
+    }
+    S._ragStatusPollTicks = (S._ragStatusPollTicks || 0) + 1;
+    if (S._ragStatusPollTicks > RAG_STATUS_POLL_MAX) {
+        stopRagStatusPolling();
+        return;
+    }
+
+    let changed = false;
+    for (const doc of pending.slice(0, 8)) {
+        try {
+            const qs = new URLSearchParams({
+                groupCode: S.enterpriseSession.groupCode,
+                memberId: S.enterpriseSession.memberId,
+                documentId: doc.id
+            });
+            const res = await enterpriseFetch(
+                'GET',
+                `/api/enterprise/group/document/status?${qs.toString()}`
+            );
+            if (!res.ok || !res.data) continue;
+            const st = res.data.ragStatus;
+            if (st === 'pending' || res.data.indexing) continue;
+            if (st === 'indexed' || st === 'failed' || st === 'deleted') {
+                applyLocalDocRagStatus(doc.id, st, {
+                    lastError: res.data.lastError,
+                    lastErrorCode: res.data.lastErrorCode,
+                    lastErrorCategory: res.data.lastErrorCategory,
+                    retryable: res.data.retryable
+                });
+                if (S.docRagStatusOverrides) delete S.docRagStatusOverrides[doc.id];
+                // merge server fields onto doc
+                if (S.enterpriseGroupData?.documents) {
+                    const d = S.enterpriseGroupData.documents.find(x => x.id === doc.id);
+                    if (d) {
+                        d.ragStatus = st;
+                        d.rag = {
+                            ...(d.rag || {}),
+                            status: st,
+                            lastError: res.data.lastError,
+                            lastErrorCode: res.data.lastErrorCode,
+                            lastErrorCategory: res.data.lastErrorCategory,
+                            retryable: res.data.retryable,
+                            lastIndexedAt: res.data.lastIndexedAt,
+                            chunks: res.data.chunks
+                        };
+                    }
+                }
+                changed = true;
+                if (st === 'indexed') {
+                    showToast(`「${doc.title || '文件'}」知識庫已索引完成`, 'success');
+                } else if (st === 'failed') {
+                    const code = res.data.lastErrorCode ? ` (${res.data.lastErrorCode})` : '';
+                    showToast(`「${doc.title || '文件'}」索引失敗${code}`, 'error');
+                }
+            }
+        } catch (_) { /* ignore single poll errors */ }
+    }
+    if (changed) renderEnterpriseDocuments();
+    const stillPending = (S.enterpriseGroupData?.documents || [])
+        .some(d => resolveDocRagStatus(d) === 'pending');
+    if (!stillPending) stopRagStatusPolling();
 }
 
 function renderDocRagStatusBadge(doc) {
     const status = resolveDocRagStatus(doc);
+    const errCode = doc.rag?.lastErrorCode || '';
+    const errMsg = doc.rag?.lastError || '';
+    const retryable = doc.rag?.retryable;
+    const failedTitle = [errCode, errMsg, retryable === false ? '（建議檢查內容／設定）' : (retryable ? '（可重試）' : '')]
+        .filter(Boolean).join(' — ') || '已存檔但無法被教練檢索';
     const map = {
         indexed: { label: '已索引', cls: 'doc-rag-badge-indexed', icon: 'fa-circle-check', title: '已發布且可被教練檢索' },
-        pending: { label: '索引中', cls: 'doc-rag-badge-pending', icon: 'fa-spinner fa-spin', title: '已存檔，知識庫索引處理中' },
-        failed: { label: '索引失敗', cls: 'doc-rag-badge-failed', icon: 'fa-circle-exclamation', title: doc.rag?.lastError || '已存檔但無法被教練檢索' },
+        pending: { label: '索引中', cls: 'doc-rag-badge-pending', icon: 'fa-spinner fa-spin', title: '已存檔，知識庫索引處理中（自動刷新）' },
+        failed: {
+            label: errCode ? `索引失敗 · ${errCode}` : '索引失敗',
+            cls: 'doc-rag-badge-failed',
+            icon: 'fa-circle-exclamation',
+            title: failedTitle
+        },
         deleted: { label: '已刪除索引', cls: 'doc-rag-badge-failed', icon: 'fa-trash', title: '索引已移除' }
     };
     const conf = map[status] || map.pending;
@@ -1268,6 +1381,11 @@ function renderEnterpriseDocuments() {
     if (!S.enterpriseSession || !S.enterpriseGroupData) return;
     const docs = S.enterpriseGroupData.documents || [];
     const isManager = S.enterpriseSession.role === 'manager';
+
+    // Wave 3: keep polling while any doc is pending
+    if (docs.some(d => resolveDocRagStatus(d) === 'pending')) {
+        ensureRagStatusPolling();
+    }
     
     const addBtn = document.getElementById('team-add-doc-btn');
     if (addBtn) addBtn.classList.toggle('hidden', !isManager);
