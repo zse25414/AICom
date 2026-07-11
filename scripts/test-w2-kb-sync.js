@@ -1,5 +1,5 @@
 /**
- * W2-E KB / document sync security & contract matrix
+ * W2-E KB / document sync security & contract matrix (+ member gap fill)
  *
  * KB-1  manager POST /api/rag/kb → GET list sees items.displayName
  * KB-2  member POST /api/rag/kb → 403 ROLE_FORBIDDEN
@@ -10,6 +10,14 @@
  * DOC-1 manager document/add text → response has ragStatus (+ ragOk preferred)
  * DOC-2 member reindex → 403 ROLE_FORBIDDEN
  * DOC-3 manager reindex → 200 or explainable error (RAG optional)
+ * MEM-1 member GET kb list own group → 200 (positive read)
+ * MEM-2 member POST kb/delete → 403 ROLE_FORBIDDEN
+ * MEM-3 member DELETE /api/rag/kb/:id → 403 ROLE_FORBIDDEN
+ * KB-7  manager DELETE /api/rag/kb/:id REST path
+ * KB-8  KB delete cascade documents (or RAG wipe fail keeps docs)
+ * XG-1  cross-group reindex → 403 GROUP_FORBIDDEN
+ * XG-2  cross-group document/delete → 403
+ * AC-1  auto_create=false unknown kb → 400 KB_NOT_FOUND
  *
  * Requires API :3001. RAG :8000 optional (document index may stay pending).
  * CI=true + API not ready → fail; local → skip.
@@ -314,18 +322,21 @@ async function joinAsMember(token, groupCode, name) {
             );
         }
 
-        // ── KB-5: soft-delete non-general → gone from list ──
+        // ── KB-5: soft-delete non-general (success or RAG wipe-fail closed) ──
         {
             const del = await request('POST', '/api/rag/kb/delete', {
                 group_code: g1.code,
                 kb_id: kbId
             }, userA.token);
+            // When RAG is up: ok=true soft-delete. When RAG down: ok=false RAG_DELETE_FAILED (no false success).
             const delOk = del.status === 200 && del.data?.ok === true && del.data?.kb_id === kbId;
+            const delRagFail = del.status === 200
+                && (del.data?.ragDeleteOk === false || del.data?.code === 'RAG_DELETE_FAILED');
             assertCase(
                 'KB-5a',
-                'manager soft-delete non-general KB',
-                delOk,
-                `status=${del.status} body=${del.raw}`
+                'manager soft-delete non-general KB (ok or RAG wipe fail closed)',
+                delOk || delRagFail,
+                `status=${del.status} ok=${del.data?.ok} ragDeleteOk=${del.data?.ragDeleteOk} code=${del.data?.code || 'n/a'} body=${(del.raw || '').slice(0, 200)}`
             );
 
             const list = await request(
@@ -336,14 +347,23 @@ async function joinAsMember(token, groupCode, name) {
             );
             const stillThere = findKbItem(list, kbId);
             const ids = Array.isArray(list.data?.kb_ids) ? list.data.kb_ids : [];
-            assertCase(
-                'KB-5b',
-                'deleted KB no longer appears in list',
-                list.status === 200 && !stillThere && !ids.includes(kbId),
-                stillThere
-                    ? `still present: ${JSON.stringify(stillThere)}`
-                    : `status=${list.status} kb_ids=${JSON.stringify(ids)}`
-            );
+            if (delOk) {
+                assertCase(
+                    'KB-5b',
+                    'deleted KB no longer appears in list',
+                    list.status === 200 && !stillThere && !ids.includes(kbId),
+                    stillThere
+                        ? `still present: ${JSON.stringify(stillThere)}`
+                        : `status=${list.status} kb_ids=${JSON.stringify(ids)}`
+                );
+            } else {
+                assertCase(
+                    'KB-5b',
+                    'RAG wipe fail keeps KB in list (no silent delete)',
+                    list.status === 200 && !!stillThere && ids.includes(kbId),
+                    `status=${list.status} stillThere=${!!stillThere} kb_ids=${JSON.stringify(ids)}`
+                );
+            }
 
             // general must still be present after soft-delete of other KB
             assertCase(
@@ -445,6 +465,207 @@ async function joinAsMember(token, groupCode, name) {
                     'manager reindex → 200 or explainable error (RAG optional)',
                     statusOk && notAuthFail && hasStatusField,
                     `status=${res.status} ragStatus=${res.data?.ragStatus || res.data?.document?.ragStatus || 'n/a'} body=${(res.raw || '').slice(0, 200)}`
+                );
+            }
+        }
+
+        // ── MEM-1: member can list KBs in own group (positive) ──
+        {
+            const list = await request(
+                'GET',
+                `/api/rag/kb/list?group_code=${encodeURIComponent(g1.code)}`,
+                null,
+                userC.token
+            );
+            const ids = Array.isArray(list.data?.kb_ids) ? list.data.kb_ids : [];
+            assertCase(
+                'MEM-1',
+                'member GET kb list own group → 200 with general',
+                list.status === 200 && list.data?.ok !== false && ids.includes('general'),
+                `status=${list.status} kb_ids=${JSON.stringify(ids)} body=${(list.raw || '').slice(0, 180)}`
+            );
+        }
+
+        // ── MEM-2 / MEM-3: member cannot delete KB ──
+        {
+            // create a disposable KB for delete attempts (manager)
+            const memKbId = `memdel-${UNIQUE.slice(-5)}`.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+            await request('POST', '/api/rag/kb', {
+                group_code: g1.code,
+                id: memKbId,
+                displayName: 'Member delete target'
+            }, userA.token);
+
+            const postDel = await request('POST', '/api/rag/kb/delete', {
+                group_code: g1.code,
+                kb_id: memKbId
+            }, userC.token);
+            assertCase(
+                'MEM-2',
+                'member POST /api/rag/kb/delete → 403 ROLE_FORBIDDEN',
+                postDel.status === 403 && hasCode(postDel, 'ROLE_FORBIDDEN'),
+                `status=${postDel.status} code=${postDel.data.code || 'MISSING'}`
+            );
+
+            const restDel = await request(
+                'DELETE',
+                `/api/rag/kb/${encodeURIComponent(memKbId)}?group_code=${encodeURIComponent(g1.code)}`,
+                null,
+                userC.token
+            );
+            assertCase(
+                'MEM-3',
+                'member DELETE /api/rag/kb/:id → 403 ROLE_FORBIDDEN',
+                restDel.status === 403 && hasCode(restDel, 'ROLE_FORBIDDEN'),
+                `status=${restDel.status} code=${restDel.data.code || 'MISSING'} body=${(restDel.raw || '').slice(0, 160)}`
+            );
+
+            // ── KB-7: manager REST DELETE path ──
+            const cascadeTitle = `cascade-doc-${UNIQUE}`;
+            const addOnKb = await request('POST', '/api/enterprise/group/document/add', {
+                groupCode: g1.code,
+                managerId: g1.manager.id,
+                title: cascadeTitle,
+                content: `Doc on KB ${memKbId} for cascade ${UNIQUE}`,
+                docType: 'text',
+                kbId: memKbId
+            }, userA.token);
+            const cascadeDocId = addOnKb.data?.document?.id || null;
+            assertCase(
+                'KB-8setup',
+                'manager add document on cascade KB',
+                addOnKb.status === 200 && !!cascadeDocId,
+                `status=${addOnKb.status} docId=${cascadeDocId}`
+            );
+
+            const mgrRestDel = await request(
+                'DELETE',
+                `/api/rag/kb/${encodeURIComponent(memKbId)}?group_code=${encodeURIComponent(g1.code)}`,
+                null,
+                userA.token
+            );
+            // Success: ok true + gone from list
+            // RAG down: ok false + RAG_DELETE_FAILED + KB still listed
+            const restOk = mgrRestDel.status === 200 && mgrRestDel.data?.ok === true;
+            const restRagFail = mgrRestDel.data?.ragDeleteOk === false
+                || mgrRestDel.data?.code === 'RAG_DELETE_FAILED';
+            assertCase(
+                'KB-7',
+                'manager DELETE /api/rag/kb/:id REST (ok or RAG wipe fail closed)',
+                restOk || restRagFail || (mgrRestDel.status === 200 && mgrRestDel.data?.ok === false),
+                `status=${mgrRestDel.status} ok=${mgrRestDel.data?.ok} ragDeleteOk=${mgrRestDel.data?.ragDeleteOk} code=${mgrRestDel.data?.code || 'n/a'} body=${(mgrRestDel.raw || '').slice(0, 200)}`
+            );
+
+            const listAfter = await request(
+                'GET',
+                `/api/rag/kb/list?group_code=${encodeURIComponent(g1.code)}`,
+                null,
+                userA.token
+            );
+            const kbStillListed = !!findKbItem(listAfter, memKbId)
+                || (Array.isArray(listAfter.data?.kb_ids) && listAfter.data.kb_ids.includes(memKbId));
+
+            // Group documents (active only)
+            const groupGet = await request(
+                'GET',
+                `/api/enterprise/group/${encodeURIComponent(g1.code)}?memberId=${encodeURIComponent(g1.manager.id)}`,
+                null,
+                userA.token
+            );
+            const activeDocs = groupGet.data?.group?.documents || [];
+            const cascadeStillActive = cascadeDocId
+                && activeDocs.some(d => d.id === cascadeDocId);
+
+            if (restOk) {
+                assertCase(
+                    'KB-8',
+                    'KB delete success: KB gone + cascade doc soft-deleted',
+                    !kbStillListed && (cascadeDocId ? !cascadeStillActive : true)
+                        && (mgrRestDel.data?.documentsSoftDeleted == null
+                            || mgrRestDel.data.documentsSoftDeleted >= 1),
+                    `kbListed=${kbStillListed} cascadeActive=${cascadeStillActive} softDeleted=${mgrRestDel.data?.documentsSoftDeleted}`
+                );
+            } else {
+                // Wipe failed: must NOT silently remove metadata
+                assertCase(
+                    'KB-8',
+                    'KB delete RAG wipe fail: KB/docs still present (no false success)',
+                    kbStillListed && (cascadeDocId ? cascadeStillActive : true),
+                    `kbListed=${kbStillListed} cascadeActive=${cascadeStillActive} code=${mgrRestDel.data?.code}`
+                );
+            }
+        }
+
+        // ── XG: cross-group reindex / document delete ──
+        {
+            const reindex = await request('POST', '/api/enterprise/group/document/reindex', {
+                groupCode: g1.code,
+                managerId: g2.manager.id,
+                documentId: createdDocId || 'x'
+            }, userB.token);
+            // B is manager of g2, not member of g1 with that managerId — expect 403
+            assertCase(
+                'XG-1',
+                'cross-group document/reindex → 403',
+                reindex.status === 403,
+                `status=${reindex.status} code=${reindex.data?.code || 'n/a'} body=${(reindex.raw || '').slice(0, 160)}`
+            );
+
+            const delDoc = await request('POST', '/api/enterprise/group/document/delete', {
+                groupCode: g1.code,
+                managerId: g2.manager.id,
+                documentId: createdDocId || 'x'
+            }, userB.token);
+            assertCase(
+                'XG-2',
+                'cross-group document/delete → 403',
+                delDoc.status === 403,
+                `status=${delDoc.status} code=${delDoc.data?.code || 'n/a'} body=${(delDoc.raw || '').slice(0, 160)}`
+            );
+        }
+
+        // ── AC-1: auto_create=false unknown kb → KB_NOT_FOUND ──
+        {
+            const unknownKb = `nosuch-${UNIQUE.slice(-5)}`.toLowerCase();
+            // Prefer enterprise document/add with auto_create false if supported
+            const add = await request('POST', '/api/enterprise/group/document/add', {
+                groupCode: g1.code,
+                managerId: g1.manager.id,
+                title: `auto-create-false-${UNIQUE}`,
+                content: 'should not create unknown kb',
+                docType: 'text',
+                kbId: unknownKb,
+                auto_create: false,
+                autoCreate: false
+            }, userA.token);
+
+            const viaEnterprise = add.status === 400 && hasCode(add, 'KB_NOT_FOUND');
+
+            // Fallback: RAG upload-text through proxy
+            let viaRag = false;
+            if (!viaEnterprise) {
+                const up = await request('POST', '/api/rag/document/upload-text', {
+                    group_code: g1.code,
+                    kb_id: unknownKb,
+                    title: 'no-auto',
+                    content: 'x',
+                    auto_create: false
+                }, userA.token);
+                viaRag = (up.status === 400 || up.status === 404)
+                    && (hasCode(up, 'KB_NOT_FOUND')
+                        || /不存在|not found|KB_NOT_FOUND/i.test(up.raw || ''));
+                assertCase(
+                    'AC-1',
+                    'auto_create=false unknown kb → KB_NOT_FOUND',
+                    viaRag,
+                    `enterprise status=${add.status} code=${add.data?.code}; rag status=${up.status} body=${(up.raw || '').slice(0, 160)}`
+                );
+            } else {
+                assertCase(
+                    'AC-1',
+                    'auto_create=false unknown kb → KB_NOT_FOUND',
+                    true,
+                    `via enterprise document/add status=${add.status}`
                 );
             }
         }
