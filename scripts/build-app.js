@@ -80,6 +80,7 @@ function generateLazyStubs(lazyGroups) {
         lines.push(`    };`);
         lines.push(`    s.onerror = () => {`);
         lines.push(`      delete __luminaChunkCache['${chunk}'];`);
+        lines.push(`      try { if (typeof window.__luminaOnChunkError === 'function') window.__luminaOnChunkError('${chunk}'); } catch (_) {}`);
         lines.push(`      reject(new Error('Failed to load ${chunk} chunk'));`);
         lines.push(`    };`);
         lines.push(`    document.head.appendChild(s);`);
@@ -89,11 +90,18 @@ function generateLazyStubs(lazyGroups) {
         for (const fn of fns) {
             lines.push(`if (typeof window['${fn}'] !== 'function') {`);
             lines.push(`  window['${fn}'] = async function __luminaLazyStub_${fn}(...args) {`);
-            lines.push(`    await __loadChunk_${chunk.replace(/-/g, '_')}();`);
+            lines.push(`    try {`);
+            lines.push(`      await __loadChunk_${chunk.replace(/-/g, '_')}();`);
+            lines.push(`    } catch (loadErr) {`);
+            lines.push(`      try { if (typeof window.__luminaOnChunkError === 'function') window.__luminaOnChunkError('${chunk}', loadErr); } catch (_) {}`);
+            lines.push(`      throw loadErr;`);
+            lines.push(`    }`);
             lines.push(`    const real = window['${fn}'];`);
             // Guard against infinite recursion if chunk failed to replace the stub
             lines.push(`    if (typeof real !== 'function' || real === __luminaLazyStub_${fn}) {`);
-            lines.push(`      throw new Error('Chunk ${chunk} did not register ${fn}');`);
+            lines.push(`      const regErr = new Error('Chunk ${chunk} did not register ${fn}');`);
+            lines.push(`      try { if (typeof window.__luminaOnChunkError === 'function') window.__luminaOnChunkError('${chunk}', regErr); } catch (_) {}`);
+            lines.push(`      throw regErr;`);
             lines.push(`    }`);
             lines.push(`    return real.apply(this, args);`);
             lines.push(`  };`);

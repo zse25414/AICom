@@ -132,10 +132,27 @@ function showSection(section) {
     }
     
     if (section === 'coach') {
-        try { if (typeof autoResizeCoachInput === 'function') autoResizeCoachInput(); } catch (_) {}
-        renderCoachQuickActions();
-        refreshCoachView();
-        renderCoachReadinessBar();
+        // Phase 3: ensure coach chunk; show boundary UI on failure
+        const runCoachUi = () => {
+            try { if (typeof autoResizeCoachInput === 'function') autoResizeCoachInput(); } catch (_) {}
+            try { if (typeof renderCoachQuickActions === 'function') renderCoachQuickActions(); } catch (_) {}
+            try {
+                if (typeof refreshCoachView === 'function') refreshCoachView();
+                else if (typeof renderCoachAgentView === 'function') renderCoachAgentView();
+            } catch (e) {
+                try { if (typeof showCoachChunkError === 'function') showCoachChunkError(e); } catch (_) {}
+            }
+            try { if (typeof renderCoachReadinessBar === 'function') renderCoachReadinessBar(); } catch (_) {}
+        };
+        if (typeof window.__luminaEnsureCoach === 'function') {
+            Promise.resolve(window.__luminaEnsureCoach())
+                .then(runCoachUi)
+                .catch((e) => {
+                    try { if (typeof showCoachChunkError === 'function') showCoachChunkError(e); } catch (_) {}
+                });
+        } else {
+            runCoachUi();
+        }
     }
     
     if (section === 'dashboard' && S.focusSession?.endsAt && S.focusSession.endsAt > Date.now() && !S.focusTimerInterval) {

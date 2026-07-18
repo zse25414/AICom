@@ -9,8 +9,8 @@ const root = path.join(__dirname, '..');
 // 2026-07-18b：coach 市場合約（無任務問答／離線升級）後 coach chunk 略增。
 // 上限 = 實測 + ~10% headroom。
 const limits = {
-    // 2026-07-18c：Phase 0–2 analytics + usage meter 進 core
-    'js/lumina-app.js': 250 * 1024,
+    // 2026-07-18d：Phase 0–3 analytics + usage + chunk-errors 進 core
+    'js/lumina-app.js': 300 * 1024,
     'js/chunks/lumina-coach.js': 115 * 1024,
     'js/chunks/lumina-enterprise-docs.js': 130 * 1024
 };

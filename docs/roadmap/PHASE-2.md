@@ -36,3 +36,7 @@
 
 - [ ] 聯繫 5 個種子團隊（見 PILOT-PLAYBOOK）  
 - [ ] 完成至少 2 場訪談週記  
+
+## 下一階段
+
+→ **Phase 3**：`docs/roadmap/PHASE-3.md`（E2E、狀態契約、SLO、runbook、chunk 錯誤邊界）

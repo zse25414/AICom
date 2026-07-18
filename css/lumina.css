@@ -3425,7 +3425,7 @@ body {
     display: block;
     width: fit-content;
     max-width: min(85%, 28rem);
-    min-width: 0;
+    min-width: min-content;
     box-sizing: border-box;
     padding: 0.55rem 0.9rem;
     border-radius: 1.15rem 1.15rem 0.3rem 1.15rem;
@@ -3433,8 +3433,8 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.08);
     color: #fafafa;
     white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    word-break: normal;
+    overflow-wrap: break-word;
+    word-break: normal; /* do not break CJK into vertical 1-char strip */
     line-height: 1.45;
 }
 
@@ -4161,6 +4161,48 @@ body {
 }
 
 .team-notif-toggle:last-child { border-bottom: none; }
+
+/* ── Phase 3 coach chunk error ── */
+.coach-chunk-error {
+    margin: auto;
+    max-width: 22rem;
+    text-align: center;
+    padding: 2rem 1.25rem;
+}
+.coach-chunk-error-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #f4f4f5;
+    margin-bottom: 0.5rem;
+}
+.coach-chunk-error-desc {
+    font-size: 0.8rem;
+    color: #71717a;
+    margin-bottom: 1rem;
+    line-height: 1.45;
+    word-break: break-word;
+}
+.coach-chunk-error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+}
+.coach-chunk-error-btn {
+    padding: 0.45rem 0.9rem;
+    border-radius: 9999px;
+    border: none;
+    background: #f4f4f5;
+    color: #18181b;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.coach-chunk-error-btn.ghost {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #a1a1aa;
+}
 
 /* ── Phase 2 usage meter ── */
 .usage-meter-panel {
