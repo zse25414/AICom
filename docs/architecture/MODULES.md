@@ -40,7 +40,17 @@ Python RAG (:8000)  rag_service/main.py + rag_engine.py
 | **Chat routes** | `server/routes/chat.js` | `POST /api/chat` | 持久化任務 |
 | **Health routes** | `server/routes/health.js` | `/health` `/ready` `/api/ops/*` | 回傳密鑰 |
 | **Uploads routes** | `server/routes/uploads.js` | `GET /uploads/*` | 公開目錄列出 |
-| **Runtime (過渡)** | `server/runtime-legacy.js` | 尚未拆完的領域實作 | **禁止再堆新功能** |
+| **Domain 組裝** | `server/domain/index.js` | 註冊所有領域到 `api` 物件 | 路由細節 |
+| **Domain util** | `server/domain/util.js` | clampText / uid / parseQuery | HTTP |
+| **Domain pin** | `server/domain/pin.js` | 主管 PIN | 路由 |
+| **Domain rate-limit** | `server/domain/rate-limit.js` | 限流桶 | 業務授權 |
+| **Domain llm** | `server/domain/llm.js` | chat body / api_base | 路由 |
+| **Domain http** | `server/domain/http.js` | CORS / JSON / errors | 領域規則 |
+| **Domain auth-mw** | `server/domain/auth-mw.js` | JWT require* | 寫 store |
+| **Domain enterprise** | `server/domain/enterprise/*` | 群組、KB、文件領域 | 前端 |
+| **Domain rag** | `server/domain/rag/ops.js` | RAG 代理與索引編排 | UI |
+| **Domain handlers** | `server/domain/handlers/*` | HTTP 適配層 | 持久化細節 |
+| **Runtime 相容層** | `server/runtime-legacy.js` | re-export `domain/` | **禁止再堆邏輯** |
 | **Auth primitive** | `lib/auth.js` | JWT / password hash | HTTP |
 | **Auth store** | `lib/auth-store.js` | 使用者 CRUD | 路由 |
 | **Enterprise store** | `lib/enterprise-store.js` | 群組 JSON/Mongo | 路由 |
@@ -51,15 +61,17 @@ Python RAG (:8000)  rag_service/main.py + rag_engine.py
 
 ### 2.2 請求分派
 
-目前 `createServer` 的控制流與拆分前 **1:1**（`dispatchRequest`），以保證行為不變。  
-`server/routes/*` 是**擁有權邊界與後續拆分入口**：新端點必須落在對應 route 檔，不得寫回 `api-proxy.js`。
+`handlers/dispatch.js` 的 `dispatchRequest` 與歷史 `api-proxy` 控制流 **1:1**。  
+跨域呼叫統一 `api.fn(...)`（`register(api)` 組裝模式）。  
+`server/routes/*` 為路由擁有權表面；實作在 `server/domain/*`。
 
-### 2.3 演進規則（Strangler）
+### 2.3 演進規則
 
-1. **新端點** → 只加在 `server/routes/<domain>.js`（必要時抽 `server/domain/<x>.js`）。
-2. **從 runtime-legacy 搬出** → 搬完刪對應函式；禁止雙寫。
-3. **關鍵 API**（auth / user-data / chat / rag / enterprise / health）變更仍依 `AGENTS.md` 審查。
-4. `api-proxy.js` 永遠保持薄入口（≤ 40 行）。
+1. **新端點** → `server/domain/handlers/<x>.js` + `server/routes/<x>.js` 註冊。
+2. **新領域邏輯** → `server/domain/<area>.js`，在 `domain/index.js` 的 `order` 掛上。
+3. **禁止** 寫回 `runtime-legacy.js` 或加長 `api-proxy.js`。
+4. **關鍵 API** 變更仍依 `AGENTS.md` 審查。
+5. `api-proxy.js` 永遠保持薄入口（≤ 40 行）。
 
 ---
 

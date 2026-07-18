@@ -14,7 +14,9 @@
 | `routes/chat` | `POST /api/chat` LLM |
 | `routes/health` | `/health` `/ready` ops |
 | `routes/uploads` | `/uploads/*` 檔案 |
-| `runtime-legacy.js` | 過渡期領域實作（逐步拆出） |
+| `domain/*` | 純領域 + handlers（各有任務） |
+| `runtime-legacy.js` | 相容 re-export → `domain/` |
 | `../lib/*` | 持久化與 JWT primitive |
 
-詳見 `docs/architecture/MODULES.md`。
+領域細節：`server/domain/README.md`  
+系統地圖：`docs/architecture/MODULES.md`。
