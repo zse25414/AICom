@@ -23,8 +23,9 @@ const DATA_FILE = path.join(__dirname, '..', 'enterprise-data.json');
 const PIN_SALT = process.env.PIN_SALT || 'lumina-pin-salt-change-in-production';
 const MAX_BODY_BYTES = 6 * 1024 * 1024;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX = 120;
-const AUTH_RATE_LIMIT_MAX = 20;
+// Higher ceiling: team poll + UI can be chatty; auth is exempt from this bucket.
+const RATE_LIMIT_MAX = Math.max(180, Number(process.env.RATE_LIMIT_MAX) || 240);
+const AUTH_RATE_LIMIT_MAX = Math.max(30, Number(process.env.AUTH_RATE_LIMIT_MAX) || 40);
 const PIN_MAX_ATTEMPTS = 5;
 const PIN_LOCK_MS = 15 * 60 * 1000;
 const AI_RATE_LIMIT_MAX = 30;

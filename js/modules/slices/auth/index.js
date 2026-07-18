@@ -62,23 +62,45 @@ function getAuthHeaders(includeJson = true) {
 }
 
 async function authApiRequest(path, options = {}) {
-    const res = await fetch(getAuthBaseUrl() + path, {
-        ...options,
-        headers: {
-            ...getAuthHeaders(options.body !== undefined),
-            ...(options.headers || {})
-        }
-    });
-    let data = {};
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutMs = options.timeoutMs != null ? options.timeoutMs : 15000;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     try {
-        data = await res.json();
-    } catch (_) {}
-    if (!res.ok) {
-        const err = new Error(data.error || '請求失敗');
-        err.status = res.status;
-        throw err;
+        const res = await fetch(getAuthBaseUrl() + path, {
+            ...options,
+            signal: controller?.signal,
+            headers: {
+                ...getAuthHeaders(options.body !== undefined),
+                ...(options.headers || {})
+            }
+        });
+        let data = {};
+        try {
+            data = await res.json();
+        } catch (_) {}
+        if (!res.ok) {
+            let msg = data.error || '請求失敗';
+            if (res.status === 429) {
+                msg = data.error || '請求過於頻繁，請稍候再試（約 20–60 秒）';
+            } else if (res.status === 0 || res.status >= 500) {
+                msg = data.error || '伺服器無法連線，請確認 API 已啟動（npm run api）';
+            }
+            const err = new Error(msg);
+            err.status = res.status;
+            err.code = data.code || null;
+            throw err;
+        }
+        return data;
+    } catch (e) {
+        if (e?.name === 'AbortError') {
+            const err = new Error('連線逾時，請確認 API 已啟動後再試');
+            err.status = 0;
+            throw err;
+        }
+        throw e;
+    } finally {
+        if (timer) clearTimeout(timer);
     }
-    return data;
 }
 
 function getAuthSession() {
@@ -264,22 +286,13 @@ async function loadUserDataFromServer() {
 
 async function finishAuth(user, isNew, token) {
     const hadLocalData = S.tasks.length > 0 || Object.keys(S.dailyHistory).length > 0;
+    // 1) Persist session + close gate immediately — never block on network
     persistAuthSession(user, token);
     applyAuthUserToProfile(user, isNew);
     if (isNew && !hadLocalData) {
         localStorage.removeItem('lumina_onboarding_v2');
+        localStorage.removeItem('lumina_onboarding_v3');
         localStorage.removeItem('lumina_welcomed');
-    }
-    await loadUserDataFromServer();
-    // Sync multi-group enterprise memberships bound to this account
-    try {
-        if (typeof window.syncEnterpriseMembershipsFromServer === 'function') {
-            await window.syncEnterpriseMembershipsFromServer({ toast: false, render: true });
-        } else if (typeof syncEnterpriseMembershipsFromServer === 'function') {
-            await syncEnterpriseMembershipsFromServer({ toast: false, render: true });
-        }
-    } catch (e) {
-        console.warn('[Lumina] enterprise memberships sync after auth', e);
     }
     hideAuthOverlay();
     localStorage.setItem(C.AUTH_GUEST_DISMISSED_KEY, 'true');
@@ -290,8 +303,29 @@ async function finishAuth(user, isNew, token) {
         : `歡迎回來，${user.name}！`;
     showToast(welcomeMsg, 'success');
     if (isNew && !hadLocalData && S.tasks.length === 0) {
-        setTimeout(() => startOnboarding(), 600);
+        setTimeout(() => {
+            try { startOnboarding(); } catch (_) {}
+        }, 600);
     }
+
+    // 2) Background sync — must not block login UI
+    Promise.resolve().then(async () => {
+        try {
+            await loadUserDataFromServer();
+            refreshUI({ dashboard: true, filters: true, scheduler: true });
+        } catch (e) {
+            console.warn('[Lumina] user data sync after auth', e);
+        }
+        try {
+            const syncFn = window.syncEnterpriseMembershipsFromServer
+                || (typeof syncEnterpriseMembershipsFromServer === 'function' ? syncEnterpriseMembershipsFromServer : null);
+            if (syncFn) {
+                await syncFn({ toast: false, render: false, autoSelect: false });
+            }
+        } catch (e) {
+            console.warn('[Lumina] enterprise memberships sync after auth', e);
+        }
+    });
 }
 
 async function handleRegister(e) {
@@ -329,12 +363,13 @@ async function handleRegister(e) {
             method: 'POST',
             body: JSON.stringify({ name, email, role, password })
         });
-        finishAuth(data.user, true, data.token);
+        await finishAuth(data.user, true, data.token);
     } catch (err) {
         if (err.status === 409) {
             if (errEl) errEl.textContent = err.message || '此電子郵件已註冊，請直接登入';
             switchAuthTab('login');
-            document.getElementById('auth-login-email').value = email;
+            const loginEmail = document.getElementById('auth-login-email');
+            if (loginEmail) loginEmail.value = email;
             return;
         }
         if (errEl) errEl.textContent = err.message || '註冊失敗，請確認 API 服務已啟動';
@@ -367,7 +402,10 @@ async function handleLogin(e) {
             method: 'POST',
             body: JSON.stringify({ email, password })
         });
-        finishAuth(data.user, false, data.token);
+        if (!data?.token || !data?.user) {
+            throw Object.assign(new Error('登入回應異常，請稍後再試'), { status: 500 });
+        }
+        await finishAuth(data.user, false, data.token);
     } catch (err) {
         if (errEl) errEl.textContent = err.message || '登入失敗，請確認 API 服務已啟動';
     } finally {

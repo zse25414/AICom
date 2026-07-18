@@ -29,7 +29,13 @@ function register(api) {
             return;
         }
 
-        if (!api.checkRateLimit(req)) {
+        // Auth / health must never be blocked by the global poll rate limit.
+        // (Auth has its own checkAuthRateLimit inside handleAuth.)
+        const skipGlobalRateLimit =
+            urlPath === '/health'
+            || urlPath === '/ready'
+            || urlPath.startsWith('/api/auth');
+        if (!skipGlobalRateLimit && !api.checkRateLimit(req)) {
             api.sendJson(res, 429, { error: '請求過於頻繁，請稍後再試' });
             return;
         }
