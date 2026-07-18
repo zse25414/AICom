@@ -132,6 +132,7 @@ function showSection(section) {
     }
     
     if (section === 'coach') {
+        try { if (typeof autoResizeCoachInput === 'function') autoResizeCoachInput(); } catch (_) {}
         renderCoachQuickActions();
         refreshCoachView();
         renderCoachReadinessBar();

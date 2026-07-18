@@ -472,7 +472,8 @@
                                 <textarea id="chat-input" rows="1"
                                           placeholder="有什麼想聊的？"
                                           class="coach-chat-input"
-                                          oninput="if (typeof autoResizeCoachInput==='function') autoResizeCoachInput(this)"
+                                          autocomplete="off"
+                                          oninput="autoResizeCoachInput(this)"
                                           onkeydown="if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendCoachAgentMessage(); }"></textarea>
                                 <button type="button" data-lumina-action="sendCoachAgentMessage"
                                         class="coach-chat-send-btn" aria-label="送出">

@@ -1477,50 +1477,61 @@ body {
     overflow: hidden;
 }
 
-/* Composer — floating Grok-style */
+/* Composer — single-line by default; grows only with typed lines */
 .coach-composer {
     flex-shrink: 0;
-    padding: 0.5rem 0.35rem 0.85rem;
+    padding: 0.35rem 0.35rem 0.65rem;
     background: linear-gradient(180deg, transparent 0%, rgba(2, 6, 23, 0.55) 28%, rgba(2, 6, 23, 0.92) 100%);
 }
 
 .coach-composer-bar {
     display: flex;
     align-items: flex-end;
-    gap: 0.5rem;
-    padding: 0.55rem 0.55rem 0.55rem 1rem;
-    border-radius: 1.75rem;
+    gap: 0.4rem;
+    /* tight bar ≈ one line of text */
+    padding: 0.28rem 0.35rem 0.28rem 0.85rem;
+    min-height: 0;
+    border-radius: 1.35rem;
     border: 1px solid rgba(255, 255, 255, 0.1);
     background: rgba(24, 24, 27, 0.92);
     box-shadow:
         0 0 0 1px rgba(0, 0, 0, 0.35),
-        0 12px 40px rgba(0, 0, 0, 0.35);
+        0 10px 28px rgba(0, 0, 0, 0.3);
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .coach-composer-bar:focus-within {
     border-color: rgba(167, 139, 250, 0.45);
     box-shadow:
         0 0 0 1px rgba(139, 92, 246, 0.2),
-        0 12px 40px rgba(0, 0, 0, 0.4);
+        0 10px 28px rgba(0, 0, 0, 0.35);
 }
 
 .coach-chat-input {
-    flex: 1;
-    min-height: 1.4rem;
-    max-height: 7rem;
-    height: 1.4rem;
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    /* Exactly one text line until JS grows it */
+    --coach-line: 1.35;
+    --coach-fs: 0.9rem;
+    font-size: var(--coach-fs);
+    line-height: var(--coach-line);
+    height: calc(var(--coach-fs) * var(--coach-line));
+    min-height: calc(var(--coach-fs) * var(--coach-line));
+    max-height: calc(var(--coach-fs) * var(--coach-line) * 6); /* max 6 lines */
     resize: none;
-    overflow-y: auto;
+    overflow-x: hidden;
+    overflow-y: hidden;
     border: none !important;
     outline: none !important;
     box-shadow: none !important;
     background: transparent !important;
     border-radius: 0;
-    padding: 0.35rem 0.1rem;
-    font-size: 0.95rem;
-    line-height: 1.4;
+    padding: 0;
+    margin: 0;
     color: #f4f4f5;
-    field-sizing: content;
+    /* Do NOT use field-sizing — forces wrong empty height in some browsers */
+    field-sizing: fixed;
+    box-sizing: content-box;
 }
 
 .coach-chat-input:focus {
@@ -1535,8 +1546,8 @@ body {
 
 .coach-chat-send-btn {
     flex-shrink: 0;
-    width: 2.25rem;
-    height: 2.25rem;
+    width: 1.85rem;
+    height: 1.85rem;
     min-height: 0;
     padding: 0;
     border-radius: 9999px;
@@ -1545,7 +1556,7 @@ body {
     justify-content: center;
     background: #f4f4f5;
     color: #18181b;
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     transition: transform 0.12s ease, opacity 0.12s ease, background 0.12s ease;
 }
 .coach-chat-send-btn:hover {

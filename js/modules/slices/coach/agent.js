@@ -1279,13 +1279,39 @@ function toggleCoachKbTools() {
     }
 }
 
+/** Grow/shrink textarea to match typed lines (1 line empty → up to 6). */
 function autoResizeCoachInput(el) {
     const input = el || document.getElementById('chat-input');
     if (!input) return;
-    input.style.height = 'auto';
-    const max = 88; // ~5.5rem
-    const next = Math.min(max, Math.max(22, input.scrollHeight));
+
+    const cs = window.getComputedStyle(input);
+    const fontSize = parseFloat(cs.fontSize) || 14.4;
+    const lineHeight = (() => {
+        const lh = cs.lineHeight;
+        if (!lh || lh === 'normal') return fontSize * 1.35;
+        const n = parseFloat(lh);
+        return Number.isFinite(n) ? n : fontSize * 1.35;
+    })();
+    const minH = Math.ceil(lineHeight);          // 1 line
+    const maxH = Math.ceil(lineHeight * 6);      // 6 lines
+
+    // Collapse first so scrollHeight reflects content, not previous height
+    input.style.height = '0px';
+    input.style.overflowY = 'hidden';
+
+    const contentH = input.scrollHeight || minH;
+    const next = Math.min(maxH, Math.max(minH, contentH));
     input.style.height = `${next}px`;
+    input.style.overflowY = contentH > maxH ? 'auto' : 'hidden';
+    input.rows = 1;
+}
+
+function resetCoachInputSize() {
+    const input = document.getElementById('chat-input');
+    if (!input) return;
+    input.value = '';
+    input.style.height = '';
+    autoResizeCoachInput(input);
 }
 
 function renderCoachAgentView() {
@@ -1428,8 +1454,7 @@ async function sendCoachAgentMessage(preset) {
         return;
     }
     if (input && typeof preset !== 'string') {
-        input.value = '';
-        autoResizeCoachInput(input);
+        resetCoachInputSize();
     }
 
     // Local shortcuts from option chips (no LLM needed)
