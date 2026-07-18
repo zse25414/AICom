@@ -75,6 +75,6 @@ getAnalyticsEvents(20)
 
 ---
 
-## 下一階段（Phase 2 預告）
+## 下一階段
 
-試點 3 團隊、成本儀表、E2E Playwright 視覺回歸。
+→ **Phase 2 已開工並落地**：見 `docs/roadmap/PHASE-2.md`。

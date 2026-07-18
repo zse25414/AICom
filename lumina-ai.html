@@ -1505,6 +1505,21 @@
                             </button>
                         </div>
                     </div>
+
+                    <!-- Phase 2: usage / quota / cost -->
+                    <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6" id="settings-usage-card">
+                        <div class="font-semibold mb-1 flex items-center gap-x-2">
+                            <i class="fa-solid fa-gauge-high text-emerald-400"></i><span>AI 用量與成本</span>
+                        </div>
+                        <p class="text-[11px] text-slate-500 mb-4">本機統計，供試點與毛利規劃。正式計費後可改為伺服器對帳。</p>
+                        <div id="usage-meter-panel" class="usage-meter-panel mb-4" aria-live="polite"></div>
+                        <label class="flex items-center gap-x-2 text-sm text-slate-300 cursor-pointer">
+                            <input id="settings-plan-pro" type="checkbox" class="accent-emerald-500 w-4 h-4"
+                                   onchange="if (typeof onPlanProToggle==='function') onPlanProToggle(this.checked)">
+                            <span>試點 Pro 配額（本機提高日上限）</span>
+                        </label>
+                        <p class="text-[10px] text-slate-500 mt-2">Free：AI 40／RAG 80 次／日 · Pro：400／800。快取命中不扣 AI 次數。</p>
+                    </div>
                     
                     <!-- PWA -->
                     <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6">

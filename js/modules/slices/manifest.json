@@ -5,6 +5,7 @@
     "dom/index.js",
     "utils/index.js",
     "utils/analytics.js",
+    "utils/usage.js",
     "bridge/actions.js",
     "auth/index.js",
     "notifications/index.js",

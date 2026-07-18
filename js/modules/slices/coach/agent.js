@@ -683,6 +683,30 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
     const effectiveDocIds = resolved.docIds || [];
     const queryText = mention.hadMentions ? mention.cleanedMsg : userMsg;
 
+    // Phase 2: short-TTL cache for identical coach turns
+    const cacheKey = typeof coachCacheKey === 'function'
+        ? coachCacheKey({
+            q: queryText,
+            taskId: task?.id || null,
+            step: session?.currentStep ?? null,
+            kbs: effectiveKbIds,
+            docs: effectiveDocIds,
+            group: S.enterpriseSession?.groupCode || null,
+            freeform
+        })
+        : null;
+    if (cacheKey && typeof getCoachCachedAnswer === 'function') {
+        const cached = getCoachCachedAnswer(cacheKey);
+        if (cached) {
+            try {
+                if (typeof recordUsage === 'function') {
+                    recordUsage({ kind: 'ai', tokensIn: 0, tokensOut: 0, cached: true, source: 'coach_cache' });
+                }
+            } catch (_) {}
+            return { ...cached, meta: { ...(cached.meta || {}), fromCache: true } };
+        }
+    }
+
     let skipReason = null;
     if (!S.enterpriseSession) skipReason = 'no_team';
     else if (!S.ragServiceActive) skipReason = 'offline';
@@ -692,6 +716,7 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
 
     if (!skipReason) {
         try {
+            if (typeof assertUsageQuota === 'function') assertUsageQuota('rag');
             const payload = {
                 query: queryText,
                 group_code: S.enterpriseSession.groupCode,
@@ -714,6 +739,17 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                 let reply = String(data.answer || '').trim();
                 const sources = (data.citations || data.sources || []).map(enrichCoachSource);
 
+                try {
+                    if (typeof recordUsage === 'function') {
+                        recordUsage({
+                            kind: 'rag',
+                            tokensIn: typeof estimateTokensFromText === 'function' ? estimateTokensFromText(queryText) : 32,
+                            tokensOut: typeof estimateTokensFromText === 'function' ? estimateTokensFromText(reply) : 64,
+                            source: 'coach_rag'
+                        });
+                    }
+                } catch (_) {}
+
                 if (!reply) {
                     ragDegraded = true;
                 } else {
@@ -723,7 +759,7 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                             : `\n\n[選項: 我了解，繼續執行當前步驟]\n[選項: 請幫我把這段資料再做詳細拆解]`;
                     }
 
-                    return {
+                    const result = {
                         reply: clampText(reply, 5000),
                         sources,
                         meta: {
@@ -737,11 +773,16 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                         },
                         ...inferAgentActionsFromUserMsg(userMsg, session || { currentStep: 0, steps: [] })
                     };
+                    if (cacheKey && typeof setCoachCachedAnswer === 'function') {
+                        setCoachCachedAnswer(cacheKey, result);
+                    }
+                    return result;
                 }
             } else {
                 ragDegraded = true;
             }
         } catch (e) {
+            if (e && e.code === 'USAGE_QUOTA') throw e;
             ragDegraded = true;
             console.warn('[Lumina RAG] RAG 查詢失敗，降級到一般 AI 問答:', e.message);
         }
@@ -798,13 +839,14 @@ ${contextBlock}
             content: m.content.slice(0, 500)
         }))
     ];
-    const content = await callDeepSeek(messages, { temperature: 0.75 });
+    const content = await callDeepSeek(messages, { temperature: 0.75, source: 'coach' });
     const text = String(content || '').trim();
 
+    let result;
     if (text.startsWith('{') && task) {
         const parsed = parseCoachAgentResponse(text, userMsg, task, session);
         if (parsed.reply && !isGenericCoachFallback(parsed.reply)) {
-            return {
+            result = {
                 ...parsed,
                 reply: clampText(parsed.reply, COACH_REPLY_MAX),
                 meta: kbMeta,
@@ -813,16 +855,22 @@ ${contextBlock}
         }
     }
 
-    if (!text) {
-        const offline = buildOfflineAgentReply(userMsg, task, session);
-        return { ...offline, meta: kbMeta };
+    if (!result) {
+        if (!text) {
+            result = { ...buildOfflineAgentReply(userMsg, task, session), meta: kbMeta };
+        } else {
+            result = {
+                reply: clampText(text, COACH_REPLY_MAX),
+                meta: kbMeta,
+                ...(task ? inferAgentActionsFromUserMsg(userMsg, session) : { advance: false, complete: false })
+            };
+        }
     }
 
-    return {
-        reply: clampText(text, COACH_REPLY_MAX),
-        meta: kbMeta,
-        ...(task ? inferAgentActionsFromUserMsg(userMsg, session) : { advance: false, complete: false })
-    };
+    if (cacheKey && typeof setCoachCachedAnswer === 'function' && result?.reply) {
+        setCoachCachedAnswer(cacheKey, result);
+    }
+    return result;
 }
 
 function parseJsonFromAI(text) {
@@ -1426,6 +1474,11 @@ function handleCoachOptionShortcuts(msg) {
         if (typeof seedDemoFirstTask === 'function') seedDemoFirstTask();
         return true;
     }
+    if (/去設定|看用量|用量/.test(t)) {
+        if (typeof showSection === 'function') showSection('settings');
+        try { if (typeof renderUsageMeter === 'function') renderUsageMeter(); } catch (_) {}
+        return true;
+    }
     if (/去今日|新增任務|建立一項今日/.test(t)) {
         if (typeof showSection === 'function') showSection('dashboard');
         if (typeof focusQuickAdd === 'function') focusQuickAdd();
@@ -1551,6 +1604,13 @@ async function sendCoachAgentMessage(preset) {
             }
         }
     } catch (err) {
+        if (err && err.code === 'USAGE_QUOTA') {
+            S.coachRequestInFlight = false;
+            showToast(err.message, 'error');
+            pushCoachAgentMessage('coach', `${err.message}\n\n[選項: 去設定看用量]\n[選項: 換簡單一點]`);
+            renderCoachAgentView();
+            return;
+        }
         console.warn('[Lumina Coach] AI 請求失敗，改用離線引導:', err.message);
         try {
             if (typeof track === 'function') {

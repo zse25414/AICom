@@ -4162,6 +4162,66 @@ body {
 
 .team-notif-toggle:last-child { border-bottom: none; }
 
+/* ── Phase 2 usage meter ── */
+.usage-meter-panel {
+    padding: 0.75rem 0.85rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(51, 65, 85, 0.7);
+    background: rgba(2, 6, 23, 0.55);
+}
+.usage-meter-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.65rem;
+}
+.usage-plan-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.15rem 0.5rem;
+    border-radius: 9999px;
+    letter-spacing: 0.02em;
+}
+.usage-plan-free {
+    background: rgba(100, 116, 139, 0.25);
+    color: #cbd5e1;
+}
+.usage-plan-pro {
+    background: rgba(16, 185, 129, 0.18);
+    color: #6ee7b7;
+}
+.usage-meter-day {
+    font-size: 0.65rem;
+    color: #64748b;
+    font-family: ui-monospace, monospace;
+}
+.usage-meter-row { margin-bottom: 0.55rem; }
+.usage-meter-label {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    margin-bottom: 0.25rem;
+}
+.usage-meter-label strong { color: #e2e8f0; }
+.usage-meter-bar {
+    height: 0.35rem;
+    border-radius: 9999px;
+    background: rgba(51, 65, 85, 0.8);
+    overflow: hidden;
+}
+.usage-meter-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 9999px;
+    background: linear-gradient(90deg, #34d399, #6366f1);
+}
+.usage-meter-meta {
+    font-size: 0.68rem;
+    color: #94a3b8;
+    line-height: 1.4;
+}
+.usage-meter-hint { color: #64748b; }
+
 /* ── Beginner / simple-mode (newcomer simplification) ── */
 .beginner-welcome {
     margin-bottom: 1.25rem;

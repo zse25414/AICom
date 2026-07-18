@@ -68,8 +68,12 @@ function toggleApiModeFields() {
 }
 
 async function callDeepSeek(messages, options = {}) {
-    const { jsonMode = false, temperature = 0.7, timeoutMs = 90000 } = options;
+    const { jsonMode = false, temperature = 0.7, timeoutMs = 90000, skipQuota = false, source = 'chat' } = options;
     if (!S.userProfile.apiEnabled) throw new Error('API 未啟用');
+
+    if (!skipQuota && typeof assertUsageQuota === 'function') {
+        assertUsageQuota('ai');
+    }
     
     const useProxy = S.userProfile.apiMode === 'proxy';
     const apiKey = getStoredApiKey();
@@ -83,6 +87,10 @@ async function callDeepSeek(messages, options = {}) {
         stream: false
     };
     if (jsonMode) payload.response_format = { type: 'json_object' };
+
+    const tokensIn = typeof estimateTokensFromMessages === 'function'
+        ? estimateTokensFromMessages(messages)
+        : Math.ceil(JSON.stringify(messages || []).length / 4);
     
     const url = useProxy ? S.userProfile.apiProxyUrl : 'https://api.deepseek.com/chat/completions';
     if (useProxy && !isSafeHttpUrl(url)) throw new Error('代理 URL 不安全或格式錯誤');
@@ -115,6 +123,23 @@ async function callDeepSeek(messages, options = {}) {
         const apiErr = parsed.error?.message || parsed.message;
         throw new Error(apiErr || 'AI 回傳內容為空');
     }
+
+    const usage = parsed.usage || {};
+    const tokensOut = usage.completion_tokens
+        || (typeof estimateTokensFromText === 'function' ? estimateTokensFromText(content) : Math.ceil(String(content).length / 4));
+    const tokensInFinal = usage.prompt_tokens || tokensIn;
+    try {
+        if (typeof recordUsage === 'function') {
+            recordUsage({
+                kind: 'ai',
+                tokensIn: tokensInFinal,
+                tokensOut,
+                source,
+                cached: false
+            });
+        }
+    } catch (_) {}
+
     return content;
 }
 
@@ -133,9 +158,14 @@ async function testApiConnection() {
     
     showToast('正在測試 API 連線...', 'success');
     try {
-        await callDeepSeek([{ role: 'user', content: '請回覆：連線成功' }], { temperature: 0 });
+        await callDeepSeek([{ role: 'user', content: '請回覆：連線成功' }], {
+            temperature: 0,
+            skipQuota: true,
+            source: 'api_test'
+        });
         showToast('✅ API 連線成功！', 'success');
         updateApiStatusBadge();
+        try { if (typeof renderUsageMeter === 'function') renderUsageMeter(); } catch (_) {}
     } catch (err) {
         showToast('連線失敗：' + err.message, 'error');
     }
@@ -160,6 +190,9 @@ function loadSettingsForm() {
     toggleApiModeFields();
     updateApiStatusBadge();
     updateAuthUI();
+    try {
+        if (typeof renderUsageMeter === 'function') renderUsageMeter();
+    } catch (_) {}
 }
 
 function clearApiKey() {
@@ -182,6 +215,10 @@ function saveSettings() {
     S.userProfile.apiEnabled = document.getElementById('settings-api-enabled').checked;
     S.userProfile.apiMode = document.getElementById('settings-api-mode').value;
     S.userProfile.apiModel = document.getElementById('settings-api-model').value;
+    const planPro = document.getElementById('settings-plan-pro');
+    if (planPro && typeof setUsagePlan === 'function') {
+        setUsagePlan(planPro.checked ? 'pro' : 'free');
+    }
     
     const proxyUrl = document.getElementById('settings-api-proxy').value.trim();
     const enterpriseUrl = document.getElementById('settings-enterprise-api').value.trim() || 'http://localhost:3001';
