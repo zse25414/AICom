@@ -11,66 +11,84 @@ import config  # noqa: F401 — set cache paths before heavy ML imports
 
 import math
 import re
+from collections import Counter
 from llama_index.core import Document, Settings, SimpleDirectoryReader, StorageContext, VectorStoreIndex, load_index_from_storage
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import NodeWithScore, TextNode
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 def tokenize(text: str) -> List[str]:
+    """英數詞 + CJK unigram/bigram。
+    CJK 連續段同時輸出單字與相鄰雙字：bigram 提供片語精度（「請假」不再命中只含
+    「請」「假」散字的塊），unigram 保住單字查詢的召回。文件與查詢用同一分詞。"""
     text = text.lower()
-    return re.findall(r'[a-zA-Z0-9]+|[\u4e00-\u9fff]', text)
+    tokens: List[str] = []
+    for match in re.finditer(r"[a-z0-9]+|[一-鿿]+", text):
+        seg = match.group(0)
+        if seg[0].isascii():
+            tokens.append(seg)
+            continue
+        tokens.extend(seg)
+        tokens.extend(seg[i:i + 2] for i in range(len(seg) - 1))
+    return tokens
 
-def retrieve_pure_python_bm25(docstore, query: str, top_k: int) -> List[NodeWithScore]:
+
+class _Bm25Stats:
+    """BM25 語料統計（per index 快取，隨索引快取一起失效）。"""
+    __slots__ = ("doc_counters", "doc_lens", "avg_doc_len", "n_docs")
+
+    def __init__(self, docs: dict):
+        self.doc_counters = {}
+        self.doc_lens = {}
+        for doc_id, node in docs.items():
+            counter = Counter(tokenize(node.text or ""))
+            self.doc_counters[doc_id] = counter
+            self.doc_lens[doc_id] = sum(counter.values())
+        self.n_docs = len(self.doc_counters)
+        self.avg_doc_len = (
+            sum(self.doc_lens.values()) / self.n_docs if self.n_docs else 1.0
+        )
+
+
+def retrieve_pure_python_bm25(docstore, query, top_k, stats=None) -> List[NodeWithScore]:
     docs = docstore.docs
     if not docs:
         return []
-        
+
     query_tokens = tokenize(query)
     if not query_tokens:
         return []
-        
-    doc_tokens = {}
-    doc_lens = []
-    for doc_id, node in docs.items():
-        tokens = tokenize(node.text or "")
-        doc_tokens[doc_id] = tokens
-        doc_lens.append(len(tokens))
-        
-    avg_doc_len = sum(doc_lens) / len(doc_lens) if doc_lens else 1.0
-    
-    df = {}
-    for token in query_tokens:
-        df[token] = sum(1 for doc_id in docs if token in doc_tokens[doc_id])
-        
-    N = len(docs)
+
+    if stats is None:
+        stats = _Bm25Stats(docs)
+
+    N = stats.n_docs
     idf = {}
-    for token in query_tokens:
-        df_t = df[token]
+    for token in set(query_tokens):
+        df_t = sum(1 for c in stats.doc_counters.values() if token in c)
         idf[token] = math.log((N - df_t + 0.5) / (df_t + 0.5) + 1.0)
-        
+
     k1 = 1.5
     b = 0.75
-    
+
     scores = []
     for doc_id, node in docs.items():
-        tokens = doc_tokens[doc_id]
-        doc_len = len(tokens)
-        
-        tf = {}
-        for token in query_tokens:
-            tf[token] = tokens.count(token)
-            
+        counter = stats.doc_counters.get(doc_id)
+        if counter is None:
+            counter = Counter(tokenize(node.text or ""))
+        doc_len = stats.doc_lens.get(doc_id) or sum(counter.values())
+
         score = 0.0
         for token in query_tokens:
-            tf_t = tf[token]
+            tf_t = counter.get(token, 0)
             if tf_t > 0:
                 numerator = tf_t * (k1 + 1)
-                denominator = tf_t + k1 * (1.0 - b + b * (doc_len / avg_doc_len))
+                denominator = tf_t + k1 * (1.0 - b + b * (doc_len / stats.avg_doc_len))
                 score += idf[token] * (numerator / denominator)
-                
+
         if score > 0:
             scores.append(NodeWithScore(node=node, score=score))
-            
+
     scores.sort(key=lambda x: x.score, reverse=True)
     return scores[:top_k]
 
@@ -135,11 +153,24 @@ def delete_kb_index(group_code: str, kb_id: str) -> bool:
     if not os.path.isdir(kb_dir):
         return False
     shutil.rmtree(kb_dir, ignore_errors=True)
+    _invalidate_index_cache(os.path.join(kb_dir, "index"))
     return not os.path.isdir(kb_dir)
 
 
+# 模型與索引快取：configure_embedding 每個請求都會被呼叫，
+# 重建 HuggingFaceEmbedding 等於每次查詢重載模型（實測 ~6s/查詢的主因）。
+_local_embed_model_cache = None
+_local_embed_model_failed = False
+_openai_embed_cache: dict = {}
+
+
 def _build_local_embed_model():
-    global _embed_model_name
+    global _embed_model_name, _local_embed_model_cache, _local_embed_model_failed
+    if _local_embed_model_cache is not None:
+        _embed_model_name = LOCAL_EMBED_MODEL
+        return _local_embed_model_cache
+    if _local_embed_model_failed:
+        return None
     try:
         from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
@@ -149,9 +180,11 @@ def _build_local_embed_model():
             device="cpu",
         )
         _embed_model_name = LOCAL_EMBED_MODEL
+        _local_embed_model_cache = model
         return model
     except Exception as exc:
         print(f"[Lumina RAG] 無法載入本地 embedding 模型 ({LOCAL_EMBED_MODEL}): {exc}")
+        _local_embed_model_failed = True
         return None
 
 
@@ -163,7 +196,11 @@ def configure_embedding(openai_api_key: Optional[str] = None) -> Tuple[str, str]
     embed_model = None
 
     if EMBEDDING_PROVIDER in ("openai", "auto") and embed_key:
-        embed_model = OpenAIEmbedding(model="text-embedding-3-small", api_key=embed_key)
+        embed_model = _openai_embed_cache.get(embed_key)
+        if embed_model is None:
+            embed_model = OpenAIEmbedding(model="text-embedding-3-small", api_key=embed_key)
+            _openai_embed_cache.clear()  # 只留最近一把 key，避免累積
+            _openai_embed_cache[embed_key] = embed_model
         _embed_model_name = "text-embedding-3-small"
     elif EMBEDDING_PROVIDER in ("local", "auto"):
         embed_model = _build_local_embed_model()
@@ -238,17 +275,63 @@ def _index_has_nodes(index: Optional[VectorStoreIndex]) -> bool:
     return False
 
 
+# ---- 索引 / BM25 快取 ----
+# 每個查詢從磁碟重載索引 + 重新分詞整個語料庫是延遲另兩個大戶。
+# 以 docstore.json mtime 為簽章：本程序內寫入後主動失效；外部改動（還原備份）靠 mtime 偵測。
+_index_cache: dict = {}
+_bm25_stats_cache: dict = {}
+
+
+def _index_signature(storage_dir: str) -> Optional[float]:
+    try:
+        return os.path.getmtime(os.path.join(storage_dir, "docstore.json"))
+    except OSError:
+        return None
+
+
+def _invalidate_index_cache(storage_dir: str) -> None:
+    _index_cache.pop(storage_dir, None)
+    _bm25_stats_cache.pop(storage_dir, None)
+
+
+def _get_bm25_stats(storage_dir: str, index: VectorStoreIndex) -> _Bm25Stats:
+    cached = _bm25_stats_cache.get(storage_dir)
+    sig = _index_signature(storage_dir)
+    if cached is not None and cached[0] == sig:
+        return cached[1]
+    stats = _Bm25Stats(index.docstore.docs)
+    _bm25_stats_cache[storage_dir] = (sig, stats)
+    return stats
+
+
 def _load_index(storage_dir: str) -> Optional[VectorStoreIndex]:
     if not os.path.exists(storage_dir):
         return None
+    sig = _index_signature(storage_dir)
+    cached = _index_cache.get(storage_dir)
+    if cached is not None and sig is not None and cached[0] == sig and cached[1] == _embed_model_name:
+        return cached[2]
     storage_context = StorageContext.from_defaults(persist_dir=storage_dir)
     index = load_index_from_storage(
         storage_context,
         embed_model=Settings.embed_model,
     )
     if not _index_has_nodes(index):
+        _invalidate_index_cache(storage_dir)
         return None
+    _index_cache[storage_dir] = (sig, _embed_model_name, index)
+    _bm25_stats_cache.pop(storage_dir, None)
     return index
+
+
+def _refresh_index_cache(storage_dir: str, index: VectorStoreIndex) -> None:
+    """寫入（persist）後以新簽章回填快取，下個查詢不必重載。"""
+    sig = _index_signature(storage_dir)
+    if sig is None:
+        _invalidate_index_cache(storage_dir)
+        return
+    _index_cache[storage_dir] = (sig, _embed_model_name, index)
+    _bm25_stats_cache.pop(storage_dir, None)
 
 
 def _upsert_documents(
@@ -286,6 +369,7 @@ def _upsert_documents(
     if index is None:
         index = VectorStoreIndex(nodes)
         index.storage_context.persist(persist_dir=storage_dir)
+        _refresh_index_cache(storage_dir, index)
         return len(nodes)
 
     try:
@@ -295,6 +379,7 @@ def _upsert_documents(
 
     index.insert_nodes(nodes)
     index.storage_context.persist(persist_dir=storage_dir)
+    _refresh_index_cache(storage_dir, index)
     return len(nodes)
 
 
@@ -365,6 +450,7 @@ def delete_document_index(group_code: str, kb_id: str, filename: str) -> bool:
     try:
         index.delete_ref_doc(ref_doc_id, delete_from_docstore=True)
         index.storage_context.persist(persist_dir=storage_dir)
+        _refresh_index_cache(storage_dir, index)
         return True
     except Exception:
         storage_context = StorageContext.from_defaults(persist_dir=storage_dir)
@@ -375,9 +461,11 @@ def delete_document_index(group_code: str, kb_id: str, filename: str) -> bool:
 
         shutil.rmtree(storage_dir)
         os.makedirs(storage_dir, exist_ok=True)
+        _invalidate_index_cache(storage_dir)
         if nodes_to_keep:
             rebuilt = VectorStoreIndex(nodes_to_keep)
             rebuilt.storage_context.persist(persist_dir=storage_dir)
+            _refresh_index_cache(storage_dir, rebuilt)
         return True
 
 
@@ -397,7 +485,9 @@ def _reciprocal_rank_fusion(result_lists: List[List[NodeWithScore]], k: int = 60
     return fused
 
 
-def _retrieve_from_index(index: VectorStoreIndex, query: str) -> List[NodeWithScore]:
+def _retrieve_from_index(
+    index: VectorStoreIndex, query: str, storage_dir: Optional[str] = None
+) -> List[NodeWithScore]:
     result_lists: List[List[NodeWithScore]] = []
 
     if Settings.embed_model is not None:
@@ -407,7 +497,8 @@ def _retrieve_from_index(index: VectorStoreIndex, query: str) -> List[NodeWithSc
             print(f"[Lumina RAG] 向量檢索失敗: {exc}")
 
     try:
-        results = retrieve_pure_python_bm25(index.docstore, query, BM25_TOP_K)
+        stats = _get_bm25_stats(storage_dir, index) if storage_dir else None
+        results = retrieve_pure_python_bm25(index.docstore, query, BM25_TOP_K, stats=stats)
         result_lists.append(results)
     except Exception as exc:
         print(f"[Lumina RAG] BM25 檢索失敗: {exc}")
@@ -463,7 +554,7 @@ def retrieve_context(
             index = _load_index(storage_dir)
             if index is None:
                 continue
-            all_nodes.extend(_retrieve_from_index(index, query))
+            all_nodes.extend(_retrieve_from_index(index, query, storage_dir=storage_dir))
         except Exception as exc:
             print(f"[Lumina RAG] 檢索 {kb_id} 失敗: {exc}")
 

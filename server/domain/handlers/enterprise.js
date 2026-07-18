@@ -5,7 +5,8 @@
  */
 'use strict';
 
-
+const fs = require('fs');
+const path = require('path');
 const config = require('../../config');
 const {
     PORT, API_KEY, DEEPSEEK_URL, RAG_SERVICE_URL, RAG_API_KEY, IS_PRODUCTION, REQUIRE_ENTERPRISE_AUTH, ALLOW_ANONYMOUS_AI, DATA_FILE, PIN_SALT, MAX_BODY_BYTES, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX, PIN_MAX_ATTEMPTS, PIN_LOCK_MS, AI_RATE_LIMIT_MAX, AI_RATE_LIMIT_WINDOW_MS, DEFAULT_LLM_API_BASE, ALLOWED_LLM_API_BASES, MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_EXT, WEAK_PINS, UPLOADS_DIR, ALLOWED_ORIGINS, RAG_INDEX_TIMEOUT_MS, RAG_INDEX_MAX_ATTEMPTS, RAG_INDEX_EVENT_LIMIT, serviceStartedAt, enforceProductionSecrets
@@ -751,7 +752,7 @@ function register(api) {
                 });
 
                 api.sendJson(res, 200, {
-                    ...buildRagOrchestrationResponse(ragOrchestration, doc),
+                    ...api.buildRagOrchestrationResponse(ragOrchestration, doc),
                     currentVersion: doc.currentVersion
                 });
             });
@@ -800,7 +801,7 @@ function register(api) {
                 const versions = (doc.versions || [])
                     .slice()
                     .sort((a, b) => (Number(b.version) || 0) - (Number(a.version) || 0))
-                    .map(summarizeVersionMeta)
+                    .map(api.summarizeVersionMeta)
                     .filter(Boolean);
 
                 api.sendJson(res, 200, {
@@ -943,7 +944,7 @@ function register(api) {
                         kbId: doc.kbId
                     });
                     return api.sendJson(res, 200, {
-                        ...buildRagOrchestrationResponse(ragOrchestration, doc),
+                        ...api.buildRagOrchestrationResponse(ragOrchestration, doc),
                         currentVersion: doc.currentVersion || 1,
                         restored: true
                     });

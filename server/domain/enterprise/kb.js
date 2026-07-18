@@ -5,7 +5,9 @@
  */
 'use strict';
 
-
+const fs = require('fs');
+const path = require('path');
+const { UPLOADS_DIR } = require('../../config');
 const { loadStore, saveStore } = require('../../../lib/enterprise-store');
 const { withLock } = require('../../../lib/write-queue');
 
