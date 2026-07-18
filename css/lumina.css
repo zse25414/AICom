@@ -20,6 +20,23 @@
 .text-slate-500 { color: #8093ac; }
 .text-slate-600 { color: #74839c; }
 
+/* 本檔自訂 class 設了 display，會蓋掉較早載入的 Tailwind .hidden——
+   慣例：每個這類 class 補 .x.hidden 守門（響應式者需成對補回 md:/lg: 顯示）。
+   歷史 bug：行動版頂部漏出被裁切的「今日第一步」按鈕即此因。 */
+.btn-cta.hidden { display: none; }
+@media (min-width: 1024px) {
+    .btn-cta.lg\:inline-flex { display: inline-flex; }
+}
+.nav-pill-group.hidden { display: none; }
+@media (min-width: 768px) {
+    .nav-pill-group.md\:flex { display: flex; }
+}
+.coach-rag-offline-banner.hidden { display: none; }
+.coach-rag-selector.hidden { display: none; }
+.coach-readiness-bar.hidden { display: none; }
+.notif-badge.hidden { display: none; }
+.team-offline-banner.hidden { display: none; }
+
 body {
     font-family: 'Inter', 'Noto Sans TC', system_ui, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -1359,6 +1376,12 @@ body {
 
 .coach-topbar-titles { min-width: 0; }
 
+/* 小螢幕：頂欄空間讓給任務選擇器與帶我做，標題單行、副標收起 */
+@media (max-width: 640px) {
+    .coach-topbar-title { white-space: nowrap; }
+    .coach-topbar-sub { display: none; }
+}
+
 .coach-topbar-title {
     margin: 0;
     font-size: 0.95rem;
@@ -1435,6 +1458,8 @@ body {
     gap: 0.3rem;
     height: 2rem;
     min-width: 2rem;
+    white-space: nowrap;
+    flex-shrink: 0;
     padding: 0 0.65rem;
     border-radius: 9999px;
     border: 1px solid rgba(255, 255, 255, 0.08);

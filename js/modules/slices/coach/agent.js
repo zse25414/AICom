@@ -1754,6 +1754,14 @@ function getCoachReadinessChecks() {
     const taskBoundDocs = typeof getTaskBoundDocIds === 'function' ? getTaskBoundDocIds(task) : [];
     const taskBound = taskBoundKb.length > 0 || taskBoundDocs.length > 0;
     const kbOk = S.ragServiceActive && (taskBound || (S.checkedRagKbs?.length > 0));
+    // 單人（無團隊）模式：團隊／RAG／知識庫與使用者無關，只留真正影響體驗的檢查，
+    // 避免訪客一進教練頁就看到五個橘色警告牆。
+    if (!hasTeam) {
+        return [
+            { id: 'login', label: '已登入', ok: isLoggedIn(), action: 'showAuthOverlay', actionArg: 'login' },
+            { id: 'api', label: 'AI 連線', ok: isApiReady(), action: 'openKeyWizard' }
+        ];
+    }
     return [
         { id: 'login', label: '已登入', ok: isLoggedIn(), action: 'showAuthOverlay', actionArg: 'login' },
         { id: 'team', label: '已加入團隊', ok: teamOnline, action: 'showSection', actionArg: 'team' },
@@ -1843,12 +1851,17 @@ function renderCoachQuickActions() {
     const ctx = getCoachContext();
     const actions = [];
     if (ctx.nextTask) {
-        if (!S.focusSession?.coachActive || S.focusSession?.freeform) {
+        const inGuidedSession = S.focusSession?.coachActive && !S.focusSession?.freeform;
+        if (!inGuidedSession) {
+            // 尚未開始帶做：「完成這步／卡住了」還沒有語意，不顯示
             actions.push({ label: '教練帶我做', action: 'coachBeginGuidedSession' });
+            actions.push({ label: '問知識庫', action: 'askCoach', arg: '請依知識庫說明重點流程' });
+            actions.push({ label: '分解目標', action: 'openDecomposeTab' });
+        } else {
+            actions.push({ label: '卡住了', action: 'sendCoachAgentMessage', arg: '卡住了' });
+            actions.push({ label: '完成這步', action: 'sendCoachAgentMessage', arg: '完成這步' });
+            actions.push({ label: '換簡單點', action: 'sendCoachAgentMessage', arg: '太難了，換簡單一點' });
         }
-        actions.push({ label: '卡住了', action: 'sendCoachAgentMessage', arg: '卡住了' });
-        actions.push({ label: '完成這步', action: 'sendCoachAgentMessage', arg: '完成這步' });
-        actions.push({ label: '換簡單點', action: 'sendCoachAgentMessage', arg: '太難了，換簡單一點' });
     } else {
         actions.push({ label: '問知識庫', action: 'askCoach', arg: '請依知識庫說明重點流程' });
         actions.push({ label: '分解目標', action: 'openDecomposeTab' });
