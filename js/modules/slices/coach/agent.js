@@ -761,7 +761,7 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                     }
 
                     const result = {
-                        reply: clampText(reply, 1800),
+                        reply: clampText(reply, 2600),
                         sources,
                         meta: {
                             usedKnowledge: true,
@@ -800,30 +800,33 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
     };
 
     const contextBlock = buildCoachContextText(getCoachContext());
-    // Keep replies scannable on mobile; long essays create reading friction
-    const COACH_REPLY_MAX = 1800;
-    const styleRules = `寫作規則（必守，降低閱讀障礙）：
-1. 繁體中文、短句、口語清楚，像同事講話，不要演講腔或雞湯。
-2. 先給結論或「現在做這一步」（1–2 句），再列行動。
-3. 條列最多 5 點；每點一行、一句話說完。
-4. 禁止：大段引言、過度形容詞、表情符號堆砌、代碼塊、表格、JSON。
-5. 禁止 markdown 花式格式（不要 **粗體**、# 標題、\`\`\` 程式碼）；純文字即可。
-6. 全文以 80–220 字為佳，除非用戶要求詳細說明。
-7. 文末固定 2 個短選項（每行一個，文字 ≤16 字）：
+    // Balanced length: enough detail to be useful, still scannable (not essay, not telegram)
+    const COACH_REPLY_MAX = 2600;
+    const styleRules = `寫作規則（必守）：
+1. 繁體中文、清楚口語，像靠譜同事：有重點、也有一點說明，不要演講腔或雞湯。
+2. 結構固定三塊（都要有）：
+   (A) 先講重點／現在該做什麼（2–3 句）
+   (B) 具體怎麼做（3–6 個條列；每點可含「做什麼 + 為何／注意」半句到一句）
+   (C) 若相關：1–2 句風險或檢查方式
+3. 條列用「1. 2. 3.」或「- 」即可；每點一行。
+4. 禁止：大段引言、堆砌形容詞、表情符號、代碼塊、表格、JSON、**粗體**、# 標題。
+5. 純文字為主；全文建議 220–480 字（需要細節可到約 600 字，勿再更長）。
+6. 不要只回一兩句空話；至少給出可執行的步驟或判斷依據。
+7. 文末 2–3 個短選項（每行一個，文字 ≤18 字）：
 [選項: …]
 [選項: …]`;
 
     let systemPrompt;
     if (freeform) {
-        systemPrompt = `你是 Lumina 教練助手。回答使用者關於工作／知識庫的問題，能做就給下一步。
+        systemPrompt = `你是 Lumina 教練助手。回答工作／知識庫問題：說清楚、給下一步，內容要夠用。
 ${styleRules}
 ${contextBlock}`;
     } else {
         const step = session?.steps?.[session.currentStep];
-        systemPrompt = `你是 Lumina 行動教練。只針對使用者當前訊息與「現在這一步」給可執行建議，不要重貼整份計畫。
+        systemPrompt = `你是 Lumina 行動教練。針對使用者當前訊息與「現在這一步」給可執行建議；不要重貼整份計畫，但說明要夠完整。
 ${styleRules}
-若使用者卡住：把步驟再拆成 2 分鐘可做的最小動作。
-若使用者問怎麼做：最多 3–5 個短步驟。
+若使用者卡住：先安撫一句，再拆成 2–3 個更小動作，並說明先做哪一個。
+若使用者問怎麼做：給 3–6 步，必要時補「完成長相／檢查點」。
 ${contextBlock}
 當前任務：${task.name}
 當前步驟（${(session.currentStep || 0) + 1}/${session.steps.length}）「${step?.title}」：${step?.action}`;
@@ -836,8 +839,8 @@ ${contextBlock}
             content: m.content.slice(0, 500)
         }))
     ];
-    // Lower temperature → fewer flowery digressions
-    const content = await callDeepSeek(messages, { temperature: 0.45, source: 'coach' });
+    // Mid temperature: clear prose without being telegraphic or overly flowery
+    const content = await callDeepSeek(messages, { temperature: 0.55, source: 'coach' });
     const text = normalizeCoachReplyText(String(content || '').trim());
 
     let result;
