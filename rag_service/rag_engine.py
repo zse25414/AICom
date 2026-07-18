@@ -143,6 +143,33 @@ def list_group_kbs(group_code: str) -> List[str]:
     return sorted(kb_ids)
 
 
+def list_kb_documents(group_code: str, kb_id: str) -> List[dict]:
+    """列出 KB 內實際可被檢索的來源文件（以 filename 去重，含 chunk 數）。"""
+    storage_dir = kb_index_dir(group_code, kb_id)
+    index = _load_index(storage_dir)
+    if index is None:
+        return []
+    docs: dict = {}
+    for node in index.docstore.docs.values():
+        meta = node.metadata or {}
+        filename = meta.get("filename") or "unknown"
+        entry = docs.setdefault(
+            filename,
+            {
+                "filename": filename,
+                "document_id": meta.get("document_id"),
+                "title": meta.get("title"),
+                "chunks": 0,
+            },
+        )
+        entry["chunks"] += 1
+        if not entry.get("document_id") and meta.get("document_id"):
+            entry["document_id"] = meta.get("document_id")
+        if not entry.get("title") and meta.get("title"):
+            entry["title"] = meta.get("title")
+    return sorted(docs.values(), key=lambda d: d["filename"])
+
+
 def delete_kb_index(group_code: str, kb_id: str) -> bool:
     """Remove entire knowledge-base storage directory (index + leftovers)."""
     code = normalize_code(group_code)

@@ -55,11 +55,12 @@ function includesAny(text, list) {
     const passRatio = Number(golden.pass_ratio) || 0.8;
 
     const ready = await request('GET', '/ready');
-    if (ready.status !== 200 || !ready.data?.ready) {
+    // /ready 回應欄位是 ok（舊版曾是 ready），兩者都接受
+    if (ready.status !== 200 || !(ready.data?.ok ?? ready.data?.ready)) {
         console.error('API not ready. Start with npm run dev:all');
         process.exit(1);
     }
-    if (ready.data?.rag && ready.data.rag.ok === false) {
+    if (ready.data?.checks && ready.data.checks.rag === false) {
         console.warn('WARN RAG not ok on /ready — queries may fail');
     }
 

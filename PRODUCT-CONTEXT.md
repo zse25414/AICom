@@ -96,8 +96,8 @@ js/modules/slices/* ──build──► js/lumina-app.js + chunks
 | ID | 項目 | 備註 |
 |----|------|------|
 | P0-金流 | 付費／配額升級真實閉環 | 先前刻意延後；產品變現關鍵 |
-| P0-secret | 生產 secrets 不可用預設值 | JWT / DEEPSEEK / Mongo / HTTPS |
-| P0-RAG信任 | 文件「已發布」vs「可被檢索」狀態一致 | 雙寫無交易歷史問題 |
+| P0-secret | 生產 secrets 不可用預設值 | **已做**：生產缺 secret 啟動即 exit 1；dev `/ready` 顯示 `details.secrets` 警告。HTTPS 仍待部署層 |
+| P0-RAG信任 | 文件「已發布」vs「可被檢索」狀態一致 | **已做一輪**：`POST /api/rag/reconcile`（manager）對帳 ghost／卡住 pending／殘留索引，`fix:true` 自動重索引＋清殘留；E2E 驗證過。尚未排程自動對帳 |
 | P0-主路徑 | 新人 5 分鐘 dogfood 常綠 | `docs/engineering/DOGFOOD-5MIN.md` |
 
 ### P1 — 實用／黏著
@@ -107,8 +107,8 @@ js/modules/slices/* ──build──► js/lumina-app.js + chunks
 | P1-RAG-UX | 知識庫選取可發現、純教練預設（**近期已修一輪**，持續驗證） |
 | P1-附件雲端 | 教練附件可選上傳伺服器／進知識庫（現多為本機） |
 | P1-任務 | 完成→下一項、會議→待辦、虛擬列表大清單 |
-| P1-安全 | 來源檔勿 `?token=` 進 URL（blob + Bearer 方向） |
-| P1-評測 | `npm run test:rag-golden` 當回歸門檻 |
+| P1-安全 | 來源檔勿 `?token=` 進 URL（**已做**：documents 列表改 Bearer fetch → blob，比照教練來源開啟） |
+| P1-評測 | `npm run test:rag-golden` 當回歸門檻（**已做**：CI 獨立 `rag-golden` job，走無 LLM key 的檢索摘要 fallback） |
 
 ### P2 — 打磨
 

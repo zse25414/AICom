@@ -14,6 +14,7 @@ const {
 } = config;
 const { loadStore, saveStore, getStoreBackend } = require('../../../lib/enterprise-store');
 const { getAuthBackend } = require('../../../lib/auth-store');
+const { getJwtConfig } = require('../../../lib/auth');
 const { getUserDataBackend } = require('../../../lib/user-data-store');
 const { getDatabaseStats } = require('../../../lib/db');
 const { withLock } = require('../../../lib/write-queue');
@@ -652,6 +653,136 @@ function register(api) {
         return true;
     }
 
+    // ---- P0-RAG信任：「已發布 vs 可被檢索」對帳 ----
+
+    async function fetchRagKbDocuments(groupCode, kbId) {
+        const qs = new URLSearchParams({ group_code: groupCode, kb_id: kbId || 'general' });
+        const proxied = await proxyRagGet(`/api/rag/kb/documents?${qs.toString()}`);
+        if (proxied.status < 200 || proxied.status >= 300) {
+            throw new Error(`RAG list documents HTTP ${proxied.status}`);
+        }
+        const data = JSON.parse(proxied.text || '{}');
+        return Array.isArray(data.documents) ? data.documents : [];
+    }
+
+    /**
+     * 對帳企業文件庫（宣稱狀態）與 RAG 索引（實際可檢索）。
+     * 雙寫無交易的補償機制：找出 ghost（標 indexed 但查不到）、卡住的 pending、
+     * 可重試的 failed、以及已刪未清的殘留索引；fix=true 時重排索引／清除殘留。
+     */
+    async function reconcileRagIndexes(groupCode, options = {}) {
+        const fix = options.fix === true;
+        const code = api.normalizeCode(groupCode);
+        const store = await api.prepareStore(await loadStore());
+        const group = api.getGroup(store, code);
+        if (!group) return { ok: false, status: 404, error: '找不到群組', code: 'GROUP_NOT_FOUND' };
+        api.ensureKnowledgeBases(group);
+
+        const activeDocs = (group.documents || []).filter(d => api.isActiveDocument(d));
+        const kbIds = new Set(activeDocs.map(d => d.kbId || 'general'));
+        try {
+            const proxied = await proxyRagGet(`/api/rag/kb/list?group_code=${encodeURIComponent(code)}`);
+            if (proxied.status >= 200 && proxied.status < 300) {
+                const data = JSON.parse(proxied.text || '{}');
+                (Array.isArray(data.kb_ids) ? data.kb_ids : []).forEach(k => kbIds.add(k));
+            }
+        } catch (_) { /* RAG 不可達時仍回報企業側狀態 */ }
+
+        const report = {
+            ok: true,
+            groupCode: code,
+            checkedDocs: activeDocs.length,
+            kbs: [...kbIds],
+            missingIndex: [],
+            stuckPending: [],
+            failed: [],
+            strayIndex: [],
+            unreachableKbs: [],
+            fixed: { reindexQueued: [], strayPurged: [] }
+        };
+
+        const STUCK_PENDING_MS = 10 * 60 * 1000;
+        const now = Date.now();
+
+        for (const kbId of kbIds) {
+            let indexed = null;
+            try {
+                indexed = await fetchRagKbDocuments(code, kbId);
+            } catch (e) {
+                report.unreachableKbs.push({ kbId, error: e.message });
+                continue;
+            }
+            const indexedByFilename = new Map(indexed.map(x => [x.filename, x]));
+            const indexedByDocId = new Map(indexed.filter(x => x.document_id).map(x => [x.document_id, x]));
+            const kbDocs = activeDocs.filter(d => (d.kbId || 'general') === kbId);
+            const activeFilenames = new Set();
+            const activeDocIds = new Set(kbDocs.map(d => d.id));
+
+            for (const doc of kbDocs) {
+                const ragFilename = api.getRagFilenameForDoc(doc);
+                if (ragFilename) activeFilenames.add(ragFilename);
+                const status = doc.ragStatus || doc.rag?.status || null;
+                const present = (doc.id && indexedByDocId.has(doc.id))
+                    || (ragFilename && indexedByFilename.has(ragFilename));
+                if (status === 'indexed' && !present) {
+                    report.missingIndex.push({ documentId: doc.id, kbId, filename: ragFilename, title: doc.title || null });
+                } else if (status === 'pending') {
+                    const t = Date.parse(doc.updatedAt || doc.createdAt || '') || 0;
+                    if (now - t > STUCK_PENDING_MS) {
+                        report.stuckPending.push({ documentId: doc.id, kbId, title: doc.title || null });
+                    }
+                } else if (status === 'failed') {
+                    report.failed.push({
+                        documentId: doc.id,
+                        kbId,
+                        title: doc.title || null,
+                        lastError: doc.rag?.lastError || null,
+                        retryable: doc.rag?.retryable !== false
+                    });
+                }
+            }
+
+            for (const item of indexed) {
+                const matchesActive = (item.document_id && activeDocIds.has(item.document_id))
+                    || activeFilenames.has(item.filename);
+                if (!matchesActive) {
+                    report.strayIndex.push({
+                        kbId,
+                        filename: item.filename,
+                        document_id: item.document_id || null,
+                        chunks: item.chunks || null
+                    });
+                }
+            }
+        }
+
+        if (fix) {
+            const toReindex = [
+                ...report.missingIndex,
+                ...report.stuckPending,
+                ...report.failed.filter(f => f.retryable !== false)
+            ];
+            for (const item of toReindex) {
+                // runBackgroundRagIndex 會跳過 status=indexed 的文件，先降回 pending
+                await persistDocumentRagStatus(code, { documentId: item.documentId }, 'pending', {});
+                setImmediate(() => runBackgroundRagIndex(code, item.documentId));
+                report.fixed.reindexQueued.push(item.documentId);
+                pushRagIndexEvent({ type: 'reconcile-reindex', groupCode: code, documentId: item.documentId });
+            }
+            for (const stray of report.strayIndex) {
+                const purge = await proxyRagDeleteIndex(code, stray.kbId, stray.filename);
+                if (purge.ok) {
+                    report.fixed.strayPurged.push(`${stray.kbId}/${stray.filename}`);
+                    pushRagIndexEvent({ type: 'reconcile-purge', groupCode: code, kbId: stray.kbId, filename: stray.filename });
+                }
+            }
+        }
+
+        report.consistent = !report.missingIndex.length && !report.stuckPending.length
+            && !report.failed.length && !report.strayIndex.length && !report.unreachableKbs.length;
+        return report;
+    }
+
     async function probeRagHealthDetail() {
         const detail = {
             ok: false,
@@ -712,6 +843,11 @@ function register(api) {
         }
         details.rag = await probeRagHealthDetail();
         checks.rag = !!details.rag.ok;
+        // 預設 secret 警告：生產模式下 bootstrap 已 exit(1)，這裡只會在 dev 出現
+        details.secrets = {
+            usingDefaultJwtSecret: getJwtConfig().usingDefaultSecret,
+            usingDefaultPinSalt: PIN_SALT === 'lumina-pin-salt-change-in-production'
+        };
         const ready = checks.store && checks.auth;
         return {
             ready,
@@ -748,6 +884,8 @@ function register(api) {
         proxyRagGet,
         serveUploadFile,
         probeRagHealthDetail,
+        fetchRagKbDocuments,
+        reconcileRagIndexes,
         getReadiness
     });
 }

@@ -26,6 +26,7 @@ from rag_engine import (
     index_text_document,
     index_uploaded_file,
     list_group_kbs,
+    list_kb_documents,
     normalize_code,
     normalize_kb_id,
     retrieve_context,
@@ -124,6 +125,21 @@ async def list_knowledge_bases(group_code: str):
     if not code:
         raise HTTPException(status_code=400, detail="group_code 無效")
     return {"ok": True, "group_code": code, "kb_ids": list_group_kbs(code)}
+
+
+@app.get("/api/rag/kb/documents")
+async def list_kb_documents_endpoint(group_code: str, kb_id: str = "general"):
+    """列出 KB 內實際可被檢索的文件 — 供 api-proxy 對帳「已發布 vs 可被檢索」。"""
+    code = normalize_code(group_code)
+    kb = normalize_kb_id(kb_id)
+    if not code:
+        raise HTTPException(status_code=400, detail="group_code 無效")
+    try:
+        configure_embedding()
+        return {"ok": True, "group_code": code, "kb_id": kb, "documents": list_kb_documents(code, kb)}
+    except Exception as exc:
+        print(f"[Lumina RAG] 列出已索引文件失敗: {exc}")
+        raise HTTPException(status_code=500, detail="列出已索引文件失敗") from exc
 
 
 @app.post("/api/rag/kb/delete")

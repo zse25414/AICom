@@ -102,6 +102,54 @@ jobs:
       - name: Post-test readiness gate
         run: node scripts/check-ready.js
 
+  # P1-評測: RAG 黃金題回歸門檻。
+  # 獨立 job 且刻意不設 DEEPSEEK_API_KEY：占位 key 會讓 LLM 真呼叫 500，
+  # 無 key 則走「檢索摘要 fallback」，golden set 判定的是檢索品質（content words + sources）。
+  rag-golden:
+    runs-on: ubuntu-latest
+    needs: unit-test
+    env:
+      CI: 'true'
+      JWT_SECRET: lumina-ci-jwt-secret-long-enough-for-hs256
+      PIN_SALT: lumina-ci-pin-salt
+      RAG_API_KEY: lumina-ci-rag-key
+      API_PORT: '3001'
+      READY_TIMEOUT_SEC: '90'
+      REQUIRE_ENTERPRISE_AUTH: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: npm ci
+
+      - name: Install RAG dependencies
+        run: pip install -r rag_service/requirements.txt
+
+      - name: Start RAG service (no LLM key → extractive fallback)
+        run: |
+          cd rag_service
+          RAG_API_KEY=$RAG_API_KEY RAG_HOST=127.0.0.1 python main.py &
+          cd ..
+        env:
+          RAG_API_KEY: ${{ env.RAG_API_KEY }}
+
+      - name: Start API proxy (no DEEPSEEK key)
+        run: node api-proxy.js &
+
+      - name: Wait for API readiness
+        run: node scripts/check-ready.js --wait
+
+      - name: RAG golden set gate
+        run: node scripts/test-rag-golden.js
+
   # Production-like path: REQUIRE_MONGODB=1 (no JSON fallback)
   integration-mongo:
     runs-on: ubuntu-latest

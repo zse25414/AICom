@@ -160,6 +160,24 @@ function register(api) {
                     return;
                 }
 
+                // POST /api/rag/reconcile — manager：對帳「已發布 vs 可被檢索」，fix=true 修復
+                if (req.method === 'POST' && urlPath === '/api/rag/reconcile') {
+                    const body = await api.readBody(req);
+                    const groupCode = body.group_code || body.groupCode || '';
+                    const access = await api.assertRagGroupAccess(groupCode, aiAuth.user, { requireManager: true });
+                    if (!access.ok) {
+                        api.sendAccessResult(res, access);
+                        return;
+                    }
+                    const report = await api.reconcileRagIndexes(groupCode, { fix: body.fix === true });
+                    if (report && report.ok === false && report.status) {
+                        api.sendError(res, report.status, report.error, report.code);
+                        return;
+                    }
+                    api.sendJson(res, 200, report);
+                    return;
+                }
+
                 // POST /api/rag/kb — manager create
                 if (req.method === 'POST' && urlPath === '/api/rag/kb') {
                     const body = await api.readBody(req);
