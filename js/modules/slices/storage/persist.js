@@ -192,43 +192,89 @@ function processDailyRollover() {
     return { rolledCount };
 }
 
-function loadState() {
-    const savedTasks = localStorage.getItem('lumina_tasks');
-    if (savedTasks) {
-        S.tasks = JSON.parse(savedTasks);
-    } else {
-        S.tasks = [];
-        localStorage.setItem('lumina_tasks', JSON.stringify(S.tasks));
+function safeParseJson(raw, fallback) {
+    if (raw == null || raw === '') return fallback;
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        console.warn('[Lumina] localStorage JSON 損壞，已忽略', e?.message || e);
+        return fallback;
     }
-    
-    loadDailyHistory();
-    loadTrackedFocus();
-    migrateApiKeyStorage();
+}
 
-    const savedProfile = localStorage.getItem('lumina_profile');
-    if (savedProfile) S.userProfile = { ...S.userProfile, ...JSON.parse(savedProfile) };
-    
-    const savedEnterprise = localStorage.getItem('lumina_enterprise_session');
-    if (savedEnterprise) S.enterpriseSession = JSON.parse(savedEnterprise);
-    
-    migrateTasks();
-    
-    const rollover = processDailyRollover();
-    S.rolledCountOnInit = rollover.rolledCount;
-    
-    const dueInput = document.getElementById('task-due');
-    if (dueInput) dueInput.value = getTomorrowISO();
-    
-    const thresholdSlider = document.getElementById('settings-streak-threshold');
-    if (thresholdSlider) {
-        thresholdSlider.addEventListener('input', () => {
-            document.getElementById('settings-streak-value').innerText = thresholdSlider.value + '%';
-        });
+function loadState() {
+    try {
+        const savedTasks = localStorage.getItem('lumina_tasks');
+        if (savedTasks) {
+            const parsed = safeParseJson(savedTasks, null);
+            S.tasks = Array.isArray(parsed) ? parsed : [];
+            if (!Array.isArray(parsed)) {
+                try { localStorage.setItem('lumina_tasks', JSON.stringify(S.tasks)); } catch (_) {}
+            }
+        } else {
+            S.tasks = [];
+            try { localStorage.setItem('lumina_tasks', JSON.stringify(S.tasks)); } catch (_) {}
+        }
+
+        try { loadDailyHistory(); } catch (e) { console.warn('[Lumina] loadDailyHistory', e); }
+        try { loadTrackedFocus(); } catch (e) { console.warn('[Lumina] loadTrackedFocus', e); }
+        try { migrateApiKeyStorage(); } catch (e) { console.warn('[Lumina] migrateApiKeyStorage', e); }
+
+        const savedProfile = localStorage.getItem('lumina_profile');
+        if (savedProfile) {
+            const profile = safeParseJson(savedProfile, null);
+            if (profile && typeof profile === 'object' && !Array.isArray(profile)) {
+                S.userProfile = { ...S.userProfile, ...profile };
+            }
+        }
+
+        const savedEnterprise = localStorage.getItem('lumina_enterprise_session');
+        if (savedEnterprise) {
+            const ent = safeParseJson(savedEnterprise, null);
+            S.enterpriseSession = (ent && typeof ent === 'object' && ent.groupCode)
+                ? ent
+                : null;
+            if (!S.enterpriseSession) {
+                try { localStorage.removeItem('lumina_enterprise_session'); } catch (_) {}
+            }
+        }
+
+        try { migrateTasks(); } catch (e) {
+            console.warn('[Lumina] migrateTasks failed, resetting task list shape', e);
+            if (!Array.isArray(S.tasks)) S.tasks = [];
+        }
+
+        try {
+            const rollover = processDailyRollover();
+            S.rolledCountOnInit = rollover?.rolledCount || 0;
+        } catch (e) {
+            console.warn('[Lumina] processDailyRollover', e);
+            S.rolledCountOnInit = 0;
+        }
+
+        const dueInput = document.getElementById('task-due');
+        if (dueInput) {
+            try { dueInput.value = getTomorrowISO(); } catch (_) {}
+        }
+
+        const thresholdSlider = document.getElementById('settings-streak-threshold');
+        if (thresholdSlider && !thresholdSlider.dataset.bound) {
+            thresholdSlider.dataset.bound = '1';
+            thresholdSlider.addEventListener('input', () => {
+                const el = document.getElementById('settings-streak-value');
+                if (el) el.innerText = thresholdSlider.value + '%';
+            });
+        }
+
+        document.getElementById('settings-api-mode')?.addEventListener('change', toggleApiModeFields);
+        try { migrateApiSettings(); } catch (e) { console.warn('[Lumina] migrateApiSettings', e); }
+        try { updateApiStatusBadge(); } catch (e) { console.warn('[Lumina] updateApiStatusBadge', e); }
+    } catch (e) {
+        console.error('[Lumina] loadState fatal, using defaults', e);
+        if (!Array.isArray(S.tasks)) S.tasks = [];
+        S.enterpriseSession = S.enterpriseSession || null;
+        S.rolledCountOnInit = 0;
     }
-    
-    document.getElementById('settings-api-mode')?.addEventListener('change', toggleApiModeFields);
-    migrateApiSettings();
-    updateApiStatusBadge();
 }
 
 function exportData() {

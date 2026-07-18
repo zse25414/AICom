@@ -63,7 +63,7 @@ function registerServiceWorker() {
     if (!('serviceWorker' in navigator) || window.location.protocol === 'file:') return;
     
     const swCode = `
-        const CACHE = 'lumina-v9';
+        const CACHE = 'lumina-v10';
         const origin = '${window.location.origin}';
         const LOCAL_ASSETS = [
             origin + '/lumina-ai.html',

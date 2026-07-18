@@ -184,7 +184,11 @@ async function build() {
     const patchNav = `
 const __origShowSection = showSection;
 showSection = async function(section) {
-    await window.__luminaPreloadSection?.(section);
+    try {
+        await window.__luminaPreloadSection?.(section);
+    } catch (e) {
+        console.warn('[Lumina] preload section failed', section, e);
+    }
     return __origShowSection(section);
 };
 window.showSection = showSection;
@@ -212,10 +216,18 @@ export function registerAllGlobals() {
         if (typeof val === 'function') window[key] = val;
     }
     window.initializeApp = initializeApp;
-    window.onload = () => initializeApp().catch((e) => {
-        console.error('[Lumina] Fatal init', e);
-        if (typeof showToast === 'function') showToast('應用程式啟動失敗，請重新整理', 'error');
-    });
+    window.onload = () => {
+        Promise.resolve()
+            .then(() => initializeApp())
+            .catch((e) => {
+                console.error('[Lumina] Fatal init', e);
+                try {
+                    if (typeof showToast === 'function') {
+                        showToast('應用程式啟動時發生錯誤，已盡力恢復。若仍異常請清除網站資料後重試', 'error');
+                    }
+                } catch (_) {}
+            });
+    };
     window.lumina = () => triggerConfetti();
 }
 registerAllGlobals();
@@ -248,10 +260,18 @@ ${patchNav}
 ${collectLazyWindowExports(coreFns, manifest).map((n) => `registerLuminaAction('${n}', ${n});`).join('\n')}
 ${LAZY_TEST_EXPORTS.filter((n) => coreFns.includes(n)).map((n) => `window['${n}'] = ${n};`).join('\n')}
 window.initializeApp = initializeApp;
-window.onload = () => initializeApp().catch((e) => {
-    console.error('[Lumina] Fatal init', e);
-    if (typeof showToast === 'function') showToast('應用程式啟動失敗，請重新整理', 'error');
-});
+window.onload = () => {
+    Promise.resolve()
+        .then(() => initializeApp())
+        .catch((e) => {
+            console.error('[Lumina] Fatal init', e);
+            try {
+                if (typeof showToast === 'function') {
+                    showToast('應用程式啟動時發生錯誤，已盡力恢復。若仍異常請清除網站資料後重試', 'error');
+                }
+            } catch (_) {}
+        });
+};
 window.lumina = () => triggerConfetti();
 `
         );
