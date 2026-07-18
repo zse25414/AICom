@@ -90,10 +90,26 @@ npm run backup:rag -- --with-uploads
 
 CI：`.github/workflows/ci.yml`
 
+## 架構模組（資深邊界）
+
+| 層 | 路徑 | 說明 |
+|----|------|------|
+| **API 入口** | `api-proxy.js` | 薄封裝 → `server/bootstrap` |
+| **API 模組** | `server/routes/*` | 各領域 HTTP（auth / user / enterprise / rag / chat / health） |
+| **API 領域（過渡）** | `server/runtime-legacy.js` | 尚未拆完的實作；禁止再堆新功能 |
+| **持久化** | `lib/*` | auth / enterprise / user-data store、JWT、寫檔佇列 |
+| **前端 slices** | `js/modules/slices/*` | 唯一前端 source of truth |
+| **RAG** | `rag_service/` | Python 索引與檢索 |
+
+完整地圖：[`docs/architecture/MODULES.md`](./docs/architecture/MODULES.md)  
+Server 說明：[`server/README.md`](./server/README.md)  
+前端 slices：[`js/modules/slices/README.md`](./js/modules/slices/README.md)
+
 ## 文件與協作
 
 | 文件 | 用途 |
 |------|------|
+| [`docs/architecture/MODULES.md`](./docs/architecture/MODULES.md) | 系統模組擁有權與演進規則 |
 | [`OPERATIONS.md`](./OPERATIONS.md) | 維運速查、環境變數、建置、測試 |
 | [`AGENTS.md`](./AGENTS.md) | Multi-Agent 協作與關鍵 API 保護 |
 | [`TeamPlan.md`](./TeamPlan.md) | 產品願景與規格 |
