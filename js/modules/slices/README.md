@@ -24,7 +24,7 @@
 | `ui/pwa` | SW / install | core |
 | `enterprise/team-boot` | 企業 boot 常數與就緒 | core |
 | `boot/init` | 啟動編排 | core |
-| `coach/*` | 教練對話、拆解、方案 | **lazy** |
+| `coach/*` | 教練對話、附件、拆解、方案 | **lazy** |
 | `enterprise/team` | 團隊 UI 主體 | **lazy** |
 | `enterprise/documents` | 知識庫文件 | **lazy** |
 

@@ -65,6 +65,18 @@ ok(pkg.scripts['test:rag-golden'], 'npm test:rag-golden');
 ok(pkg.scripts['test:e2e-team'], 'npm test:e2e-team');
 ok(pkg.scripts['test:phase-p1'], 'npm test:phase-p1');
 
+// Coach attachments (images / files)
+const att = read('js/modules/slices/coach/attachments.js');
+const htmlCoach = read('lumina-ai.html');
+ok(manifest.lazy.includes('coach/attachments.js'), 'manifest coach/attachments');
+ok(att.includes('processCoachAttachmentFile'), 'process attachment');
+ok(att.includes('pinPendingAttachmentsToTask'), 'pin to task');
+ok(att.includes('buildAttachmentsContextText'), 'AI attach context');
+ok(htmlCoach.includes('coach-attach-input'), 'composer file input');
+ok(htmlCoach.includes('openCoachAttachPicker'), 'attach picker action');
+ok(agent.includes('pendingAtt') || agent.includes('takeCoachPendingAttachmentsForSend'), 'send uses attachments');
+ok(agent.includes('renderMessageAttachmentsHtml') || agent.includes('attachments'), 'render att in thread');
+
 if (failed) {
     console.error(`\n${failed} P1 checks failed`);
     process.exit(1);

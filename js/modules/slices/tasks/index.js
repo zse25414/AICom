@@ -32,6 +32,9 @@ function migrateTasks() {
         category: t.category || inferCategory(t.name, t.energy || 3),
         kbIds: normalizeTaskKbIds(t.kbIds),
         docIds: normalizeTaskDocIds(t.docIds),
+        attachments: typeof normalizeTaskAttachments === 'function'
+            ? normalizeTaskAttachments(t.attachments)
+            : (Array.isArray(t.attachments) ? t.attachments.slice(0, 6) : []),
         updatedAt: t.updatedAt || now
     }));
     rebuildTaskIndex();

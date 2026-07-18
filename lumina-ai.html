@@ -473,12 +473,21 @@
                         <div class="coach-composer">
                             <div id="coach-quick-actions" class="coach-quick-actions" aria-label="快捷"></div>
                             <div id="coach-task-kb-banner" class="coach-task-kb-banner hidden" role="status"></div>
+                            <div id="coach-attach-pending" class="coach-attach-pending hidden" aria-label="待送附件"></div>
                             <div class="coach-composer-bar">
+                                <button type="button" class="coach-attach-btn" data-lumina-action="openCoachAttachPicker"
+                                        title="附加圖片或檔案" aria-label="附加圖片或檔案">
+                                    <i class="fa-solid fa-paperclip"></i>
+                                </button>
+                                <input type="file" id="coach-attach-input" class="hidden" multiple
+                                       accept="image/*,.txt,.md,.markdown,.csv,.json,.log,.pdf,text/plain,text/markdown,text/csv,application/json,application/pdf"
+                                       data-lumina-change="onCoachAttachInputChange">
                                 <textarea id="chat-input" rows="1"
-                                          placeholder="有什麼想聊的？"
+                                          placeholder="有什麼想聊的？可附加圖片／檔案"
                                           class="coach-chat-input"
                                           autocomplete="off"
                                           oninput="autoResizeCoachInput(this)"
+                                          onpaste="if(typeof handleCoachComposerPaste==='function') handleCoachComposerPaste(event)"
                                           onkeydown="if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendCoachAgentMessage(); }"></textarea>
                                 <button type="button" data-lumina-action="sendCoachAgentMessage"
                                         class="coach-chat-send-btn" aria-label="送出">

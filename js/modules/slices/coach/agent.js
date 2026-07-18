@@ -12,7 +12,9 @@ function persistCoachFreeformThread() {
                 content: m.content,
                 ts: m.ts || Date.now(),
                 sources: m.sources || null,
-                meta: m.meta || null
+                meta: m.meta || null,
+                // Keep small previews; large dataUrls already size-capped at attach time
+                attachments: Array.isArray(m.attachments) ? m.attachments : null
             }))
         };
         localStorage.setItem(C.COACH_THREAD_STORAGE, JSON.stringify(payload));
@@ -43,6 +45,7 @@ function loadCoachFreeformThread() {
             ts: m.ts || Date.now(),
             sources: m.sources || null,
             meta: m.meta || null,
+            attachments: Array.isArray(m.attachments) ? m.attachments : null,
             expanded: false
         }));
         S.chatHistory = S.coachAgentMessages.map((m) => ({
@@ -63,13 +66,17 @@ function loadCoachFreeformThread() {
     }
 }
 
-function pushCoachAgentMessage(role, content, sources, meta) {
+function pushCoachAgentMessage(role, content, sources, meta, attachments) {
+    const att = (typeof normalizeTaskAttachments === 'function')
+        ? normalizeTaskAttachments(attachments)
+        : (Array.isArray(attachments) ? attachments : null);
     S.coachAgentMessages.push({
         role,
         content,
         ts: Date.now(),
         sources: sources || null,
         meta: meta || null,
+        attachments: att && att.length ? att : null,
         expanded: false
     });
     // Keep thread short so the panel never balloons in DOM size
@@ -570,9 +577,28 @@ function coachCompleteTaskFromAgent() {
     }, 350);
 }
 
-function buildOfflineAgentReply(userMsg, task, session) {
+function buildOfflineAgentReply(userMsg, task, session, messageAttachments) {
     const lower = String(userMsg || '').toLowerCase();
     const mins = Math.min(25, Math.max(10, Number(task?.duration) || 25));
+    const msgAtt = typeof normalizeTaskAttachments === 'function'
+        ? normalizeTaskAttachments(messageAttachments)
+        : (Array.isArray(messageAttachments) ? messageAttachments : []);
+    const taskAtt = typeof getTaskAttachments === 'function' ? getTaskAttachments(task) : [];
+    const hasAtt = msgAtt.length > 0 || taskAtt.length > 0;
+
+    if (hasAtt && (msgAtt.length || /附|檔|圖|文件|資料/.test(userMsg || ''))) {
+        const names = [...msgAtt, ...taskAtt].map(a => a.name).filter(Boolean).slice(0, 4);
+        const textBits = [...msgAtt, ...taskAtt]
+            .filter(a => a.kind === 'text' && a.textPreview)
+            .map(a => a.textPreview.slice(0, 200));
+        const preview = textBits.length
+            ? `\n\n從文字檔看到：${textBits[0].replace(/\s+/g, ' ').slice(0, 160)}…`
+            : '';
+        return {
+            reply: `收到附件${names.length ? `（${names.join('、')}）` : ''}。${preview}\n\n我先依「${task?.name || '目前問題'}」給你下一步：寫下這份資料要解決的 1 個問題，再標出 3 個關鍵句或圖中重點。\n\n（離線模式無法真正「看圖」；連上 AI 後會依文字摘錄與檔名給更細建議。）\n\n[選項: 完成這步]\n[選項: 卡住了]\n[選項: 連上 AI（約 1 分鐘）]`,
+            advance: false, complete: false
+        };
+    }
 
     // Free-form knowledge mode (no task)
     if (!task || session?.freeform) {
@@ -780,7 +806,7 @@ function updateCoachTaskKbBanner(task) {
     `;
 }
 
-async function coachAgentRespondWithAI(userMsg, task, session) {
+async function coachAgentRespondWithAI(userMsg, task, session, messageAttachments) {
     const freeform = !task || !!session?.freeform;
     const mention = parseCoachKbMentions(userMsg);
     const resolved = resolveCoachQueryKbIds(task, mention);
@@ -921,28 +947,40 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
 [選項: …]
 [選項: …]`;
 
+    const attachCtx = typeof buildAttachmentsContextText === 'function'
+        ? buildAttachmentsContextText(messageAttachments, task)
+        : '';
+
     let systemPrompt;
     if (freeform) {
         systemPrompt = `你是 Lumina 教練助手。回答工作／知識庫問題：說清楚、給下一步，內容要夠用。
 ${styleRules}
-${contextBlock}`;
+${contextBlock}${attachCtx}
+若有附件：優先引用文字檔摘錄；圖片僅能依檔名與使用者描述推斷（模型未必能看圖），請請對方補關鍵重點。`;
     } else {
         const step = session?.steps?.[session.currentStep];
         systemPrompt = `你是 Lumina 行動教練。針對使用者當前訊息與「現在這一步」給可執行建議；不要重貼整份計畫，但說明要夠完整。
 ${styleRules}
 若使用者卡住：先安撫一句，再拆成 2–3 個更小動作，並說明先做哪一個。
 若使用者問怎麼做：給 3–6 步，必要時補「完成長相／檢查點」。
-${contextBlock}
+${contextBlock}${attachCtx}
 當前任務：${task.name}
 當前步驟（${(session.currentStep || 0) + 1}/${session.steps.length}）「${step?.title}」：${step?.action}`;
     }
 
     const messages = [
         { role: 'system', content: systemPrompt },
-        ...S.coachAgentMessages.slice(-8).map(m => ({
-            role: m.role === 'coach' ? 'assistant' : 'user',
-            content: m.content.slice(0, 500)
-        }))
+        ...S.coachAgentMessages.slice(-8).map(m => {
+            let content = String(m.content || '').slice(0, 500);
+            if (m.role === 'user' && m.attachments?.length) {
+                const names = m.attachments.map(a => a.name).filter(Boolean).join('、');
+                if (names) content = `${content}\n[附件: ${names}]`.slice(0, 600);
+            }
+            return {
+                role: m.role === 'coach' ? 'assistant' : 'user',
+                content
+            };
+        })
     ];
     // Mid temperature: clear prose without being telegraphic or overly flowery
     const content = await callDeepSeek(messages, { temperature: 0.55, source: 'coach' });
@@ -1361,10 +1399,14 @@ function renderCoachAgentThread(thinking) {
             : '';
 
         if (m.role === 'user') {
+            const attHtml = typeof renderMessageAttachmentsHtml === 'function'
+                ? renderMessageAttachmentsHtml(m.attachments)
+                : '';
             // User bubble: fit content width (never collapse to 1 CJK char tall strip)
             html += `
             <div class="coach-agent-msg coach-agent-msg-user">
-                <div class="coach-msg-text">${escapeHtml(displayContent)}</div>
+                ${displayContent ? `<div class="coach-msg-text">${escapeHtml(displayContent)}</div>` : ''}
+                ${attHtml}
             </div>`;
         } else {
             html += `
@@ -1545,9 +1587,9 @@ function renderCoachAgentView() {
     const isActive = !!session?.coachActive && !session?.freeform;
     updateCoachGuideButton(task, isActive);
 
-    // Not guiding → clean chat only (task is in top select)
+    // Not guiding → clean chat; still show task attachments if any
     if (!isActive) {
-        ws.innerHTML = '';
+        ws.innerHTML = typeof renderTaskAttachmentsBar === 'function' ? renderTaskAttachmentsBar(task) : '';
         renderCoachAgentThread();
         return;
     }
@@ -1569,6 +1611,7 @@ function renderCoachAgentView() {
                     <div class="coach-agent-hero-title">${escapeHtml(current.title)}</div>
                     <div class="coach-agent-hero-action">${escapeHtml(current.action)}</div>
                 </div>
+                ${typeof renderTaskAttachmentsBar === 'function' ? renderTaskAttachmentsBar(task) : ''}
                 <div class="coach-agent-steps-rail">
                     ${steps.map((s, i) => {
                         const cls = i < cur ? 'done' : i === cur ? 'active' : '';
@@ -1666,8 +1709,17 @@ function handleCoachOptionShortcuts(msg) {
 async function sendCoachAgentMessage(preset) {
     const input = document.getElementById('chat-input');
     const msg = typeof preset === 'string' ? preset : (input?.value?.trim() || '');
-    if (!msg) return;
+    const pendingAtt = (typeof preset !== 'string' && typeof takeCoachPendingAttachmentsForSend === 'function')
+        ? takeCoachPendingAttachmentsForSend()
+        : [];
+    // Allow send with attachments only (no text)
+    if (!msg && !(pendingAtt && pendingAtt.length)) return;
     if (S.coachRequestInFlight) {
+        // put attachments back if we already took them
+        if (pendingAtt?.length && Array.isArray(S.coachPendingAttachments)) {
+            S.coachPendingAttachments = [...pendingAtt, ...S.coachPendingAttachments].slice(0, 4);
+            try { renderCoachPendingAttachments(); } catch (_) {}
+        }
         showToast('教練還在回覆中，請稍候', 'error');
         return;
     }
@@ -1675,8 +1727,12 @@ async function sendCoachAgentMessage(preset) {
         resetCoachInputSize();
     }
 
-    // Local shortcuts from option chips (no LLM needed)
-    if (handleCoachOptionShortcuts(msg)) return;
+    const outboundText = msg || (pendingAtt.length
+        ? `（附上 ${pendingAtt.length} 個檔案：${pendingAtt.map(a => a.name).join('、')}）`
+        : '');
+
+    // Local shortcuts from option chips (no LLM needed) — only pure text shortcuts
+    if (!pendingAtt.length && handleCoachOptionShortcuts(outboundText)) return;
 
     const task = getCoachTask();
     const freeform = !task;
@@ -1694,7 +1750,7 @@ async function sendCoachAgentMessage(preset) {
             renderCoachAgentView();
         }
 
-        if (/^完成這步$|^做完了$|^好了$/.test(msg)) {
+        if (!pendingAtt.length && /^完成這步$|^做完了$|^好了$/.test(outboundText)) {
             const isLast = S.focusSession.currentStep >= S.focusSession.steps.length - 1;
             if (isLast) coachCompleteTaskFromAgent();
             else coachAdvanceStepFromAgent();
@@ -1713,12 +1769,27 @@ async function sendCoachAgentMessage(preset) {
             };
         }
         if (!S.coachAgentMessages.length) {
-            pushCoachAgentMessage('coach', '目前是知識庫問答模式。直接問流程、SOP 或名詞；有任務後可點「教練帶我做」。\n\n[選項: 新人第一天要做什麼？]\n[選項: 一鍵體驗範例任務]');
+            pushCoachAgentMessage('coach', '目前是知識庫問答模式。直接問流程、SOP 或名詞；有任務後可點「教練帶我做」。也可附加圖片／檔案。\n\n[選項: 新人第一天要做什麼？]\n[選項: 一鍵體驗範例任務]');
         }
         renderCoachAgentView();
     }
 
-    pushCoachAgentMessage('user', msg);
+    // Auto-pin message attachments to focused task (if any room)
+    if (task && pendingAtt.length) {
+        try {
+            const existing = typeof getTaskAttachments === 'function' ? getTaskAttachments(task) : [];
+            const room = Math.max(0, 6 - existing.length);
+            if (room > 0) {
+                task.attachments = typeof normalizeTaskAttachments === 'function'
+                    ? normalizeTaskAttachments([...existing, ...pendingAtt.slice(0, room)])
+                    : [...existing, ...pendingAtt.slice(0, room)];
+                touchTask(task);
+                saveState();
+            }
+        } catch (_) {}
+    }
+
+    pushCoachAgentMessage('user', outboundText, null, null, pendingAtt);
     renderCoachAgentThread(isApiReady() ? 'deepseek' : 'offline');
     S.coachRequestInFlight = true;
 
@@ -1727,7 +1798,8 @@ async function sendCoachAgentMessage(preset) {
             track('coach_message', {
                 freeform: !!freeform,
                 hasTask: !!task,
-                api: !!isApiReady()
+                api: !!isApiReady(),
+                attachments: pendingAtt.length || 0
             });
         }
     } catch (_) {}
@@ -1735,9 +1807,9 @@ async function sendCoachAgentMessage(preset) {
     let result;
     try {
         if (isApiReady()) {
-            result = await coachAgentRespondWithAI(msg, task, S.focusSession);
+            result = await coachAgentRespondWithAI(outboundText, task, S.focusSession, pendingAtt);
         } else {
-            result = buildOfflineAgentReply(msg, task, S.focusSession);
+            result = buildOfflineAgentReply(outboundText, task, S.focusSession, pendingAtt);
             if (typeof maybeAppendAiUpgradeHint === 'function') result = maybeAppendAiUpgradeHint(result);
             const skip = resolveCoachKbSkipReason(task);
             if (S.enterpriseSession && !result.meta) {
@@ -1765,7 +1837,7 @@ async function sendCoachAgentMessage(preset) {
                 track('coach_error', { reason: 'ai_request', message: String(err.message || '').slice(0, 120) });
             }
         } catch (_) {}
-        result = buildOfflineAgentReply(msg, task, S.focusSession);
+        result = buildOfflineAgentReply(outboundText, task, S.focusSession, pendingAtt);
         if (S.enterpriseSession && !result.meta) {
             result.meta = { usedKnowledge: false, kbSkipReason: 'degraded' };
         }

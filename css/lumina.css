@@ -1642,6 +1642,198 @@ body {
 
 .coach-composer-hint { display: none; }
 
+/* Attachments (coach composer + messages) */
+.coach-attach-btn {
+    flex-shrink: 0;
+    width: 1.85rem;
+    height: 1.85rem;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #a1a1aa;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: color 0.12s ease, background 0.12s ease;
+}
+.coach-attach-btn:hover {
+    color: #e4e4e7;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.coach-attach-pending {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+    margin: 0 0.15rem 0.45rem;
+    padding: 0.35rem 0.25rem 0;
+}
+.coach-attach-pending.hidden { display: none; }
+
+.coach-attach-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    max-width: 14rem;
+    padding: 0.3rem 0.4rem 0.3rem 0.3rem;
+    border-radius: 0.85rem;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(15, 23, 42, 0.85);
+}
+.coach-attach-thumb {
+    width: 2rem;
+    height: 2rem;
+    object-fit: cover;
+    border-radius: 0.45rem;
+    flex-shrink: 0;
+}
+.coach-attach-icon {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.45rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(99, 102, 241, 0.15);
+    color: #a5b4fc;
+    flex-shrink: 0;
+    font-size: 0.8rem;
+}
+.coach-attach-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+}
+.coach-attach-name {
+    font-size: 0.7rem;
+    color: #e2e8f0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 8.5rem;
+}
+.coach-attach-size {
+    font-size: 0.6rem;
+    color: #94a3b8;
+}
+.coach-attach-remove {
+    flex-shrink: 0;
+    width: 1.25rem;
+    height: 1.25rem;
+    border: none;
+    border-radius: 9999px;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 0.7rem;
+    line-height: 1;
+}
+.coach-attach-remove:hover { color: #fca5a5; background: rgba(239, 68, 68, 0.12); }
+.coach-attach-actions {
+    display: inline-flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+.coach-attach-action-btn {
+    font-size: 0.65rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid rgba(139, 92, 246, 0.35);
+    color: #c4b5fd;
+    background: rgba(139, 92, 246, 0.1);
+    cursor: pointer;
+}
+.coach-attach-action-btn:hover { background: rgba(139, 92, 246, 0.2); }
+.coach-attach-action-muted {
+    border-color: rgba(148, 163, 184, 0.25);
+    color: #94a3b8;
+    background: transparent;
+}
+
+.coach-msg-attachments {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.4rem;
+}
+.coach-msg-attach {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    max-width: 100%;
+    text-decoration: none;
+    color: inherit;
+    border-radius: 0.65rem;
+    overflow: hidden;
+}
+.coach-msg-attach-image {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+}
+.coach-msg-attach-image img {
+    max-width: min(16rem, 70vw);
+    max-height: 12rem;
+    border-radius: 0.75rem;
+    object-fit: cover;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.coach-msg-attach-image span,
+.coach-msg-attach-label {
+    font-size: 0.65rem;
+    color: #a1a1aa;
+}
+.coach-msg-attach-file {
+    padding: 0.35rem 0.55rem;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.coach-msg-attach-bytes {
+    font-size: 0.6rem;
+    color: #71717a;
+    margin-left: auto;
+}
+
+.coach-task-attachments {
+    margin-top: 0.65rem;
+    padding-top: 0.55rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+.coach-task-attachments-label {
+    font-size: 0.65rem;
+    color: #94a3b8;
+    margin-bottom: 0.35rem;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.coach-task-attachments-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+.coach-task-attach-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    max-width: 11rem;
+    padding: 0.2rem 0.35rem;
+    border-radius: 0.55rem;
+    background: rgba(15, 23, 42, 0.65);
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    font-size: 0.65rem;
+    color: #cbd5e1;
+}
+.coach-task-attach-item img {
+    width: 1.35rem;
+    height: 1.35rem;
+    object-fit: cover;
+    border-radius: 0.3rem;
+}
+
 .coach-quick-actions {
     display: flex;
     flex-wrap: nowrap;

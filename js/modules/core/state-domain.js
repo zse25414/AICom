@@ -37,6 +37,8 @@ export function createSlice() {
         teamNotifications: [],
         chatHistory: [],
         coachAgentMessages: [],
+        /** Pending files/images for next coach message (not yet sent) */
+        coachPendingAttachments: [],
         coachRequestInFlight: false,
         ragServiceActive: false,
         ragRetrievalMode: 'hybrid',
