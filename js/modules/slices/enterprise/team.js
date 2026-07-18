@@ -724,6 +724,23 @@ function switchTeamWorkspaceTab(tab) {
     }
 }
 
+/**
+ * Align active session memberId/role with server-resolved membership.
+ */
+function applyResolvedEnterpriseMember(member, groupMeta) {
+    if (!member?.id || !S.enterpriseSession) return;
+    const patch = {
+        ...S.enterpriseSession,
+        memberId: member.id,
+        name: member.name || S.enterpriseSession.name,
+        role: member.role === 'manager' ? 'manager' : (member.role || S.enterpriseSession.role),
+        offline: false
+    };
+    if (groupMeta?.name) patch.groupName = groupMeta.name;
+    if (groupMeta?.code) patch.groupCode = normalizeEnterpriseCode(groupMeta.code);
+    setActiveEnterpriseSession(patch);
+}
+
 async function refreshEnterpriseData(force = false) {
     if (!S.enterpriseSession) return;
     
@@ -734,10 +751,50 @@ async function refreshEnterpriseData(force = false) {
     }
     
     const code = S.enterpriseSession.groupCode;
-    const memberQ = `?memberId=${encodeURIComponent(S.enterpriseSession.memberId)}`;
-    const api = await enterpriseFetch('GET', `/api/enterprise/group/${code}${memberQ}`);
+    const memberQ = `?memberId=${encodeURIComponent(S.enterpriseSession.memberId || '')}`;
+    let api = await enterpriseFetch('GET', `/api/enterprise/group/${code}${memberQ}`);
+
+    // Recover stale local memberId via account memberships, then retry once
+    if (!api.ok && !api.offline && (api.status === 403 || api.status === 401
+        || api.code === 'GROUP_FORBIDDEN' || api.code === 'NOT_A_MEMBER' || api.code === 'MEMBER_BOUND_OTHER')) {
+        try {
+            await syncEnterpriseMembershipsFromServer({ toast: false, render: false, autoSelect: false });
+        } catch (_) {}
+        const fixed = (S.enterpriseMemberships || []).find(
+            (m) => normalizeEnterpriseCode(m.groupCode) === normalizeEnterpriseCode(code)
+        );
+        if (fixed) {
+            setActiveEnterpriseSession(fixed);
+            const q2 = `?memberId=${encodeURIComponent(fixed.memberId || '')}`;
+            api = await enterpriseFetch('GET', `/api/enterprise/group/${code}${q2}`);
+        } else {
+            // Not a server member anymore — drop stale local entry
+            ensureEnterpriseMembershipsLoaded();
+            S.enterpriseMemberships = (S.enterpriseMemberships || []).filter(
+                (m) => normalizeEnterpriseCode(m.groupCode) !== normalizeEnterpriseCode(code)
+            );
+            saveEnterpriseMemberships();
+            if (normalizeEnterpriseCode(S.enterpriseSession?.groupCode) === normalizeEnterpriseCode(code)) {
+                try { stopEnterprisePolling(); } catch (_) {}
+                clearActiveEnterpriseWorkspaceCaches();
+                const next = S.enterpriseMemberships[0] || null;
+                setActiveEnterpriseSession(next);
+                showToast(api.error || '群組成員資格已失效，請重新加入', 'error');
+                renderEnterprisePage();
+                if (next) {
+                    try { await refreshEnterpriseData(true); } catch (_) {}
+                    try { startEnterprisePolling(); } catch (_) {}
+                }
+            }
+            return;
+        }
+    }
     
     if (api.ok) {
+        // Server may return resolved member (corrects stale local memberId)
+        if (api.data?.member?.id) {
+            applyResolvedEnterpriseMember(api.data.member, api.data.group || { code, name: api.data.group?.name });
+        }
         // Preserve local ragStatus overrides when server lags (pending poll)
         const prevDocs = S.enterpriseGroupData?.documents || [];
         const prevById = Object.fromEntries(prevDocs.map(d => [d.id, d]));

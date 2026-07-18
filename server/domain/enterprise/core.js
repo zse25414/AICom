@@ -51,39 +51,81 @@ function register(api) {
         return note;
     }
 
+    /**
+     * Resolve group membership.
+     * Prefer auth userId (cross-device truth); fall back to client memberId.
+     * Stale memberIds from localStorage are auto-corrected when JWT matches a member.
+     */
     async function assertEnterpriseMember(group, memberId, authUser, options = {}) {
         const { bind = true, store = null } = options;
-        if (!group || !memberId) {
-            return { ok: false, status: 403, error: '無效的成員或身份驗證失敗', code: 'GROUP_FORBIDDEN' };
-        }
-        const member = group.members.find(m => m.id === memberId);
-        if (!member) {
+        if (!group || !Array.isArray(group.members)) {
             return { ok: false, status: 403, error: '無效的成員或身份驗證失敗', code: 'GROUP_FORBIDDEN' };
         }
 
+        const byId = memberId ? group.members.find(m => m.id === memberId) : null;
+        const byUser = authUser?.id
+            ? group.members.find(m => m.userId && m.userId === authUser.id)
+            : null;
+
+        // Authoritative: logged-in user already bound to a member row
+        if (byUser) {
+            return { ok: true, member: byUser, resolvedBy: 'userId' };
+        }
+
+        // Logged in, client sent a memberId that exists but is unbound → claim it
+        if (authUser?.id && byId && !byId.userId) {
+            if (bind) {
+                byId.userId = authUser.id;
+                if (store) await saveStore(store);
+            }
+            return { ok: true, member: byId, resolvedBy: 'memberId+bind' };
+        }
+
+        // Logged in, memberId exists but bound to someone else
+        if (authUser?.id && byId && byId.userId && byId.userId !== authUser.id) {
+            return {
+                ok: false,
+                status: 403,
+                error: '此成員已綁定其他帳號，請用正確帳號登入或重新加入群組',
+                code: 'MEMBER_BOUND_OTHER'
+            };
+        }
+
+        // Logged in but not a member (stale local session / wrong group)
+        if (authUser?.id && !byId) {
+            return {
+                ok: false,
+                status: 403,
+                error: '你不是此群組成員或本機成員資料已過期，請重新加入',
+                code: 'NOT_A_MEMBER'
+            };
+        }
+
+        // Production: require login for team APIs
         if (REQUIRE_ENTERPRISE_AUTH) {
             if (!authUser?.id) {
                 return { ok: false, status: 401, error: '請先登入才能使用團隊功能', code: 'UNAUTHORIZED' };
             }
-            if (member.userId && member.userId !== authUser.id) {
-                return { ok: false, status: 403, error: '此成員已綁定其他帳號', code: 'GROUP_FORBIDDEN' };
-            }
-            if (!member.userId && bind) {
-                member.userId = authUser.id;
-                if (store) await saveStore(store);
-            }
-            return { ok: true, member };
+            return {
+                ok: false,
+                status: 403,
+                error: '你不是此群組成員，請重新加入',
+                code: 'NOT_A_MEMBER'
+            };
         }
 
-        if (member.userId) {
-            if (!authUser?.id || authUser.id !== member.userId) {
-                return { ok: false, status: 403, error: '無效的成員或身份驗證失敗', code: 'GROUP_FORBIDDEN' };
+        // Dev anonymous: allow pure memberId without userId binding
+        if (byId) {
+            if (byId.userId && !authUser?.id) {
+                return { ok: false, status: 401, error: '請先登入', code: 'UNAUTHORIZED' };
             }
-        } else if (authUser?.id && bind) {
-            member.userId = authUser.id;
-            if (store) await saveStore(store);
+            return { ok: true, member: byId, resolvedBy: 'memberId' };
         }
-        return { ok: true, member };
+
+        if (!memberId) {
+            return { ok: false, status: 403, error: '需要有效的 memberId', code: 'GROUP_FORBIDDEN' };
+        }
+        return { ok: false, status: 403, error: '無效的成員或身份驗證失敗', code: 'GROUP_FORBIDDEN' };
     }
 
     /**

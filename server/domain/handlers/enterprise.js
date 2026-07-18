@@ -312,21 +312,37 @@ function register(api) {
             const authUser = await api.getOptionalAuth(req);
             const memberCheck = await api.assertEnterpriseMember(group, memberId, authUser, { store });
             if (!memberCheck.ok) {
-                return api.sendJson(res, memberCheck.status, { error: memberCheck.error });
+                return api.sendJson(res, memberCheck.status, {
+                    error: memberCheck.error,
+                    code: memberCheck.code || 'GROUP_FORBIDDEN'
+                });
             }
+            // Use server-resolved member id (fixes stale localStorage memberId)
+            const resolvedMemberId = memberCheck.member.id;
             const payload = {
                 code: group.code,
                 name: group.name,
                 members: group.members,
                 tasks: group.tasks,
-                documents: (group.documents || []).filter(isActiveDocument),
+                documents: (group.documents || []).filter(
+                    (d) => (typeof api.isActiveDocument === 'function' ? api.isActiveDocument(d) : d && d.status !== 'deleted')
+                ),
                 notifications: group.notifications
-                    .filter(n => n.recipientId === memberId)
+                    .filter(n => n.recipientId === resolvedMemberId)
                     .slice(0, 50),
                 unreadCount: group.notifications
-                    .filter(n => n.recipientId === memberId && !n.read).length
+                    .filter(n => n.recipientId === resolvedMemberId && !n.read).length
             };
-            api.sendJson(res, 200, { ok: true, group: payload });
+            api.sendJson(res, 200, {
+                ok: true,
+                group: payload,
+                member: {
+                    id: memberCheck.member.id,
+                    name: memberCheck.member.name,
+                    role: memberCheck.member.role,
+                    userId: memberCheck.member.userId || null
+                }
+            });
             return;
         }
 
@@ -1091,14 +1107,23 @@ function register(api) {
             const authUser = await api.getOptionalAuth(req);
             const memberCheck = await api.assertEnterpriseMember(group, memberId, authUser, { store });
             if (!memberCheck.ok) {
-                return api.sendJson(res, memberCheck.status, { error: memberCheck.error });
+                return api.sendJson(res, memberCheck.status, {
+                    error: memberCheck.error,
+                    code: memberCheck.code || 'GROUP_FORBIDDEN'
+                });
             }
             api.ensureNotifications(group);
+            const resolvedId = memberCheck.member.id;
             const notifications = group.notifications
-                .filter(n => n.recipientId === memberId)
+                .filter(n => n.recipientId === resolvedId)
                 .slice(0, 50);
             const unreadCount = notifications.filter(n => !n.read).length;
-            api.sendJson(res, 200, { ok: true, notifications, unreadCount });
+            api.sendJson(res, 200, {
+                ok: true,
+                notifications,
+                unreadCount,
+                member: { id: resolvedId, name: memberCheck.member.name, role: memberCheck.member.role }
+            });
             return;
         }
 
@@ -1111,20 +1136,24 @@ function register(api) {
                 const authUser = await api.getOptionalAuth(req);
                 const memberCheck = await api.assertEnterpriseMember(group, memberId, authUser, { store });
                 if (!memberCheck.ok) {
-                    return api.sendJson(res, memberCheck.status, { error: memberCheck.error });
+                    return api.sendJson(res, memberCheck.status, {
+                        error: memberCheck.error,
+                        code: memberCheck.code || 'GROUP_FORBIDDEN'
+                    });
                 }
                 api.ensureNotifications(group);
+                const resolvedId = memberCheck.member.id;
                 const ids = Array.isArray(body.ids) ? body.ids : [];
                 let updated = 0;
                 for (const note of group.notifications) {
-                    if (note.recipientId !== memberId) continue;
+                    if (note.recipientId !== resolvedId) continue;
                     if (body.readAll || ids.includes(note.id)) {
                         if (!note.read) updated++;
                         note.read = true;
                     }
                 }
                 await saveStore(store);
-                api.sendJson(res, 200, { ok: true, updated });
+                api.sendJson(res, 200, { ok: true, updated, memberId: resolvedId });
             });
         }
 
