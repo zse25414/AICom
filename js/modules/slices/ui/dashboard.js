@@ -109,13 +109,17 @@ function addTaskToList() {
     };
     
     S.tasks.push(newTask);
+    if (due <= getTodayISO()) S.todayFocusTaskId = newTask.id;
     saveState();
     
     // Clear inputs
     document.getElementById('task-name').value = '';
     
-    refreshUI({ scheduler: true, filters: true, schedule: true });
-    showToast('任務已加入清單', 'success');
+    refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+    showToast(due <= getTodayISO() ? '任務已加入今日清單' : '任務已加入清單', 'success');
+    if (due <= getTodayISO()) {
+        try { pulseNextStepCard(); } catch (_) {}
+    }
 }
 
 function getTimeDistribution() {

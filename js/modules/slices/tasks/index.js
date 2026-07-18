@@ -904,21 +904,39 @@ function splitTask(taskId) {
 }
 
 function deleteTask(taskId, e) {
-    e.stopImmediatePropagation();
+    e?.stopImmediatePropagation?.();
     if (!confirm('確定要刪除這個任務嗎？')) return;
-    
+
+    const wasFocus = S.focusSession?.taskId === taskId;
+    if (wasFocus) endFocusSession(false);
+    if (S.todayFocusTaskId === taskId) S.todayFocusTaskId = null;
+    if (S.editingTaskId === taskId) closeTaskEdit();
+
     S.tasks = S.tasks.filter(t => t.id !== taskId);
+    rebuildTaskIndex();
+    invalidateTodayStats();
     saveState();
-    refreshUI({ scheduler: true, filters: true, schedule: true });
+    refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+    if (document.getElementById('coach')?.classList.contains('active')) {
+        try { refreshCoachView(); } catch (_) {}
+    }
+    showToast('任務已刪除', 'success');
 }
 
 function clearAllTasks() {
     if (!confirm('確定清空所有任務？')) return;
+    endFocusSession(false);
+    S.todayFocusTaskId = null;
     S.tasks = [];
+    rebuildTaskIndex();
+    invalidateTodayStats();
     saveState();
-    refreshUI({ scheduler: true, filters: true });
+    refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
     setElHtml('timeline-view', '<div class="text-center text-xs py-8 text-slate-400">清空後請新增任務並點擊「智能排程」</div>');
     setElText('total-scheduled-time', '0h 0m');
+    if (document.getElementById('coach')?.classList.contains('active')) {
+        try { refreshCoachView(); } catch (_) {}
+    }
 }
 
 function quickStartToday() {

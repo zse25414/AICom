@@ -586,31 +586,36 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
             if (response.ok) {
                 const data = await response.json();
                 if (data.retrieval_mode) S.ragRetrievalMode = data.retrieval_mode;
-                let reply = data.answer || '';
-                
-                // Add Claude-style options to the reply if they are not generated
-                if (!reply.includes('[選項:')) {
-                    reply += `\n\n[選項: 我了解，繼續執行當前步驟]\n[選項: 請幫我把這段資料再做詳細拆解]`;
-                }
-
+                let reply = String(data.answer || '').trim();
                 const sources = (data.citations || data.sources || []).map(enrichCoachSource);
-                
-                return {
-                    reply: clampText(reply, 5000),
-                    sources,
-                    meta: {
-                        usedKnowledge: true,
-                        kbIds: effectiveKbIds,
-                        docIds: effectiveDocIds,
-                        sourceCount: sources.length,
-                        mentionOverride: mention.hadMentions,
-                        taskBound: resolved.taskBound && !mention.hadMentions,
-                        kbSource: resolved.source
-                    },
-                    ...inferAgentActionsFromUserMsg(userMsg, session)
-                };
+
+                // Empty RAG answer → fall through to DeepSeek with step context (still useful coaching)
+                if (!reply) {
+                    ragDegraded = true;
+                } else {
+                    // Add Claude-style options to the reply if they are not generated
+                    if (!reply.includes('[選項:')) {
+                        reply += `\n\n[選項: 我了解，繼續執行當前步驟]\n[選項: 請幫我把這段資料再做詳細拆解]`;
+                    }
+
+                    return {
+                        reply: clampText(reply, 5000),
+                        sources,
+                        meta: {
+                            usedKnowledge: true,
+                            kbIds: effectiveKbIds,
+                            docIds: effectiveDocIds,
+                            sourceCount: sources.length,
+                            mentionOverride: mention.hadMentions,
+                            taskBound: resolved.taskBound && !mention.hadMentions,
+                            kbSource: resolved.source
+                        },
+                        ...inferAgentActionsFromUserMsg(userMsg, session)
+                    };
+                }
+            } else {
+                ragDegraded = true;
             }
-            ragDegraded = true;
         } catch (e) {
             ragDegraded = true;
             console.warn('[Lumina RAG] RAG 查詢失敗，降級到一般 AI 問答:', e.message);
@@ -660,10 +665,18 @@ ${contextBlock}
     const content = await callDeepSeek(messages, { temperature: 0.75 });
     const text = String(content || '').trim();
     
+    // Market-ready coach: allow full structured guidance (was 400 → clipped mid-sentence)
+    const COACH_REPLY_MAX = 3500;
+
     if (text.startsWith('{')) {
         const parsed = parseCoachAgentResponse(text, userMsg, task, session);
         if (parsed.reply && !isGenericCoachFallback(parsed.reply)) {
-            return { ...parsed, meta: kbMeta, ...inferAgentActionsFromUserMsg(userMsg, session) };
+            return {
+                ...parsed,
+                reply: clampText(parsed.reply, COACH_REPLY_MAX),
+                meta: kbMeta,
+                ...inferAgentActionsFromUserMsg(userMsg, session)
+            };
         }
     }
     
@@ -673,7 +686,7 @@ ${contextBlock}
     }
     
     return {
-        reply: clampText(text, 400),
+        reply: clampText(text, COACH_REPLY_MAX),
         meta: kbMeta,
         ...inferAgentActionsFromUserMsg(userMsg, session)
     };
@@ -697,6 +710,7 @@ function parseJsonFromAI(text) {
 
 function parseCoachAgentResponse(content, userMsg, task, session) {
     const text = String(content || '').trim();
+    const replyMax = 3500;
     if (!text) return buildOfflineAgentReply(userMsg, task, session);
     
     try {
@@ -704,7 +718,7 @@ function parseCoachAgentResponse(content, userMsg, task, session) {
         const reply = raw.reply || raw.message || raw.content || raw.text;
         if (reply) {
             return {
-                reply: clampText(String(reply), 400),
+                reply: clampText(String(reply), replyMax),
                 advance: !!(raw.advance || raw.next_step),
                 complete: !!raw.complete
             };
@@ -712,7 +726,7 @@ function parseCoachAgentResponse(content, userMsg, task, session) {
     } catch (_) {}
     
     if (!text.startsWith('{') && !text.startsWith('[')) {
-        return { reply: clampText(text, 400), advance: false, complete: false };
+        return { reply: clampText(text, replyMax), advance: false, complete: false };
     }
     
     const replyMatch = text.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
@@ -724,7 +738,7 @@ function parseCoachAgentResponse(content, userMsg, task, session) {
                 .replace(/\\"/g, '"')
                 .replace(/\\\\/g, '\\');
             return {
-                reply: clampText(unescaped, 400),
+                reply: clampText(unescaped, replyMax),
                 advance: /"advance"\s*:\s*true/i.test(text),
                 complete: /"complete"\s*:\s*true/i.test(text)
             };
@@ -1252,13 +1266,28 @@ ${ctx.activeGoals.length ? `進行中的大目標：${ctx.activeGoals.join('、'
             const set = new Set(boundKb);
             docs = docs.filter(d => set.has(d.kbId || 'general'));
         }
-        docs = docs.slice(0, 10);
+        docs = docs.slice(0, 6);
         if (docs.length) {
-            const docText = docs.map(d => `--- 文件名稱：${d.title} ---\n${d.content}`).join('\n\n');
+            // Cap per-doc + total payload so coach stays fast and within model context
+            const perDoc = 900;
+            const maxTotal = 3200;
+            let used = 0;
+            const parts = [];
+            for (const d of docs) {
+                if (used >= maxTotal) break;
+                const body = String(d.content || d.summary || '').slice(0, Math.min(perDoc, maxTotal - used));
+                if (!body.trim()) {
+                    parts.push(`--- 文件名稱：${d.title || d.filename || '未命名'} ---\n（無內文摘要，僅檔名可作引用提示）`);
+                    continue;
+                }
+                used += body.length;
+                parts.push(`--- 文件名稱：${d.title || d.filename || '未命名'} ---\n${body}`);
+            }
+            const docText = parts.join('\n\n');
             const scope = boundDocs.length
                 ? '（本任務綁定文件）'
                 : (boundKb.length ? '（本任務綁定庫）' : '');
-            text += `\n\n=== 團隊共享知識庫與新人資料${scope} ===\n${docText}\n=================================\n注意：在回答時，若用戶的問題涉及此專案、流程或工作指南，請務必遵循並優先引用上方「團隊共享知識庫」的內容來進行回覆。`;
+            text += `\n\n=== 團隊共享知識庫與新人資料${scope} ===\n${docText}\n=================================\n注意：若問題涉及專案流程或工作指南，優先依上方知識庫內容回答；不足處可明確說明需查完整文件。`;
         }
     }
     
