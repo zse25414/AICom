@@ -1474,6 +1474,10 @@ function handleCoachOptionShortcuts(msg) {
         if (typeof seedDemoFirstTask === 'function') seedDemoFirstTask();
         return true;
     }
+    if (/連上 AI|設定 AI 連線/.test(t)) {
+        if (typeof openKeyWizard === 'function') openKeyWizard();
+        return true;
+    }
     if (/去設定|看用量|用量/.test(t)) {
         if (typeof showSection === 'function') showSection('settings');
         try { if (typeof renderUsageMeter === 'function') renderUsageMeter(); } catch (_) {}
@@ -1591,6 +1595,7 @@ async function sendCoachAgentMessage(preset) {
             result = await coachAgentRespondWithAI(msg, task, S.focusSession);
         } else {
             result = buildOfflineAgentReply(msg, task, S.focusSession);
+            if (typeof maybeAppendAiUpgradeHint === 'function') result = maybeAppendAiUpgradeHint(result);
             const skip = resolveCoachKbSkipReason(task);
             if (S.enterpriseSession && !result.meta) {
                 result.meta = {
@@ -1759,7 +1764,7 @@ function getCoachReadinessChecks() {
             ok: kbOk,
             action: null
         },
-        { id: 'api', label: 'AI 連線', ok: isApiReady(), action: 'showSection', actionArg: 'settings' }
+        { id: 'api', label: 'AI 連線', ok: isApiReady(), action: 'openKeyWizard' }
     ];
 }
 

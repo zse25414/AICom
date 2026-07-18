@@ -15,6 +15,11 @@
     --nav-height: 4rem;
 }
 
+/* A11y（P5-A4）：暗底說明文字對比校正 — 覆寫 text-* utility（不動 bg-/border-）。
+   數值由 scripts/check-contrast.js 驗證：slate-900/950 上需 ≥ 4.5:1（WCAG AA）。 */
+.text-slate-500 { color: #8093ac; }
+.text-slate-600 { color: #74839c; }
+
 body {
     font-family: 'Inter', 'Noto Sans TC', system_ui, sans-serif;
     -webkit-font-smoothing: antialiased;

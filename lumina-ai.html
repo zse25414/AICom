@@ -1464,6 +1464,9 @@
                         <div class="font-semibold mb-4 flex items-center gap-x-2">
                             <i class="fa-solid fa-brain text-violet-400"></i><span>DeepSeek AI 連線</span>
                             <span id="api-status-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">未啟用</span>
+                            <button type="button" data-lumina-action="openKeyWizard" class="ml-auto text-[11px] px-3 py-1.5 rounded-xl border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10">
+                                <i class="fa-solid fa-wand-magic-sparkles mr-1"></i>第一次設定？跟嚮導走
+                            </button>
                         </div>
                         <div class="space-y-4">
                             <label class="flex items-center gap-x-3 cursor-pointer">
@@ -1481,7 +1484,7 @@
                                 <label class="text-xs text-slate-400 block mb-1.5">API Key</label>
                                 <input id="settings-api-key" type="password" placeholder="sk-..." autocomplete="off"
                                        class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring font-mono">
-                                <div class="text-[10px] text-amber-400/80 mt-1.5">⚠️ Key 只存在你的瀏覽器 localStorage，教練與 RAG 知識庫查詢會使用此 Key。請勿分享或公開貼出。</div>
+                                <div class="text-[10px] text-amber-400/80 mt-1.5">⚠️ Key 只存在你的瀏覽器工作階段（sessionStorage，關閉分頁即清除），教練與 RAG 知識庫查詢會使用此 Key。請勿分享或公開貼出。</div>
                                 <button type="button" data-lumina-action="clearApiKey" class="mt-2 text-[10px] px-3 py-1.5 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10">
                                     清除已儲存的 API Key
                                 </button>
@@ -1747,6 +1750,9 @@
         </div>
     </div>
     
+    <!-- AI key setup wizard (rendered by ui/keywizard.js) -->
+    <div id="key-wizard-overlay" class="auth-overlay hidden" role="dialog" aria-labelledby="key-wizard-title" aria-modal="true"></div>
+
     <!-- Keyboard shortcuts help -->
     <div id="shortcuts-help-overlay" class="shortcuts-help-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcuts-help-title" hidden>
         <div class="shortcuts-help-backdrop" data-lumina-action="closeShortcutsHelp"></div>

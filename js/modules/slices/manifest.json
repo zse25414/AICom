@@ -32,6 +32,7 @@
   "lazy": [
     "coach/agent.js",
     "coach/decompose.js",
+    "coach/keywizard.js",
     "coach/plans.js",
     "enterprise/documents.js",
     "enterprise/team.js"

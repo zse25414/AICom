@@ -4,6 +4,7 @@
   "private": true,
   "description": "光流 AI Lumina — 個人生產力應用",
   "scripts": {
+    "setup": "node scripts/setup.js",
     "start": "http-server . -p 3456 -c-1 --cors",
     "api": "node api-proxy.js",
     "rag": "node scripts/run-rag.js",
@@ -20,7 +21,9 @@
     "build:dev": "npm run build:tailwind && npm run build:app",
     "prestart": "npm run build",
     "predev": "npm run build:dev",
-    "test": "npm run build:app:lazy && node scripts/check-bundle-size.js && node test-init.js && node check-security.js && node check-unsafe.js && node scripts/test-register.js && node scripts/test-security-api.js && node scripts/test-phase01.js && node scripts/test-phase02.js && node scripts/test-phase03.js && node scripts/test-phase04.js",
+    "test": "npm run build:app:lazy && node scripts/check-bundle-size.js && node test-init.js && node check-security.js && node check-unsafe.js && node scripts/check-contrast.js && node scripts/test-register.js && node scripts/test-security-api.js && node scripts/test-phase01.js && node scripts/test-phase02.js && node scripts/test-phase03.js && node scripts/test-phase04.js",
+    "test:contrast": "node scripts/check-contrast.js",
+    "test:ui": "node scripts/test-ui-regression.js",
     "test:phase01": "node scripts/test-phase01.js",
     "test:phase02": "node scripts/test-phase02.js",
     "test:phase03": "node scripts/test-phase03.js",
@@ -55,6 +58,7 @@
     "concurrently": "^9.2.0",
     "esbuild": "^0.28.1",
     "jsdom": "^26.1.0",
+    "playwright": "^1.61.1",
     "tailwindcss": "^3.4.17"
   }
 }

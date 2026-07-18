@@ -14,10 +14,12 @@
 
 ```bash
 npm install
-cp .env.example .env          # 填入 DEEPSEEK_API_KEY 等密鑰
-npm run rag:setup             # 建立 RAG venv + 安裝依賴（首次必做）
-npm run dev                   # 前端 :3456、API :3001、RAG :8000
+npm run setup                 # 首次啟動精靈：檢查環境、建 .env、可填 API key（沒 key 也能用）
+npm run dev:all               # 前端 :3456、API :3001、RAG :8000
 ```
+
+> 精靈會人話診斷缺什麼（Python、venv、埠占用）並給下一步指令。
+> 手動路徑：`cp .env.example .env` → `npm run rag:setup` → `npm run dev`。
 
 | 指令 | 說明 |
 |------|------|

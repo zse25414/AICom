@@ -24,3 +24,4 @@ api-proxy.monolith.bak.js
 *.monolith.bak.js
 server/runtime-legacy.pre-domain.bak.js
 *.pre-domain.bak.js
+test-artifacts/

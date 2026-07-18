@@ -10,8 +10,9 @@ const root = path.join(__dirname, '..');
 // 上限 = 實測 + ~10% headroom。
 const limits = {
     // 2026-07-18d：Phase 0–3 analytics + usage + chunk-errors 進 core
+    // 2026-07-18e：P5-A1 key 設定嚮導進 coach chunk（實測 115 KB + headroom）
     'js/lumina-app.js': 300 * 1024,
-    'js/chunks/lumina-coach.js': 115 * 1024,
+    'js/chunks/lumina-coach.js': 126 * 1024,
     'js/chunks/lumina-enterprise-docs.js': 130 * 1024
 };
 
