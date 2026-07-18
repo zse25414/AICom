@@ -150,6 +150,153 @@ function register(api) {
             });
         }
 
+        // ── Multi-group: list memberships for logged-in user ──
+        if (method === 'GET' && urlPath === '/api/enterprise/memberships') {
+            const authUser = await api.requireAuth(req);
+            if (!authUser) {
+                return api.sendJson(res, 401, { error: '請先登入' });
+            }
+            const memberships = api.listMembershipsForUser(store, authUser.id);
+            return api.sendJson(res, 200, {
+                ok: true,
+                memberships,
+                count: memberships.length
+            });
+        }
+
+        // ── Leave group (self) ──
+        if (method === 'POST' && urlPath === '/api/enterprise/group/leave') {
+            return api.readBody(req).then(async (body) => {
+                const code = api.normalizeCode(body.groupCode || body.code);
+                const memberId = body.memberId;
+                const group = api.getGroup(store, code);
+                if (!group) {
+                    return api.sendJson(res, 404, { error: '找不到群組', code: 'GROUP_NOT_FOUND' });
+                }
+                const authUser = await api.getOptionalAuth(req);
+                const memberCheck = await api.assertEnterpriseMember(group, memberId, authUser, { store });
+                if (!memberCheck.ok) {
+                    return api.sendJson(res, memberCheck.status || 403, {
+                        error: memberCheck.error || '無權退出此群組',
+                        code: memberCheck.code || 'GROUP_FORBIDDEN'
+                    });
+                }
+                const member = memberCheck.member;
+                const can = api.assertCanRemoveMember(group, member, { isKick: false });
+                if (!can.ok) {
+                    return api.sendJson(res, can.status || 409, { error: can.error, code: can.code });
+                }
+
+                // Notify remaining managers
+                const remainingManagers = group.members.filter(
+                    (m) => m.role === 'manager' && m.id !== member.id
+                );
+                for (const mgr of remainingManagers) {
+                    api.pushNotification(group, {
+                        type: 'member_left',
+                        recipientId: mgr.id,
+                        title: '成員退出',
+                        message: `${member.name} 已退出群組`,
+                        actorId: member.id,
+                        actorName: member.name
+                    });
+                }
+
+                const result = api.removeMemberFromGroup(group, member.id);
+                if (!result.ok) {
+                    return api.sendJson(res, 404, { error: '找不到成員', code: 'MEMBER_NOT_FOUND' });
+                }
+                await saveStore(store);
+                return api.sendJson(res, 200, {
+                    ok: true,
+                    left: {
+                        groupCode: group.code,
+                        groupName: group.name,
+                        memberId: member.id
+                    },
+                    groupEmpty: !!result.groupEmpty
+                });
+            });
+        }
+
+        // ── Kick member (manager only) ──
+        if (method === 'POST' && urlPath === '/api/enterprise/group/kick') {
+            return api.readBody(req).then(async (body) => {
+                const code = api.normalizeCode(body.groupCode || body.code);
+                const managerId = body.managerId;
+                const targetMemberId = body.targetMemberId || body.memberId;
+                const group = api.getGroup(store, code);
+                if (!group) {
+                    return api.sendJson(res, 404, { error: '找不到群組', code: 'GROUP_NOT_FOUND' });
+                }
+                if (!targetMemberId) {
+                    return api.sendJson(res, 400, { error: '請指定要移除的成員', code: 'VALIDATION_ERROR' });
+                }
+                if (managerId && targetMemberId === managerId) {
+                    return api.sendJson(res, 400, {
+                        error: '不能移除自己，請使用「退出群組」',
+                        code: 'USE_LEAVE'
+                    });
+                }
+
+                const authUser = await api.getOptionalAuth(req);
+                const managerCheck = await api.assertEnterpriseMember(group, managerId, authUser, { store });
+                if (!managerCheck.ok) {
+                    return api.sendJson(res, managerCheck.status || 403, {
+                        error: managerCheck.error || '無權操作',
+                        code: managerCheck.code || 'GROUP_FORBIDDEN'
+                    });
+                }
+                if (managerCheck.member.role !== 'manager') {
+                    return api.sendJson(res, 403, { error: '僅主管可移除成員', code: 'ROLE_FORBIDDEN' });
+                }
+
+                const target = group.members.find((m) => m.id === targetMemberId);
+                if (!target) {
+                    return api.sendJson(res, 404, { error: '找不到該成員', code: 'MEMBER_NOT_FOUND' });
+                }
+                const can = api.assertCanRemoveMember(group, target, { isKick: true });
+                if (!can.ok) {
+                    return api.sendJson(res, can.status || 409, { error: can.error, code: can.code });
+                }
+
+                // Notify target (if still in list) and managers
+                api.pushNotification(group, {
+                    type: 'member_kicked',
+                    recipientId: target.id,
+                    title: '已移出群組',
+                    message: `你已被移出群組「${group.name}」`,
+                    actorId: managerCheck.member.id,
+                    actorName: managerCheck.member.name
+                });
+                for (const mgr of group.members.filter((m) => m.role === 'manager' && m.id !== managerCheck.member.id)) {
+                    api.pushNotification(group, {
+                        type: 'member_kicked',
+                        recipientId: mgr.id,
+                        title: '成員被移除',
+                        message: `${managerCheck.member.name} 已將 ${target.name} 移出群組`,
+                        actorId: managerCheck.member.id,
+                        actorName: managerCheck.member.name
+                    });
+                }
+
+                const result = api.removeMemberFromGroup(group, target.id);
+                if (!result.ok) {
+                    return api.sendJson(res, 404, { error: '找不到成員', code: 'MEMBER_NOT_FOUND' });
+                }
+                await saveStore(store);
+                return api.sendJson(res, 200, {
+                    ok: true,
+                    kicked: {
+                        groupCode: group.code,
+                        groupName: group.name,
+                        memberId: target.id,
+                        name: target.name
+                    }
+                });
+            });
+        }
+
         const groupMatch = urlPath.match(/^\/api\/enterprise\/group\/([A-Za-z0-9]+)$/);
         if (method === 'GET' && groupMatch) {
             const group = api.getGroup(store, groupMatch[1]);

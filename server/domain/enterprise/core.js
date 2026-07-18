@@ -86,6 +86,82 @@ function register(api) {
         return { ok: true, member };
     }
 
+    /**
+     * List all groups where this userId is a member (for multi-group sync).
+     */
+    function listMembershipsForUser(store, userId) {
+        if (!userId) return [];
+        const out = [];
+        for (const group of Object.values(store.groups || {})) {
+            if (!group || !Array.isArray(group.members)) continue;
+            const member = group.members.find(m => m.userId === userId);
+            if (!member) continue;
+            out.push({
+                groupCode: group.code,
+                groupName: group.name || group.code,
+                memberId: member.id,
+                name: member.name,
+                role: member.role === 'manager' ? 'manager' : 'member',
+                joinedAt: member.joinedAt || null
+            });
+        }
+        // stable sort by code
+        out.sort((a, b) => String(a.groupCode).localeCompare(String(b.groupCode)));
+        return out;
+    }
+
+    /**
+     * Sole manager cannot leave while other members remain.
+     */
+    function assertCanRemoveMember(group, member, { isKick = false } = {}) {
+        if (!group || !member) {
+            return { ok: false, status: 404, error: '找不到成員', code: 'MEMBER_NOT_FOUND' };
+        }
+        if (member.role === 'manager') {
+            const managers = (group.members || []).filter(m => m.role === 'manager');
+            const others = (group.members || []).filter(m => m.id !== member.id);
+            if (managers.length <= 1 && others.length > 0) {
+                return {
+                    ok: false,
+                    status: 409,
+                    error: isKick
+                        ? '無法移除唯一主管：請先指定其他主管'
+                        : '你是唯一主管且仍有其他成員，請先指定其他主管再退出',
+                    code: 'LAST_MANAGER'
+                };
+            }
+        }
+        return { ok: true };
+    }
+
+    /**
+     * Remove member from group; returns { ok, groupEmpty }.
+     */
+    function removeMemberFromGroup(group, memberId) {
+        if (!group || !Array.isArray(group.members)) {
+            return { ok: false, removed: null };
+        }
+        const idx = group.members.findIndex(m => m.id === memberId);
+        if (idx < 0) return { ok: false, removed: null };
+        const [removed] = group.members.splice(idx, 1);
+        // Drop open tasks assigned to removed member (keep history? soft-cancel)
+        if (Array.isArray(group.tasks)) {
+            group.tasks = group.tasks.map((t) => {
+                if (t.assigneeId === memberId && !t.completed) {
+                    return {
+                        ...t,
+                        completed: false,
+                        cancelled: true,
+                        cancelledAt: new Date().toISOString(),
+                        cancelReason: 'member_left'
+                    };
+                }
+                return t;
+            });
+        }
+        return { ok: true, removed, groupEmpty: group.members.length === 0 };
+    }
+
     async function assertRagGroupAccess(groupCode, authUser, options = {}) {
         const { requireManager = false } = options;
         const code = api.normalizeCode(groupCode);
@@ -118,6 +194,9 @@ function register(api) {
         prepareStore,
         getGroup,
         ensureNotifications,
+        listMembershipsForUser,
+        assertCanRemoveMember,
+        removeMemberFromGroup,
         pushNotification,
         assertEnterpriseMember,
         assertRagGroupAccess

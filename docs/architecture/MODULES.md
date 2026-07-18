@@ -35,7 +35,7 @@ Python RAG (:8000)  rag_service/main.py + rag_engine.py
 | **Bootstrap** | `server/bootstrap.js` | init store + listen | 處理 HTTP body |
 | **Auth routes** | `server/routes/auth.js` | `/api/auth/*` | 碰 enterprise store |
 | **User-data routes** | `server/routes/user-data.js` | `/api/user/*` | 碰 RAG / 群組 |
-| **Enterprise routes** | `server/routes/enterprise.js` | `/api/enterprise/*` | 碰個人 JWT 註冊 |
+| **Enterprise routes** | `server/routes/enterprise.js` | `/api/enterprise/*`（含 memberships / leave / kick） | 碰個人 JWT 註冊 |
 | **RAG routes** | `server/routes/rag.js` | `/api/rag/*` | 直接改 Mongo 使用者 |
 | **Chat routes** | `server/routes/chat.js` | `POST /api/chat` | 持久化任務 |
 | **Health routes** | `server/routes/health.js` | `/health` `/ready` `/api/ops/*` | 回傳密鑰 |

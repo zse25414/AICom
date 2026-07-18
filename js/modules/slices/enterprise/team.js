@@ -137,16 +137,23 @@ function getMemberInitials(name) {
         : n.slice(0, 2).toUpperCase();
 }
 
-function renderMemberChip(member) {
+function renderMemberChip(member, opts = {}) {
     const isManager = member.role === 'manager';
     const colors = isManager
         ? 'bg-amber-500/20 text-amber-200 border-amber-500/30'
         : 'bg-indigo-500/20 text-indigo-200 border-indigo-500/30';
+    const canKick = !!opts.canKick && member.id && member.id !== opts.selfId;
     return `
         <span class="member-chip">
             <span class="member-avatar ${colors} border">${escapeHtml(getMemberInitials(member.name))}</span>
             <span>${escapeHtml(member.name)}</span>
             ${isManager ? '<span class="text-[9px] text-amber-400/80 ml-0.5">主管</span>' : ''}
+            ${canKick
+                ? `<button type="button" class="member-kick-btn" title="移出群組"
+                    data-lumina-action="kickEnterpriseMember" data-lumina-arg="${escapeHtml(member.id)}">
+                    <i class="fa-solid fa-user-minus"></i>
+                </button>`
+                : ''}
         </span>
     `;
 }
@@ -477,49 +484,199 @@ async function joinEnterpriseGroup() {
 }
 
 /**
- * Leave one membership (by code) or the active group.
- * Removes from local multi-group list; auto-switches to another if available.
+ * Apply local leave after server (or offline) success.
  */
-function leaveEnterpriseGroup(groupCode) {
+function applyLocalLeaveMembership(code) {
+    ensureEnterpriseMembershipsLoaded();
+    S.enterpriseMemberships = S.enterpriseMemberships.filter((m) => m.groupCode !== code);
+    saveEnterpriseMemberships();
+
+    const leavingActive = normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '') === code;
+    if (!leavingActive) {
+        renderEnterprisePage();
+        return;
+    }
+    try { stopEnterprisePolling(); } catch (_) {}
+    clearActiveEnterpriseWorkspaceCaches();
+    const next = S.enterpriseMemberships[0] || null;
+    setActiveEnterpriseSession(next);
+    S.enterpriseJoinFormOpen = false;
+    if (next) {
+        try { loadLocallyReadNotificationIds(); } catch (_) {}
+        refreshEnterpriseData(true).then(() => {
+            renderEnterprisePage();
+            try { startEnterprisePolling(); } catch (_) {}
+            try { refreshTeamNotifications(true); } catch (_) {}
+            try { updateNotificationUI(); } catch (_) {}
+        }).catch(() => renderEnterprisePage());
+    } else {
+        setActiveEnterpriseSession(null);
+        renderEnterprisePage();
+        try { updateNotificationUI(); } catch (_) {}
+    }
+}
+
+/**
+ * Leave one membership (by code) or the active group.
+ * Calls server leave API when online + logged in; falls back to local-only.
+ */
+async function leaveEnterpriseGroup(groupCode) {
     ensureEnterpriseMembershipsLoaded();
     const code = normalizeEnterpriseCode(groupCode || S.enterpriseSession?.groupCode || '');
     if (!code) {
         showToast('沒有可離開的群組', 'error');
         return;
     }
-    const target = S.enterpriseMemberships.find((m) => m.groupCode === code);
+    const target = S.enterpriseMemberships.find((m) => m.groupCode === code)
+        || (S.enterpriseSession?.groupCode === code ? S.enterpriseSession : null);
     const label = target?.groupName || code;
-    if (!confirm(`確定退出群組「${label}」？\n代碼：${code}\n（只會從本機清單移除，之後可用代碼再加入）`)) return;
+    const memberId = target?.memberId || (S.enterpriseSession?.groupCode === code ? S.enterpriseSession.memberId : null);
+    if (!confirm(`確定退出群組「${label}」？\n代碼：${code}\n伺服器會正式移除你的成員資格（可再以代碼加入）。`)) return;
 
-    S.enterpriseMemberships = S.enterpriseMemberships.filter((m) => m.groupCode !== code);
+    // Prefer server leave when we have memberId and not pure offline session
+    const useServer = memberId && isLoggedIn() && !(target?.offline && !navigator.onLine);
+    if (useServer) {
+        const api = await enterpriseFetch('POST', '/api/enterprise/group/leave', {
+            groupCode: code,
+            memberId
+        });
+        if (api.ok) {
+            applyLocalLeaveMembership(code);
+            showToast(`已正式退出群組 ${code}`, 'success');
+            return;
+        }
+        if (!api.offline) {
+            showToast(api.error || '退出失敗', 'error');
+            return;
+        }
+        // offline fallback below
+    }
+
+    // Offline / local leave
+    try {
+        const store = loadLocalEnterpriseStore();
+        const group = store.groups[code];
+        if (group && memberId) {
+            group.members = (group.members || []).filter((m) => m.id !== memberId);
+            saveLocalEnterpriseStore(store);
+        }
+    } catch (_) {}
+    applyLocalLeaveMembership(code);
+    showToast(`已退出群組 ${code}${useServer ? '（離線本機）' : ''}`, 'success');
+}
+
+/**
+ * Manager kicks a member from the active group (server-side).
+ */
+async function kickEnterpriseMember(targetMemberId) {
+    if (!S.enterpriseSession || S.enterpriseSession.role !== 'manager') {
+        showToast('僅主管可移除成員', 'error');
+        return;
+    }
+    if (!targetMemberId || targetMemberId === S.enterpriseSession.memberId) {
+        showToast('請使用「退出此組」離開自己', 'error');
+        return;
+    }
+    const target = (S.enterpriseGroupData?.members || []).find((m) => m.id === targetMemberId);
+    const name = target?.name || '該成員';
+    if (!confirm(`確定將「${name}」移出群組 ${S.enterpriseSession.groupCode}？`)) return;
+
+    if (S.enterpriseSession.offline) {
+        try {
+            const store = loadLocalEnterpriseStore();
+            const group = store.groups[normalizeEnterpriseCode(S.enterpriseSession.groupCode)];
+            if (group) {
+                group.members = (group.members || []).filter((m) => m.id !== targetMemberId);
+                saveLocalEnterpriseStore(store);
+            }
+            await refreshEnterpriseData(true);
+            renderEnterprisePage();
+            showToast(`已移出 ${name}（離線本機）`, 'success');
+        } catch (e) {
+            showToast(e.message || '移出失敗', 'error');
+        }
+        return;
+    }
+
+    const api = await enterpriseFetch('POST', '/api/enterprise/group/kick', {
+        groupCode: S.enterpriseSession.groupCode,
+        managerId: S.enterpriseSession.memberId,
+        targetMemberId
+    });
+    if (!api.ok) {
+        showToast(api.error || '移出失敗', 'error');
+        return;
+    }
+    showToast(`已移出 ${name}`, 'success');
+    await refreshEnterpriseData(true);
+    renderEnterprisePage();
+}
+
+/**
+ * Pull server memberships for the logged-in user and merge into local multi-group list.
+ */
+async function syncEnterpriseMembershipsFromServer(options = {}) {
+    if (!isLoggedIn()) return { ok: false, reason: 'not_logged_in' };
+    const api = await enterpriseFetch('GET', '/api/enterprise/memberships');
+    if (!api.ok) {
+        if (!api.offline) console.warn('[Lumina] memberships sync failed', api.error);
+        return { ok: false, offline: !!api.offline, error: api.error };
+    }
+    const remote = Array.isArray(api.data?.memberships) ? api.data.memberships : [];
+    ensureEnterpriseMembershipsLoaded();
+    const byCode = new Map();
+    remote.forEach((m) => {
+        const code = normalizeEnterpriseCode(m.groupCode);
+        if (!code) return;
+        byCode.set(code, {
+            memberId: m.memberId,
+            name: m.name,
+            role: m.role === 'manager' ? 'manager' : 'member',
+            groupCode: code,
+            groupName: m.groupName || code,
+            offline: false,
+            joinedAt: m.joinedAt || null
+        });
+    });
+    // Keep pure offline-local memberships not present on server
+    const offlineLocals = (S.enterpriseMemberships || []).filter(
+        (m) => m.offline && !byCode.has(normalizeEnterpriseCode(m.groupCode))
+    );
+    S.enterpriseMemberships = [...byCode.values(), ...offlineLocals];
     saveEnterpriseMemberships();
 
-    const leavingActive = normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '') === code;
-    if (leavingActive) {
+    const activeCode = normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '');
+    if (activeCode && byCode.has(activeCode)) {
+        setActiveEnterpriseSession({ ...S.enterpriseSession, ...byCode.get(activeCode) });
+    } else if (activeCode && !byCode.has(activeCode) && !offlineLocals.some((m) => m.groupCode === activeCode)) {
+        // Kicked / left on another device
         try { stopEnterprisePolling(); } catch (_) {}
         clearActiveEnterpriseWorkspaceCaches();
         const next = S.enterpriseMemberships[0] || null;
         setActiveEnterpriseSession(next);
-        S.enterpriseJoinFormOpen = false;
+        if (options.toast !== false) {
+            showToast(next
+                ? `帳號已不在 ${activeCode}，已切換至 ${next.groupName || next.groupCode}`
+                : `帳號已不在群組 ${activeCode}`, 'success');
+        }
         if (next) {
             try { loadLocallyReadNotificationIds(); } catch (_) {}
-            showToast(`已退出 ${code}，已切換至 ${next.groupName || next.groupCode}`, 'success');
-            refreshEnterpriseData(true).then(() => {
-                renderEnterprisePage();
-                try { startEnterprisePolling(); } catch (_) {}
-                try { refreshTeamNotifications(true); } catch (_) {}
-                try { updateNotificationUI(); } catch (_) {}
-            }).catch(() => renderEnterprisePage());
-        } else {
-            setActiveEnterpriseSession(null);
-            renderEnterprisePage();
-            try { updateNotificationUI(); } catch (_) {}
-            showToast(`已退出群組 ${code}`, 'success');
+            try { await refreshEnterpriseData(true); } catch (_) {}
+            try { startEnterprisePolling(); } catch (_) {}
+            try { await refreshTeamNotifications(true); } catch (_) {}
         }
-    } else {
-        renderEnterprisePage();
-        showToast(`已退出群組 ${code}`, 'success');
+    } else if (!activeCode && S.enterpriseMemberships.length && options.autoSelect !== false) {
+        setActiveEnterpriseSession(S.enterpriseMemberships[0]);
+        try { loadLocallyReadNotificationIds(); } catch (_) {}
+        try { await refreshEnterpriseData(true); } catch (_) {}
+        try { startEnterprisePolling(); } catch (_) {}
     }
+
+    if (options.render !== false) {
+        try { renderEnterprisePage(); } catch (_) {}
+        try { updateNotificationUI(); } catch (_) {}
+    }
+    return { ok: true, memberships: S.enterpriseMemberships };
 }
 
 /**
@@ -636,6 +793,32 @@ function renderEnterprisePage() {
     const joinFormBar = document.getElementById('team-join-form-bar');
 
     ensureEnterpriseMembershipsLoaded();
+    // Soft refresh memberships from server when opening team (debounced)
+    if (isLoggedIn() && !S._membershipSyncInFlight) {
+        const now = Date.now();
+        if (!S._membershipSyncAt || now - S._membershipSyncAt > 15000) {
+            S._membershipSyncInFlight = true;
+            S._membershipSyncAt = now;
+            Promise.resolve()
+                .then(() => syncEnterpriseMembershipsFromServer({ toast: false, render: false, autoSelect: false }))
+                .then(() => {
+                    renderEnterpriseMembershipsPanel();
+                    // refresh badge/switcher labels without full re-entry loops
+                    try {
+                        const memCount = (S.enterpriseMemberships || []).length;
+                        const b = document.getElementById('team-status-badge');
+                        if (b && S.enterpriseSession) {
+                            const role = S.enterpriseSession.role === 'manager' ? '主管' : '成員';
+                            b.textContent = memCount > 1
+                                ? `${S.enterpriseSession.groupCode} · ${role} · 共 ${memCount} 組`
+                                : `${S.enterpriseSession.groupCode} · ${role}`;
+                        }
+                    } catch (_) {}
+                })
+                .catch(() => {})
+                .finally(() => { S._membershipSyncInFlight = false; });
+        }
+    }
     renderEnterpriseMembershipsPanel();
 
     const hasSession = !!S.enterpriseSession?.groupCode;
@@ -804,8 +987,10 @@ function renderEnterpriseTasks() {
     if (statRate) statRate.textContent = rate + '%';
     
     if (membersEl) {
+        const canKick = S.enterpriseSession.role === 'manager';
+        const selfId = S.enterpriseSession.memberId;
         membersEl.innerHTML = members.length
-            ? members.map(m => renderMemberChip(m)).join('')
+            ? members.map(m => renderMemberChip(m, { canKick, selfId })).join('')
             : '<span class="text-xs text-slate-500">尚無成員</span>';
     }
     

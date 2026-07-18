@@ -4079,3 +4079,26 @@ body.simple-mode .positioning-tagline { font-size: 0.9rem; }
     background: rgba(99, 102, 241, 0.25);
     border: 1px solid rgba(99, 102, 241, 0.35);
 }
+
+.member-chip {
+    position: relative;
+}
+.member-kick-btn {
+    margin-left: 0.25rem;
+    width: 1.35rem;
+    height: 1.35rem;
+    border-radius: 0.4rem;
+    border: 1px solid rgba(248, 113, 113, 0.35);
+    background: rgba(127, 29, 29, 0.25);
+    color: #fca5a5;
+    font-size: 0.6rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.member-kick-btn:hover {
+    background: rgba(239, 68, 68, 0.25);
+    color: #fecaca;
+}

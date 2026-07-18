@@ -271,6 +271,16 @@ async function finishAuth(user, isNew, token) {
         localStorage.removeItem('lumina_welcomed');
     }
     await loadUserDataFromServer();
+    // Sync multi-group enterprise memberships bound to this account
+    try {
+        if (typeof window.syncEnterpriseMembershipsFromServer === 'function') {
+            await window.syncEnterpriseMembershipsFromServer({ toast: false, render: true });
+        } else if (typeof syncEnterpriseMembershipsFromServer === 'function') {
+            await syncEnterpriseMembershipsFromServer({ toast: false, render: true });
+        }
+    } catch (e) {
+        console.warn('[Lumina] enterprise memberships sync after auth', e);
+    }
     hideAuthOverlay();
     localStorage.setItem(C.AUTH_GUEST_DISMISSED_KEY, 'true');
     updateAuthUI();
@@ -404,6 +414,15 @@ async function checkAuthOnInit() {
                 persistAuthSession(data.user, auth.session.token);
                 applyAuthUserToProfile(data.user, false);
                 await loadUserDataFromServer();
+                try {
+                    if (typeof window.syncEnterpriseMembershipsFromServer === 'function') {
+                        await window.syncEnterpriseMembershipsFromServer({ toast: false, render: false });
+                    } else if (typeof syncEnterpriseMembershipsFromServer === 'function') {
+                        await syncEnterpriseMembershipsFromServer({ toast: false, render: false });
+                    }
+                } catch (e) {
+                    console.warn('[Lumina] enterprise memberships sync on init', e);
+                }
                 updateAuthUI();
                 refreshUI({ dashboard: true, filters: true });
                 return;
