@@ -975,10 +975,17 @@
                                         <div class="text-xs text-slate-500 mt-0.5">共享專案資料、新人培訓與開發文檔 · 顯示索引狀態</div>
                                     </div>
                                 </div>
-                                <button type="button" id="team-add-doc-btn" data-lumina-action="toggleAddDocForm"
-                                        class="hidden min-h-[44px] text-xs px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-medium focus-ring flex-shrink-0">
-                                    <i class="fa-solid fa-plus mr-1"></i>新增文件
-                                </button>
+                                <div class="flex items-center gap-2 flex-shrink-0">
+                                    <button type="button" id="team-rag-reconcile-btn" data-lumina-action="reconcileTeamRagIndexes"
+                                            class="hidden min-h-[44px] text-xs px-3.5 py-2 rounded-xl border border-purple-500/30 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 font-medium focus-ring"
+                                            title="比對已發布文件與可被檢索索引，找出並修復不一致">
+                                        <i class="fa-solid fa-scale-balanced mr-1"></i>索引對帳
+                                    </button>
+                                    <button type="button" id="team-add-doc-btn" data-lumina-action="toggleAddDocForm"
+                                            class="hidden min-h-[44px] text-xs px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-medium focus-ring">
+                                        <i class="fa-solid fa-plus mr-1"></i>新增文件
+                                    </button>
+                                </div>
                             </div>
                             
                             <!-- Add Document Form (Manager Only) -->

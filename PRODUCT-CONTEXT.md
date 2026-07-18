@@ -97,7 +97,7 @@ js/modules/slices/* ──build──► js/lumina-app.js + chunks
 |----|------|------|
 | P0-金流 | 付費／配額升級真實閉環 | 先前刻意延後；產品變現關鍵 |
 | P0-secret | 生產 secrets 不可用預設值 | **已做**：生產缺 secret 啟動即 exit 1；dev `/ready` 顯示 `details.secrets` 警告。HTTPS 仍待部署層 |
-| P0-RAG信任 | 文件「已發布」vs「可被檢索」狀態一致 | **已做一輪**：`POST /api/rag/reconcile`（manager）對帳 ghost／卡住 pending／殘留索引，`fix:true` 自動重索引＋清殘留；E2E 驗證過。尚未排程自動對帳 |
+| P0-RAG信任 | 文件「已發布」vs「可被檢索」狀態一致 | **已做**：`POST /api/rag/reconcile`（manager）＋文件工具列「索引對帳」按鈕；伺服器每 60 分自動對帳（`RAG_RECONCILE_INTERVAL_MS`，只重排索引不清殘留）。E2E 驗證過 |
 | P0-主路徑 | 新人 5 分鐘 dogfood 常綠 | `docs/engineering/DOGFOOD-5MIN.md` |
 
 ### P1 — 實用／黏著

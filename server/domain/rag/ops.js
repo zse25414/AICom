@@ -672,6 +672,8 @@ function register(api) {
      */
     async function reconcileRagIndexes(groupCode, options = {}) {
         const fix = options.fix === true;
+        // 排程模式只重排索引；清殘留（刪除動作）預設跟隨 fix，可單獨關閉
+        const purgeStray = options.purgeStray != null ? options.purgeStray === true : fix;
         const code = api.normalizeCode(groupCode);
         const store = await api.prepareStore(await loadStore());
         const group = api.getGroup(store, code);
@@ -769,6 +771,8 @@ function register(api) {
                 report.fixed.reindexQueued.push(item.documentId);
                 pushRagIndexEvent({ type: 'reconcile-reindex', groupCode: code, documentId: item.documentId });
             }
+        }
+        if (purgeStray) {
             for (const stray of report.strayIndex) {
                 const purge = await proxyRagDeleteIndex(code, stray.kbId, stray.filename);
                 if (purge.ok) {
@@ -781,6 +785,39 @@ function register(api) {
         report.consistent = !report.missingIndex.length && !report.stuckPending.length
             && !report.failed.length && !report.strayIndex.length && !report.unreachableKbs.length;
         return report;
+    }
+
+    // 排程自動對帳：每輪掃全部群組，fix 但不清殘留（刪除類動作留給 manager 手動）
+    let ragReconcileTimer = null;
+    function startRagReconcileScheduler() {
+        const intervalMs = config.RAG_RECONCILE_INTERVAL_MS;
+        if (!intervalMs) return null;
+        if (ragReconcileTimer) return ragReconcileTimer;
+        ragReconcileTimer = setInterval(async () => {
+            try {
+                const health = await probeRagHealthDetail();
+                if (!health.ok) return; // RAG 離線，這輪跳過（避免整片誤報 unreachable）
+                const store = await api.prepareStore(await loadStore());
+                for (const code of Object.keys(store.groups || {})) {
+                    try {
+                        const report = await reconcileRagIndexes(code, { fix: true, purgeStray: false });
+                        if (report.ok !== false && !report.consistent) {
+                            console.warn(
+                                `[Lumina Backend] RAG auto-reconcile ${code}: `
+                                + `reindexQueued=${report.fixed.reindexQueued.length} `
+                                + `stray=${report.strayIndex.length} unreachable=${report.unreachableKbs.length}`
+                            );
+                        }
+                    } catch (e) {
+                        console.warn(`[Lumina Backend] RAG auto-reconcile ${code} error:`, e.message);
+                    }
+                }
+            } catch (e) {
+                console.warn('[Lumina Backend] RAG auto-reconcile sweep error:', e.message);
+            }
+        }, intervalMs);
+        if (typeof ragReconcileTimer.unref === 'function') ragReconcileTimer.unref();
+        return ragReconcileTimer;
     }
 
     async function probeRagHealthDetail() {
@@ -886,6 +923,7 @@ function register(api) {
         probeRagHealthDetail,
         fetchRagKbDocuments,
         reconcileRagIndexes,
+        startRagReconcileScheduler,
         getReadiness
     });
 }

@@ -1906,6 +1906,8 @@ function renderEnterpriseDocuments() {
     
     const addBtn = document.getElementById('team-add-doc-btn');
     if (addBtn) addBtn.classList.toggle('hidden', !isManager);
+    const reconcileBtn = document.getElementById('team-rag-reconcile-btn');
+    if (reconcileBtn) reconcileBtn.classList.toggle('hidden', !(isManager && !S.enterpriseSession.offline));
 
     // Refresh KB cards with live counts when knowledge pane is open (uses cache)
     if (S.teamWorkspaceTab === 'knowledge') {
@@ -2208,6 +2210,60 @@ function hydrateSecureDocImages(rootEl) {
             img.alt = '無法載入圖片（請確認登入狀態後重試）';
         }
     });
+}
+
+async function postRagReconcile(groupCode, fix) {
+    const res = await fetch(getEnterpriseBaseUrl() + '/api/rag/reconcile', {
+        method: 'POST',
+        headers: getAuthHeaders(true),
+        body: JSON.stringify({ group_code: groupCode, fix: fix === true })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || data.detail || `對帳失敗 (${res.status})`);
+    return data;
+}
+
+/** manager：對帳「已發布 vs 可被檢索」，不一致時確認後修復 */
+async function reconcileTeamRagIndexes() {
+    if (!S.enterpriseSession || S.enterpriseSession.role !== 'manager') return;
+    if (S.enterpriseSession.offline) return showToast('離線團隊模式不支援索引對帳', 'error');
+    if (S._ragReconcileInFlight) return;
+    const groupCode = S.enterpriseSession.groupCode;
+    const btn = document.getElementById('team-rag-reconcile-btn');
+    S._ragReconcileInFlight = true;
+    if (btn) { btn.disabled = true; btn.classList.add('opacity-60'); }
+    try {
+        const report = await postRagReconcile(groupCode, false);
+        if (report.consistent) {
+            showToast('知識庫索引一致，文件都可被檢索 ✓', 'success');
+            return;
+        }
+        const parts = [];
+        if (report.missingIndex?.length) parts.push(`${report.missingIndex.length} 份已發布但查不到`);
+        if (report.stuckPending?.length) parts.push(`${report.stuckPending.length} 份索引卡住`);
+        if (report.failed?.length) parts.push(`${report.failed.length} 份索引失敗`);
+        if (report.strayIndex?.length) parts.push(`${report.strayIndex.length} 筆已刪文件的殘留索引`);
+        if (report.unreachableKbs?.length) parts.push(`${report.unreachableKbs.length} 個庫無法檢查（RAG 服務離線？）`);
+        const ok = await showConfirmDialog({
+            title: '索引對帳結果',
+            message: `發現不一致：${parts.join('、')}。要自動修復嗎？（重新排入索引並清除殘留）`,
+            confirmLabel: '修復',
+            cancelLabel: '先不要'
+        });
+        if (!ok) return;
+        const fixed = await postRagReconcile(groupCode, true);
+        const queued = fixed.fixed?.reindexQueued?.length || 0;
+        const purged = fixed.fixed?.strayPurged?.length || 0;
+        showToast(`修復已啟動：重排索引 ${queued} 份、清除殘留 ${purged} 筆`, 'success');
+        try { await refreshEnterpriseData(true); } catch (_) {}
+        ensureRagStatusPolling();
+        renderEnterpriseDocuments();
+    } catch (e) {
+        showToast(`索引對帳失敗：${e.message}`, 'error');
+    } finally {
+        S._ragReconcileInFlight = false;
+        if (btn) { btn.disabled = false; btn.classList.remove('opacity-60'); }
+    }
 }
 
 async function openTeamDocFileSecure(docId) {

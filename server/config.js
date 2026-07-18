@@ -52,6 +52,10 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3456,h
 const RAG_INDEX_TIMEOUT_MS = Math.max(2000, Number(process.env.RAG_INDEX_TIMEOUT_MS) || 12000);
 const RAG_INDEX_MAX_ATTEMPTS = 2;
 const RAG_INDEX_EVENT_LIMIT = 40;
+// 排程自動對帳（0 = 停用；預設每 60 分鐘，僅重排索引不清殘留）
+const RAG_RECONCILE_INTERVAL_MS = process.env.RAG_RECONCILE_INTERVAL_MS != null
+    ? Math.max(0, Number(process.env.RAG_RECONCILE_INTERVAL_MS) || 0)
+    : 60 * 60 * 1000;
 const serviceStartedAt = Date.now();
 
 function enforceProductionSecrets() {
@@ -76,5 +80,6 @@ module.exports = {
     DEFAULT_LLM_API_BASE, ALLOWED_LLM_API_BASES,
     MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_EXT, WEAK_PINS, UPLOADS_DIR, ALLOWED_ORIGINS,
     RAG_INDEX_TIMEOUT_MS, RAG_INDEX_MAX_ATTEMPTS, RAG_INDEX_EVENT_LIMIT,
+    RAG_RECONCILE_INTERVAL_MS,
     serviceStartedAt, enforceProductionSecrets
 };

@@ -27,6 +27,12 @@ function startServer() {
                     '| Auth:', runtime.getAuthBackend(),
                     '| UserData:', runtime.getUserDataBackend());
                 if (dbStats) console.log('  Database:', JSON.stringify(dbStats));
+                if (typeof runtime.startRagReconcileScheduler === 'function') {
+                    const timer = runtime.startRagReconcileScheduler();
+                    console.log('  RAG auto-reconcile:', timer
+                        ? `every ${Math.round(runtime.config.RAG_RECONCILE_INTERVAL_MS / 60000)}min (reindex-only)`
+                        : 'disabled');
+                }
                 resolve(server);
             });
         });
