@@ -1169,7 +1169,10 @@ async function sendCoachAgentMessage(preset) {
                 result.meta = {
                     usedKnowledge: false,
                     kbSkipReason: skip || 'degraded',
-                    taskBound: !!(typeof getTaskBoundKbIds === 'function' && getTaskBoundKbIds(task).length)
+                    taskBound: !!(
+                        (typeof getTaskBoundKbIds === 'function' && getTaskBoundKbIds(task).length) ||
+                        (typeof getTaskBoundDocIds === 'function' && getTaskBoundDocIds(task).length)
+                    )
                 };
             }
         }

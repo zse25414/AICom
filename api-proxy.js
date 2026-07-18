@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const bcrypt = require('bcryptjs');
 const { loadEnvFile } = require('./lib/env');
+const { withLock } = require('./lib/write-queue');
 const { initDb, ensureIndexes, getDatabaseStats } = require('./lib/db');
 const {
     initStore,
@@ -125,25 +126,25 @@ function isValidManagerPin(pin) {
     return true;
 }
 
-function hashPin(pin) {
-    return bcrypt.hashSync(String(pin), 10);
+async function hashPin(pin) {
+    return await bcrypt.hash(String(pin), 10);
 }
 
 function verifyLegacyPinHash(pin, hash) {
     return crypto.createHash('sha256').update(PIN_SALT + ':' + String(pin)).digest('hex') === hash;
 }
 
-function verifyPinHash(pin, hash) {
+async function verifyPinHash(pin, hash) {
     if (!hash) return false;
-    if (String(hash).startsWith('$2')) return bcrypt.compareSync(String(pin), hash);
+    if (String(hash).startsWith('$2')) return await bcrypt.compare(String(pin), hash);
     return verifyLegacyPinHash(pin, hash);
 }
 
-function verifyManagerPin(group, pin) {
+async function verifyManagerPin(group, pin) {
     if (group.managerPinHash) {
-        const ok = verifyPinHash(pin, group.managerPinHash);
+        const ok = await verifyPinHash(pin, group.managerPinHash);
         if (ok && !String(group.managerPinHash).startsWith('$2')) {
-            group.managerPinHash = hashPin(pin);
+            group.managerPinHash = await hashPin(pin);
         }
         return ok;
     }
@@ -153,9 +154,9 @@ function verifyManagerPin(group, pin) {
     return false;
 }
 
-function migrateGroupPin(group) {
+async function migrateGroupPin(group) {
     if (!group.managerPinHash && group.managerPin !== undefined) {
-        group.managerPinHash = hashPin(group.managerPin);
+        group.managerPinHash = await hashPin(group.managerPin);
         delete group.managerPin;
     }
 }
@@ -238,6 +239,7 @@ function recordPinFailure(code, ip) {
         bucket = { count: 0, lockedUntil: 0 };
     }
     bucket.count++;
+    bucket.updatedAt = now;
     if (bucket.count >= PIN_MAX_ATTEMPTS) {
         bucket.lockedUntil = now + PIN_LOCK_MS;
         bucket.count = 0;
@@ -248,6 +250,38 @@ function recordPinFailure(code, ip) {
 function clearPinFailures(code, ip) {
     pinAttemptBuckets.delete(getPinAttemptKey(code, ip));
 }
+
+// 定期清掃已過期的 rate-limit / PIN 嘗試桶，避免長時間執行後 Map 無限增長（記憶體洩漏）。
+const BUCKET_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+
+function sweepRateLimitBucket(map, windowMs) {
+    const now = Date.now();
+    for (const [key, bucket] of map) {
+        if (!bucket || now - bucket.start > windowMs) map.delete(key);
+    }
+}
+
+function sweepPinAttemptBuckets() {
+    const now = Date.now();
+    for (const [key, bucket] of pinAttemptBuckets) {
+        if (!bucket) {
+            pinAttemptBuckets.delete(key);
+            continue;
+        }
+        const locked = bucket.lockedUntil && bucket.lockedUntil > now;
+        if (!locked && now - (bucket.updatedAt || 0) > PIN_LOCK_MS) {
+            pinAttemptBuckets.delete(key);
+        }
+    }
+}
+
+const bucketCleanupInterval = setInterval(() => {
+    sweepRateLimitBucket(rateBuckets, RATE_LIMIT_WINDOW_MS);
+    sweepRateLimitBucket(authRateBuckets, RATE_LIMIT_WINDOW_MS);
+    sweepRateLimitBucket(aiRateBuckets, AI_RATE_LIMIT_WINDOW_MS);
+    sweepPinAttemptBuckets();
+}, BUCKET_CLEANUP_INTERVAL_MS);
+bucketCleanupInterval.unref();
 
 function setCors(req, res) {
     const origin = req.headers.origin;
@@ -319,6 +353,19 @@ function sendJson(res, status, data) {
     res.end(body);
 }
 
+/**
+ * 統一處理路由未預期例外：body 過大回 413（保留原訊息），其餘一律回 500 並隱藏內部錯誤細節，
+ * 完整錯誤只記錄於伺服器 log，避免將堆疊或內部訊息洩漏給前端。
+ */
+function handleRouteError(res, err, fallbackMsg = '伺服器錯誤') {
+    if (err && err.message === 'Request body too large') {
+        sendJson(res, 413, { error: err.message });
+        return;
+    }
+    console.error('[Lumina API] 未預期錯誤:', err);
+    sendJson(res, 500, { error: fallbackMsg });
+}
+
 function sanitizeChatBody(body) {
     if (!body || typeof body !== 'object') return null;
     if (!Array.isArray(body.messages) || body.messages.length === 0 || body.messages.length > 50) return null;
@@ -348,9 +395,9 @@ function checkAiRateLimit(userId) {
     return checkRateLimitBucket(aiRateBuckets, key, AI_RATE_LIMIT_MAX, AI_RATE_LIMIT_WINDOW_MS);
 }
 
-function prepareStore(store) {
+async function prepareStore(store) {
     for (const group of Object.values(store.groups || {})) {
-        migrateGroupPin(group);
+        await migrateGroupPin(group);
         ensureNotifications(group);
     }
     return store;
@@ -481,7 +528,7 @@ async function assertRagGroupAccess(groupCode, authUser, options = {}) {
     const code = normalizeCode(groupCode);
     if (!code) return { ok: false, status: 400, error: '缺少 group_code', code: 'VALIDATION_ERROR' };
 
-    const store = prepareStore(await loadStore());
+    const store = await prepareStore(await loadStore());
     const group = getGroup(store, code);
     if (!group) return { ok: false, status: 404, error: '找不到群組', code: 'GROUP_NOT_FOUND' };
 
@@ -694,7 +741,8 @@ function trySaveDocumentUpload(body, docType) {
             fileBuffer
         };
     } catch (e) {
-        return { ok: false, error: '檔案儲存失敗: ' + e.message, code: 'INTERNAL_ERROR' };
+        console.error('[Lumina API] 檔案儲存失敗:', e);
+        return { ok: false, error: '檔案儲存失敗', code: 'INTERNAL_ERROR' };
     }
 }
 
@@ -1057,22 +1105,27 @@ function findGroupDocument(group, { documentId, filename, title } = {}) {
 }
 
 async function persistDocumentRagStatus(groupCode, lookup, status, extra = {}) {
-    const store = prepareStore(await loadStore());
-    const group = getGroup(store, normalizeCode(groupCode));
-    if (!group) return false;
-    const doc = findGroupDocument(group, lookup);
-    if (!doc) return false;
-    // Never mark soft-deleted documents as indexed (ghost-index race guard).
-    if (status === 'indexed' && !isActiveDocument(doc)) {
-        console.warn(
-            '[Lumina Backend] refuse to mark deleted doc as indexed:',
-            doc.id || lookup.documentId || lookup.filename
-        );
-        return false;
-    }
-    setDocumentRagStatus(doc, status, extra);
-    await saveStore(store);
-    return true;
+    // Own load→mutate→save critical section — lock it. Callers never hold the
+    // 'enterprise' lock themselves at this call site (verified: only reached from
+    // the standalone /api/rag/* dispatch and the background RAG index job).
+    return withLock('enterprise', async () => {
+        const store = await prepareStore(await loadStore());
+        const group = getGroup(store, normalizeCode(groupCode));
+        if (!group) return false;
+        const doc = findGroupDocument(group, lookup);
+        if (!doc) return false;
+        // Never mark soft-deleted documents as indexed (ghost-index race guard).
+        if (status === 'indexed' && !isActiveDocument(doc)) {
+            console.warn(
+                '[Lumina Backend] refuse to mark deleted doc as indexed:',
+                doc.id || lookup.documentId || lookup.filename
+            );
+            return false;
+        }
+        setDocumentRagStatus(doc, status, extra);
+        await saveStore(store);
+        return true;
+    });
 }
 
 /**
@@ -1158,16 +1211,24 @@ async function proxyRagUploadTextIndex({ groupCode, kbId, title, content, filena
     }
 }
 
-async function proxyRagUploadBinaryIndex({ groupCode, kbId, filename, fileBuffer }) {
+async function proxyRagUploadBinaryIndex({ groupCode, kbId, filename, fileBuffer, documentId, title }) {
     try {
         const boundary = 'lumina-rag-' + crypto.randomBytes(8).toString('hex');
         const parts = [
             `--${boundary}\r\nContent-Disposition: form-data; name="group_code"\r\n\r\n${groupCode || ''}\r\n`,
             `--${boundary}\r\nContent-Disposition: form-data; name="kb_id"\r\n\r\n${kbId || 'general'}\r\n`,
+        ];
+        if (documentId) {
+            parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="document_id"\r\n\r\n${documentId}\r\n`);
+        }
+        if (title) {
+            parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\n${title}\r\n`);
+        }
+        parts.push(
             `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename || 'file.bin'}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
             fileBuffer,
             `\r\n--${boundary}--\r\n`
-        ];
+        );
         const payload = Buffer.concat(parts.map(p => (Buffer.isBuffer(p) ? p : Buffer.from(p, 'utf8'))));
         const response = await fetch(`${RAG_SERVICE_URL}/api/rag/document/upload`, {
             method: 'POST',
@@ -1231,7 +1292,9 @@ async function indexEnterpriseDocumentToRag(groupCode, doc, options = {}) {
             groupCode,
             kbId,
             filename: ragFilename,
-            fileBuffer
+            fileBuffer,
+            documentId,
+            title
         });
     }
 
@@ -1299,7 +1362,7 @@ async function runBackgroundRagIndex(groupCode, docId, options = {}) {
     if (!docId || ragBackgroundIndexJobs.has(key)) return;
     ragBackgroundIndexJobs.add(key);
     try {
-        const store = prepareStore(await loadStore());
+        const store = await prepareStore(await loadStore());
         const group = getGroup(store, normalizeCode(groupCode));
         if (!group) return;
         const doc = findGroupDocument(group, { documentId: docId });
@@ -1321,7 +1384,7 @@ async function runBackgroundRagIndex(groupCode, docId, options = {}) {
         console.warn('[Lumina Backend] background RAG index error:', e.message);
         try {
             // Only write failed if still active — avoid clobbering deleted status
-            const store2 = prepareStore(await loadStore());
+            const store2 = await prepareStore(await loadStore());
             const group2 = getGroup(store2, normalizeCode(groupCode));
             const fresh = group2 ? findGroupDocument(group2, { documentId: docId }) : null;
             if (fresh && isActiveDocument(fresh)) {
@@ -1343,63 +1406,71 @@ async function runBackgroundRagIndex(groupCode, docId, options = {}) {
 async function applyDocumentRagIndexResult(groupCode, doc, result) {
     if (!doc?.id) return result;
 
-    // Reload so concurrent soft-delete wins over index writeback
-    const store = prepareStore(await loadStore());
-    const group = getGroup(store, normalizeCode(groupCode));
-    if (!group) {
-        if (result && result.ok) await compensateRagIndexAfterDelete(groupCode, doc);
-        return { ...(result || {}), ok: false, aborted: true, lastError: 'group missing after index' };
-    }
-    const fresh = findGroupDocument(group, { documentId: doc.id });
-    if (!fresh || !isActiveDocument(fresh)) {
-        // Soft-deleted while indexing — abort metadata write + purge vectors that just landed
-        if (result && result.ok) {
-            await compensateRagIndexAfterDelete(groupCode, fresh || doc);
+    // Own load→mutate→save critical section — lock it. This is only ever called
+    // from a detached background continuation (timed-out RAG index tail) or from
+    // runBackgroundRagIndex, never synchronously from within an already-locked
+    // handleEnterprise request (see orchestrateDocumentRagIndex's fast path, which
+    // mutates the caller's already-loaded+locked store directly instead of calling
+    // this function, to avoid nested same-key locking).
+    return withLock('enterprise', async () => {
+        // Reload so concurrent soft-delete wins over index writeback
+        const store = await prepareStore(await loadStore());
+        const group = getGroup(store, normalizeCode(groupCode));
+        if (!group) {
+            if (result && result.ok) await compensateRagIndexAfterDelete(groupCode, doc);
+            return { ...(result || {}), ok: false, aborted: true, lastError: 'group missing after index' };
         }
-        console.warn(
-            `[Lumina Backend] skip index writeback — doc not active: ${doc.id}`
-        );
-        return {
-            ...(result || {}),
-            ok: false,
-            aborted: true,
-            lastError: 'document deleted during index'
-        };
-    }
+        const fresh = findGroupDocument(group, { documentId: doc.id });
+        if (!fresh || !isActiveDocument(fresh)) {
+            // Soft-deleted while indexing — abort metadata write + purge vectors that just landed
+            if (result && result.ok) {
+                await compensateRagIndexAfterDelete(groupCode, fresh || doc);
+            }
+            console.warn(
+                `[Lumina Backend] skip index writeback — doc not active: ${doc.id}`
+            );
+            return {
+                ...(result || {}),
+                ok: false,
+                aborted: true,
+                lastError: 'document deleted during index'
+            };
+        }
 
-    if (result && result.ok) {
-        setDocumentRagStatus(fresh, 'indexed', { chunks: result.chunks, lastError: null });
-        setDocumentRagStatus(doc, 'indexed', { chunks: result.chunks, lastError: null });
+        if (result && result.ok) {
+            setDocumentRagStatus(fresh, 'indexed', { chunks: result.chunks, lastError: null });
+            setDocumentRagStatus(doc, 'indexed', { chunks: result.chunks, lastError: null });
+            await saveStore(store);
+            pushRagIndexEvent({
+                groupCode: normalizeCode(groupCode),
+                documentId: doc.id,
+                title: doc.title || null,
+                outcome: 'indexed',
+                chunks: result.chunks,
+                httpStatus: result.status || 200,
+                durationMs: result.durationMs != null ? result.durationMs : null
+            });
+            return result;
+        }
+        const lastError = String((result && result.lastError) || 'RAG index failed').slice(0, 500);
+        const classified = classifyRagError(lastError, result && result.status);
+        setDocumentRagStatus(fresh, 'failed', { lastError, httpStatus: result && result.status });
+        setDocumentRagStatus(doc, 'failed', { lastError, httpStatus: result && result.status });
         await saveStore(store);
         pushRagIndexEvent({
             groupCode: normalizeCode(groupCode),
             documentId: doc.id,
             title: doc.title || null,
-            outcome: 'indexed',
-            chunks: result.chunks,
-            httpStatus: result.status || 200,
-            durationMs: result.durationMs != null ? result.durationMs : null
+            outcome: result && result.aborted ? 'aborted' : 'failed',
+            errorCode: classified.code,
+            errorCategory: classified.category,
+            retryable: classified.retryable,
+            lastError,
+            httpStatus: result && result.status,
+            durationMs: result && result.durationMs != null ? result.durationMs : null
         });
-        return result;
-    }
-    const lastError = String((result && result.lastError) || 'RAG index failed').slice(0, 500);
-    const classified = classifyRagError(lastError, result && result.status);
-    setDocumentRagStatus(fresh, 'failed', { lastError, httpStatus: result && result.status });
-    setDocumentRagStatus(doc, 'failed', { lastError, httpStatus: result && result.status });
-    await saveStore(store);
-    pushRagIndexEvent({
-        groupCode: normalizeCode(groupCode),
-        documentId: doc.id,
-        title: doc.title || null,
-        outcome: result && result.aborted ? 'aborted' : 'failed',
-        errorCode: classified.code,
-        errorCategory: classified.category,
-        retryable: classified.retryable,
-        lastError,
-        httpStatus: result && result.status,
-        durationMs: result && result.durationMs != null ? result.durationMs : null
+        return { ...result, lastError, errorCode: classified.code, errorCategory: classified.category, retryable: classified.retryable };
     });
-    return { ...result, lastError, errorCode: classified.code, errorCategory: classified.category, retryable: classified.retryable };
 }
 
 /**
@@ -1513,7 +1584,7 @@ function normalizeRagCitations(sources, group) {
 
 async function canAccessUpload(authUser, filename) {
     if (!authUser?.id) return false;
-    const store = prepareStore(await loadStore());
+    const store = await prepareStore(await loadStore());
     for (const group of Object.values(store.groups || {})) {
         const owned = (group.documents || []).some(d => {
             if (!d.fileUrl) return false;
@@ -1691,7 +1762,7 @@ async function handleUserData(req, res, urlPath, method) {
 }
 
 async function handleEnterprise(req, res, urlPath, method) {
-    const store = prepareStore(await loadStore());
+    const store = await prepareStore(await loadStore());
 
     if (method === 'POST' && urlPath === '/api/enterprise/group/create') {
         return readBody(req).then(async body => {
@@ -1718,7 +1789,7 @@ async function handleEnterprise(req, res, urlPath, method) {
             store.groups[code] = {
                 code,
                 name,
-                managerPinHash: hashPin(managerPin),
+                managerPinHash: await hashPin(managerPin),
                 createdAt: new Date().toISOString(),
                 members: [{
                     id: managerId,
@@ -1769,14 +1840,14 @@ async function handleEnterprise(req, res, urlPath, method) {
                 if (isPinLocked(code, clientIp)) {
                     return sendJson(res, 429, { error: '主管金鑰嘗試次數過多，請 15 分鐘後再試' });
                 }
-                if (!verifyManagerPin(group, pin)) {
+                if (!(await verifyManagerPin(group, pin))) {
                     recordPinFailure(code, clientIp);
                     return sendJson(res, 403, { error: '主管金鑰錯誤' });
                 }
                 clearPinFailures(code, clientIp);
             }
 
-            migrateGroupPin(group);
+            await migrateGroupPin(group);
 
             const authUser = await getOptionalAuth(req);
             if (authUser) {
@@ -2837,8 +2908,7 @@ const server = http.createServer(async (req, res) => {
         try {
             await handleUserData(req, res, urlPath, req.method);
         } catch (err) {
-            const status = err.message === 'Request body too large' ? 413 : 500;
-            sendJson(res, status, { error: err.message || '伺服器錯誤' });
+            handleRouteError(res, err);
         }
         return;
     }
@@ -2847,8 +2917,7 @@ const server = http.createServer(async (req, res) => {
         try {
             await handleAuth(req, res, urlPath, req.method);
         } catch (err) {
-            const status = err.message === 'Request body too large' ? 413 : 500;
-            sendJson(res, status, { error: err.message || '伺服器錯誤' });
+            handleRouteError(res, err);
         }
         return;
     }
@@ -2857,8 +2926,7 @@ const server = http.createServer(async (req, res) => {
         try {
             await handleEnterprise(req, res, urlPath, req.method);
         } catch (err) {
-            const status = err.message === 'Request body too large' ? 413 : 500;
-            sendJson(res, status, { error: err.message });
+            handleRouteError(res, err);
         }
         return;
     }
@@ -2880,7 +2948,7 @@ const server = http.createServer(async (req, res) => {
                     sendAccessResult(res, access);
                     return;
                 }
-                const store = prepareStore(await loadStore());
+                const store = await prepareStore(await loadStore());
                 const group = getGroup(store, groupCode);
                 if (!group) {
                     sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
@@ -2904,7 +2972,7 @@ const server = http.createServer(async (req, res) => {
                     sendAccessResult(res, access);
                     return;
                 }
-                const store = prepareStore(await loadStore());
+                const store = await prepareStore(await loadStore());
                 const group = getGroup(store, groupCode);
                 if (!group) {
                     sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
@@ -2992,7 +3060,7 @@ const server = http.createServer(async (req, res) => {
                     return;
                 }
 
-                const store = prepareStore(await loadStore());
+                const store = await prepareStore(await loadStore());
                 const group = getGroup(store, groupCode);
                 if (!group) {
                     sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
@@ -3089,16 +3157,13 @@ const server = http.createServer(async (req, res) => {
                 } else {
                     body.kb_ids = [...activeKbIds];
                 }
-                // Sanitize document_ids to active docs in this group (optional task-scoped filter)
+                // Sanitize document_ids to active docs; also pass filenames for legacy indexes
                 if (Array.isArray(body.document_ids) && body.document_ids.length) {
-                    const activeDocIds = new Set(
-                        (access.group.documents || [])
-                            .filter(isActiveDocument)
-                            .map(d => d.id)
-                    );
+                    const activeDocs = (access.group.documents || []).filter(isActiveDocument);
+                    const byId = new Map(activeDocs.map(d => [d.id, d]));
                     body.document_ids = body.document_ids
                         .map(id => String(id || '').trim())
-                        .filter(id => activeDocIds.has(id))
+                        .filter(id => byId.has(id))
                         .slice(0, 50);
                     if (!body.document_ids.length) {
                         sendJson(res, 200, {
@@ -3110,8 +3175,13 @@ const server = http.createServer(async (req, res) => {
                         });
                         return;
                     }
+                    body.document_filenames = body.document_ids
+                        .map(id => getRagFilenameForDoc(byId.get(id)))
+                        .filter(Boolean)
+                        .slice(0, 50);
                 } else {
                     delete body.document_ids;
+                    delete body.document_filenames;
                 }
                 const proxied = await proxyRagJson('/api/rag/query', body);
                 // Attach citations[] while keeping sources for compatibility
@@ -3143,7 +3213,7 @@ const server = http.createServer(async (req, res) => {
                     return;
                 }
                 // Require active KB (auto_create default true for migration)
-                const storeForKb = prepareStore(await loadStore());
+                const storeForKb = await prepareStore(await loadStore());
                 const groupForKb = getGroup(storeForKb, body.group_code);
                 if (!groupForKb) {
                     sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
@@ -3202,7 +3272,7 @@ const server = http.createServer(async (req, res) => {
                     sendError(res, 400, '缺少 file_base64 或 filename', 'VALIDATION_ERROR');
                     return;
                 }
-                const storeForKb = prepareStore(await loadStore());
+                const storeForKb = await prepareStore(await loadStore());
                 const groupForKb = getGroup(storeForKb, body.group_code);
                 if (!groupForKb) {
                     sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
@@ -3228,43 +3298,36 @@ const server = http.createServer(async (req, res) => {
                     title: body.title || null
                 };
                 const fileBuffer = Buffer.from(body.file_base64, 'base64');
-                const boundary = 'lumina-rag-' + crypto.randomBytes(8).toString('hex');
-                const parts = [
-                    `--${boundary}\r\nContent-Disposition: form-data; name="group_code"\r\n\r\n${body.group_code || ''}\r\n`,
-                    `--${boundary}\r\nContent-Disposition: form-data; name="kb_id"\r\n\r\n${body.kb_id || 'general'}\r\n`,
-                    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${body.filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+                const documentId = body.document_id || body.documentId || null;
+                const title = body.title || null;
+                const binResult = await proxyRagUploadBinaryIndex({
+                    groupCode: body.group_code,
+                    kbId: body.kb_id || 'general',
+                    filename: body.filename,
                     fileBuffer,
-                    `\r\n--${boundary}--\r\n`
-                ];
-                const payload = Buffer.concat(parts.map(p => (Buffer.isBuffer(p) ? p : Buffer.from(p, 'utf8'))));
-                const response = await fetch(`${RAG_SERVICE_URL}/api/rag/document/upload`, {
-                    method: 'POST',
-                    headers: buildRagHeaders({
-                        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-                        'Content-Length': String(payload.length)
-                    }),
-                    body: payload
+                    documentId,
+                    title
                 });
-                const text = await response.text();
-                if (response.ok) {
-                    let chunks = null;
-                    try {
-                        const data = JSON.parse(text || '{}');
-                        chunks = data.chunks != null ? data.chunks : null;
-                    } catch (_) {}
-                    await persistDocumentRagStatus(body.group_code, lookup, 'indexed', { chunks, lastError: null });
+                if (binResult.ok) {
+                    await persistDocumentRagStatus(body.group_code, lookup, 'indexed', {
+                        chunks: binResult.chunks,
+                        lastError: null
+                    });
+                    sendJson(res, binResult.status || 200, {
+                        ok: true,
+                        chunks: binResult.chunks,
+                        document_id: documentId,
+                        filename: body.filename
+                    });
                 } else {
-                    let lastError = text;
-                    try {
-                        const data = JSON.parse(text || '{}');
-                        lastError = data.detail || data.error || text;
-                    } catch (_) {}
                     await persistDocumentRagStatus(body.group_code, lookup, 'failed', {
-                        lastError: String(lastError).slice(0, 500)
+                        lastError: String(binResult.lastError || 'RAG index failed').slice(0, 500)
+                    });
+                    sendJson(res, binResult.status || 500, {
+                        ok: false,
+                        error: binResult.lastError || 'RAG index failed'
                     });
                 }
-                res.writeHead(response.status, { 'Content-Type': 'application/json' });
-                res.end(text);
                 return;
             }
 
@@ -3290,7 +3353,7 @@ const server = http.createServer(async (req, res) => {
                     filename: body.filename || null
                 };
                 if (response.ok || response.status === 404) {
-                    const store = prepareStore(await loadStore());
+                    const store = await prepareStore(await loadStore());
                     const group = getGroup(store, body.group_code);
                     const doc = findGroupDocument(group, lookup);
                     if (doc) {
@@ -3323,8 +3386,7 @@ const server = http.createServer(async (req, res) => {
 
             sendJson(res, 404, { error: 'RAG route not found' });
         } catch (err) {
-            const status = err.message === 'Request body too large' ? 413 : 500;
-            sendJson(res, status, { error: err.message || 'RAG 代理失敗' });
+            handleRouteError(res, err, 'RAG 代理失敗');
         }
         return;
     }
@@ -3363,8 +3425,7 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(response.status, { 'Content-Type': 'application/json' });
             res.end(text);
         } catch (err) {
-            const status = err.message === 'Request body too large' ? 413 : 500;
-            sendJson(res, status, { error: { message: err.message } });
+            handleRouteError(res, err, 'AI 請求失敗');
         }
         return;
     }

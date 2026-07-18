@@ -251,15 +251,28 @@ def _load_index(storage_dir: str) -> Optional[VectorStoreIndex]:
     return index
 
 
-def _upsert_documents(group_code: str, kb_id: str, filename: str, documents: List[Document]) -> int:
+def _upsert_documents(
+    group_code: str,
+    kb_id: str,
+    filename: str,
+    documents: List[Document],
+    document_id: Optional[str] = None,
+    title: Optional[str] = None,
+) -> int:
     ref_doc_id = make_ref_doc_id(group_code, kb_id, filename)
+    doc_id = (document_id or "").strip() or None
+    title_val = (title or "").strip() or None
     for doc in documents:
         doc.id_ = ref_doc_id
+        # Preserve any existing title from Document, then apply canonical fields
+        prev_title = (doc.metadata or {}).get("title") if isinstance(doc.metadata, dict) else None
         doc.metadata = {
             "group_code": normalize_code(group_code),
             "kb_id": normalize_kb_id(kb_id),
             "filename": filename,
             "ref_doc_id": ref_doc_id,
+            "document_id": doc_id,
+            "title": title_val or prev_title,
         }
 
     nodes = _split_documents(documents)
@@ -285,7 +298,14 @@ def _upsert_documents(group_code: str, kb_id: str, filename: str, documents: Lis
     return len(nodes)
 
 
-def index_uploaded_file(group_code: str, kb_id: str, filename: str, file_bytes: bytes) -> int:
+def index_uploaded_file(
+    group_code: str,
+    kb_id: str,
+    filename: str,
+    file_bytes: bytes,
+    document_id: Optional[str] = None,
+    title: Optional[str] = None,
+) -> int:
     suffix = os.path.splitext(filename)[1] or ".txt"
     temp_path = None
     try:
@@ -298,17 +318,38 @@ def index_uploaded_file(group_code: str, kb_id: str, filename: str, file_bytes: 
         if not documents:
             raise ValueError("無法解析該檔案內容")
 
-        return _upsert_documents(group_code, kb_id, filename, documents)
+        return _upsert_documents(
+            group_code,
+            kb_id,
+            filename,
+            documents,
+            document_id=document_id,
+            title=title,
+        )
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
 
-def index_text_document(group_code: str, kb_id: str, title: str, content: str, filename: Optional[str] = None) -> int:
+def index_text_document(
+    group_code: str,
+    kb_id: str,
+    title: str,
+    content: str,
+    filename: Optional[str] = None,
+    document_id: Optional[str] = None,
+) -> int:
     virtual_filename = filename or f"text::{title}.md"
     body = f"# {title}\n\n{content.strip()}"
     document = Document(text=body, metadata={"title": title})
-    return _upsert_documents(group_code, kb_id, virtual_filename, [document])
+    return _upsert_documents(
+        group_code,
+        kb_id,
+        virtual_filename,
+        [document],
+        document_id=document_id,
+        title=title,
+    )
 
 
 def delete_document_index(group_code: str, kb_id: str, filename: str) -> bool:
@@ -400,6 +441,7 @@ def retrieve_context(
     kb_ids: List[str],
     query: str,
     document_ids: Optional[List[str]] = None,
+    document_filenames: Optional[List[str]] = None,
 ) -> List[NodeWithScore]:
     all_nodes: List[NodeWithScore] = []
     doc_filter = None
@@ -407,6 +449,11 @@ def retrieve_context(
         doc_filter = {str(x).strip() for x in document_ids if str(x).strip()}
         if not doc_filter:
             doc_filter = None
+    name_filter = None
+    if document_filenames:
+        name_filter = {str(x).strip() for x in document_filenames if str(x).strip()}
+        if not name_filter:
+            name_filter = None
 
     for kb_id in kb_ids:
         storage_dir = kb_index_dir(group_code, kb_id)
@@ -423,13 +470,19 @@ def retrieve_context(
     if not all_nodes:
         return []
 
-    # Task-bound documents: keep only chunks whose metadata.document_id is allowed
-    if doc_filter:
+    # Task-bound documents: match document_id (preferred) or filename (legacy indexes)
+    if doc_filter or name_filter:
         scoped = []
         for n in all_nodes:
             meta = getattr(n.node, "metadata", None) or {}
             did = meta.get("document_id")
-            if did is not None and str(did).strip() in doc_filter:
+            fname = meta.get("filename")
+            ok = False
+            if doc_filter and did is not None and str(did).strip() in doc_filter:
+                ok = True
+            if name_filter and fname is not None and str(fname).strip() in name_filter:
+                ok = True
+            if ok:
                 scoped.append(n)
         all_nodes = scoped
         if not all_nodes:

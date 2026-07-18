@@ -64,6 +64,8 @@ class QueryRequest(BaseModel):
     kb_ids: List[str] = Field(default_factory=list)
     # Optional: restrict retrieval to these enterprise document ids (metadata.document_id)
     document_ids: List[str] = Field(default_factory=list)
+    # Optional fallback for legacy indexes that only stored filename
+    document_filenames: List[str] = Field(default_factory=list)
     openai_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     api_base: Optional[str] = None
@@ -75,6 +77,7 @@ class TextUploadRequest(BaseModel):
     title: str
     content: str
     filename: Optional[str] = None
+    document_id: Optional[str] = None
     openai_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
 
@@ -147,6 +150,8 @@ async def upload_document(
     group_code: str = Form(...),
     kb_id: str = Form("general"),
     file: UploadFile = File(...),
+    document_id: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
     openai_api_key: Optional[str] = Form(None),
     deepseek_api_key: Optional[str] = Form(None),
 ):
@@ -162,19 +167,28 @@ async def upload_document(
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="檔案為空")
-        chunks = index_uploaded_file(code, kb, file.filename, content)
+        chunks = index_uploaded_file(
+            code,
+            kb,
+            file.filename,
+            content,
+            document_id=(document_id or "").strip() or None,
+            title=(title or "").strip() or None,
+        )
         info = get_runtime_info()
         return {
             "ok": True,
             "filename": file.filename,
             "chunks": chunks,
+            "document_id": (document_id or "").strip() or None,
             "embedding": info["embedding"],
             "retrieval": info["retrieval"],
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"上傳與解析失敗: {str(exc)}") from exc
+        print(f"[Lumina RAG] 上傳與解析失敗: {exc}")
+        raise HTTPException(status_code=500, detail="上傳與解析失敗") from exc
 
 
 @app.post("/api/rag/document/upload-text")
@@ -183,6 +197,7 @@ async def upload_text_document(req: TextUploadRequest):
     kb = normalize_kb_id(req.kb_id)
     title = (req.title or "").strip()
     content = (req.content or "").strip()
+    document_id = (req.document_id or "").strip() or None
 
     if not code:
         raise HTTPException(status_code=400, detail="group_code 無效")
@@ -193,19 +208,23 @@ async def upload_text_document(req: TextUploadRequest):
 
     try:
         configure_embedding(req.openai_api_key)
-        chunks = index_text_document(code, kb, title, content, req.filename)
+        chunks = index_text_document(
+            code, kb, title, content, req.filename, document_id=document_id
+        )
         info = get_runtime_info()
         return {
             "ok": True,
             "filename": req.filename or f"text::{title}.md",
             "chunks": chunks,
+            "document_id": document_id,
             "embedding": info["embedding"],
             "retrieval": info["retrieval"],
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"文字索引失敗: {str(exc)}") from exc
+        print(f"[Lumina RAG] 文字索引失敗: {exc}")
+        raise HTTPException(status_code=500, detail="文字索引失敗") from exc
 
 
 @app.post("/api/rag/document/delete")
@@ -231,7 +250,8 @@ async def delete_document(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"刪除失敗: {str(exc)}") from exc
+        print(f"[Lumina RAG] 刪除失敗: {exc}")
+        raise HTTPException(status_code=500, detail="刪除失敗") from exc
 
 
 @app.post("/api/rag/query", response_model=QueryResponse)
@@ -247,12 +267,19 @@ async def query_knowledge_base(req: QueryRequest):
     document_ids = [
         str(x).strip() for x in (req.document_ids or []) if str(x).strip()
     ][:50]
+    document_filenames = [
+        str(x).strip() for x in (req.document_filenames or []) if str(x).strip()
+    ][:50]
 
     query = req.query.strip()
     try:
         configure_embedding(req.openai_api_key)
         top_nodes = retrieve_context(
-            code, kb_ids, query, document_ids=document_ids or None
+            code,
+            kb_ids,
+            query,
+            document_ids=document_ids or None,
+            document_filenames=document_filenames or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -282,7 +309,8 @@ async def query_knowledge_base(req: QueryRequest):
             "或由管理員在伺服器設定 DEEPSEEK_API_KEY。"
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"LLM 呼叫失敗: {str(exc)}") from exc
+        print(f"[rag] LLM call failed: {exc!r}")
+        raise HTTPException(status_code=500, detail="LLM 呼叫失敗") from exc
 
     return QueryResponse(
         answer=answer,
