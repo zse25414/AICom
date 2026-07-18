@@ -188,6 +188,188 @@ function copyGroupCode() {
     }
 }
 
+/* ── Multi-group memberships (local workspace list) ─────────────────── */
+
+function enterpriseSessionKey() {
+    return (typeof C !== 'undefined' && C.ENTERPRISE_SESSION_KEY) || 'lumina_enterprise_session';
+}
+function enterpriseMembershipsKey() {
+    return (typeof C !== 'undefined' && C.ENTERPRISE_MEMBERSHIPS_KEY) || 'lumina_enterprise_memberships';
+}
+
+function normalizeEnterpriseMembership(m) {
+    if (!m || typeof m !== 'object') return null;
+    const groupCode = normalizeEnterpriseCode(m.groupCode || m.code || '');
+    if (!groupCode) return null;
+    return {
+        memberId: m.memberId || m.id || '',
+        name: String(m.name || '').trim() || '成員',
+        role: m.role === 'manager' ? 'manager' : 'member',
+        groupCode,
+        groupName: String(m.groupName || groupCode).trim() || groupCode,
+        offline: !!m.offline,
+        joinedAt: m.joinedAt || new Date().toISOString()
+    };
+}
+
+function ensureEnterpriseMembershipsLoaded() {
+    if (!Array.isArray(S.enterpriseMemberships)) S.enterpriseMemberships = [];
+    if (S.enterpriseMemberships.length) return S.enterpriseMemberships;
+    try {
+        const raw = JSON.parse(localStorage.getItem(enterpriseMembershipsKey()) || '[]');
+        const list = (Array.isArray(raw) ? raw : []).map(normalizeEnterpriseMembership).filter(Boolean);
+        const map = new Map();
+        list.forEach((m) => map.set(m.groupCode, m));
+        if (!map.size && S.enterpriseSession?.groupCode) {
+            const cur = normalizeEnterpriseMembership(S.enterpriseSession);
+            if (cur) map.set(cur.groupCode, cur);
+        }
+        S.enterpriseMemberships = [...map.values()];
+    } catch (_) {
+        S.enterpriseMemberships = S.enterpriseSession?.groupCode
+            ? [normalizeEnterpriseMembership(S.enterpriseSession)].filter(Boolean)
+            : [];
+    }
+    return S.enterpriseMemberships;
+}
+
+function saveEnterpriseMemberships() {
+    ensureEnterpriseMembershipsLoaded();
+    localStorage.setItem(enterpriseMembershipsKey(), JSON.stringify(S.enterpriseMemberships));
+}
+
+function upsertEnterpriseMembership(session) {
+    const m = normalizeEnterpriseMembership(session);
+    if (!m) return null;
+    ensureEnterpriseMembershipsLoaded();
+    const idx = S.enterpriseMemberships.findIndex((x) => x.groupCode === m.groupCode);
+    if (idx >= 0) S.enterpriseMemberships[idx] = { ...S.enterpriseMemberships[idx], ...m };
+    else S.enterpriseMemberships.push(m);
+    saveEnterpriseMemberships();
+    return m;
+}
+
+function setActiveEnterpriseSession(session) {
+    const m = session ? normalizeEnterpriseMembership(session) : null;
+    S.enterpriseSession = m;
+    if (m) {
+        localStorage.setItem(enterpriseSessionKey(), JSON.stringify(m));
+        upsertEnterpriseMembership(m);
+    } else {
+        localStorage.removeItem(enterpriseSessionKey());
+    }
+    return m;
+}
+
+function clearActiveEnterpriseWorkspaceCaches() {
+    S.enterpriseGroupData = null;
+    S.enterpriseDataFetchedAt = 0;
+    S.teamNotifications = [];
+    S.teamNotificationsInitialized = false;
+    try { S.knownTeamNotificationIds?.clear?.(); } catch (_) {}
+    try { S.locallyReadNotificationIds?.clear?.(); } catch (_) {}
+    S.teamWorkspaceTab = 'members';
+    S.ragKbItemsById = {};
+    S.ragSyncedGroupKey = null;
+    S.docRagStatusOverrides = {};
+    try { closeNotificationPanel?.(); } catch (_) {}
+}
+
+function openEnterpriseJoinForm() {
+    S.enterpriseJoinFormOpen = true;
+    renderEnterprisePage();
+    setTimeout(() => {
+        document.getElementById('team-onboarding')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('team-join-code')?.focus();
+    }, 80);
+}
+
+function closeEnterpriseJoinForm() {
+    S.enterpriseJoinFormOpen = false;
+    renderEnterprisePage();
+}
+
+async function selectEnterpriseGroup(groupCode) {
+    const code = normalizeEnterpriseCode(groupCode);
+    ensureEnterpriseMembershipsLoaded();
+    const m = S.enterpriseMemberships.find((x) => x.groupCode === code);
+    if (!m) {
+        showToast('找不到該群組', 'error');
+        return;
+    }
+    if (S.enterpriseSession?.groupCode === code) {
+        S.enterpriseJoinFormOpen = false;
+        renderEnterprisePage();
+        showToast('目前已在此群組', 'success');
+        return;
+    }
+    try { stopEnterprisePolling(); } catch (_) {}
+    clearActiveEnterpriseWorkspaceCaches();
+    setActiveEnterpriseSession(m);
+    S.enterpriseJoinFormOpen = false;
+    try { loadLocallyReadNotificationIds(); } catch (_) {}
+    showToast(`已切換至 ${m.groupName || m.groupCode}`, 'success');
+    await refreshEnterpriseData(true);
+    renderEnterprisePage();
+    try { startEnterprisePolling(); } catch (_) {}
+    try { await refreshTeamNotifications(true); } catch (_) {}
+    try { updateNotificationUI(); } catch (_) {}
+}
+
+function renderEnterpriseMembershipsPanel() {
+    const el = document.getElementById('team-memberships');
+    if (!el) return;
+    ensureEnterpriseMembershipsLoaded();
+    const list = S.enterpriseMemberships || [];
+    if (!list.length) {
+        el.classList.add('hidden');
+        el.innerHTML = '';
+        return;
+    }
+    el.classList.remove('hidden');
+    const active = normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '');
+    el.innerHTML = `
+        <div class="team-memberships-head">
+            <div class="min-w-0">
+                <div class="font-semibold text-sm text-slate-100">我的群組
+                    <span class="text-slate-500 font-normal">（${list.length}）</span>
+                </div>
+                <div class="text-[11px] text-slate-500 mt-0.5">可同時加入多個群組；點「切換」辨識目前工作區，點「退出」移出本機清單</div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" data-lumina-action="openEnterpriseJoinForm"
+                    class="text-xs px-3 py-2 rounded-xl border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10 transition-colors">
+                    <i class="fa-solid fa-plus mr-1"></i>加入／建立其他
+                </button>
+            </div>
+        </div>
+        <div class="team-memberships-grid" role="list">
+            ${list.map((m) => {
+                const isActive = m.groupCode === active;
+                const roleLabel = m.role === 'manager' ? '主管' : '成員';
+                return `
+                <div class="team-membership-card ${isActive ? 'is-active' : ''}" role="listitem">
+                    <div class="min-w-0 flex-1">
+                        <div class="font-medium text-sm text-slate-100 truncate" title="${escapeHtml(m.groupName || m.groupCode)}">${escapeHtml(m.groupName || m.groupCode)}</div>
+                        <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
+                            <span class="team-membership-code">${escapeHtml(m.groupCode)}</span>
+                            <span class="text-[10px] text-slate-500">${roleLabel}${m.offline ? ' · 離線' : ''}</span>
+                            ${isActive ? '<span class="team-membership-active-pill">使用中</span>' : ''}
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-1.5 flex-shrink-0">
+                        ${isActive
+                            ? ''
+                            : `<button type="button" data-lumina-action="selectEnterpriseGroup" data-lumina-arg="${escapeHtml(m.groupCode)}"
+                                class="text-[11px] px-2.5 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-600 text-white font-medium">切換</button>`}
+                        <button type="button" data-lumina-action="leaveEnterpriseGroup" data-lumina-arg="${escapeHtml(m.groupCode)}"
+                            class="text-[11px] px-2.5 py-1.5 rounded-lg border border-red-500/35 text-red-400 hover:bg-red-500/10">退出</button>
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
 async function createEnterpriseGroup() {
     if (!isLoggedIn()) {
         showToast('請先登入帳號，才能建立並同步團隊', 'error');
@@ -221,17 +403,18 @@ async function createEnterpriseGroup() {
         return showToast(api.error || '建立群組失敗', 'error');
     }
     
-    S.enterpriseSession = {
+    clearActiveEnterpriseWorkspaceCaches();
+    setActiveEnterpriseSession({
         memberId: result.member.id,
         name: result.member.name,
         role: result.member.role,
         groupCode: result.group.code,
         groupName: result.group.name,
         offline: !!api.offline
-    };
-    localStorage.setItem('lumina_enterprise_session', JSON.stringify(S.enterpriseSession));
+    });
+    S.enterpriseJoinFormOpen = false;
     loadLocallyReadNotificationIds();
-    showToast(`群組 ${result.group.code} 建立成功！`, 'success');
+    showToast(`群組 ${result.group.code} 建立成功！已加入「我的群組」`, 'success');
     await refreshEnterpriseData();
     renderEnterprisePage();
     startEnterprisePolling();
@@ -269,44 +452,84 @@ async function joinEnterpriseGroup() {
         return showToast(api.error || '加入群組失敗', 'error');
     }
     
-    S.enterpriseSession = {
+    // Re-joining same code updates membership; switching if different
+    const nextCode = normalizeEnterpriseCode(result.group.code);
+    const switching = S.enterpriseSession?.groupCode && S.enterpriseSession.groupCode !== nextCode;
+    if (switching) {
+        try { stopEnterprisePolling(); } catch (_) {}
+        clearActiveEnterpriseWorkspaceCaches();
+    }
+    setActiveEnterpriseSession({
         memberId: result.member.id,
         name: result.member.name,
         role: result.member.role,
         groupCode: result.group.code,
         groupName: result.group.name,
         offline: !!api.offline
-    };
-    localStorage.setItem('lumina_enterprise_session', JSON.stringify(S.enterpriseSession));
+    });
+    S.enterpriseJoinFormOpen = false;
     loadLocallyReadNotificationIds();
-    showToast(`已加入 ${result.group.name}`, 'success');
-    await refreshEnterpriseData();
+    showToast(`已加入 ${result.group.name}（${result.group.code}）`, 'success');
+    await refreshEnterpriseData(true);
     renderEnterprisePage();
     startEnterprisePolling();
     await refreshTeamNotifications(true);
 }
 
-function leaveEnterpriseGroup() {
-    if (!confirm('確定離開目前群組？')) return;
-    S.enterpriseSession = null;
-    S.enterpriseGroupData = null;
-    S.teamNotifications = [];
-    S.teamNotificationsInitialized = false;
-    S.knownTeamNotificationIds.clear();
-    S.locallyReadNotificationIds.clear();
-    S.teamWorkspaceTab = 'members';
-    S.ragKbItemsById = {};
-    closeNotificationPanel();
-    stopEnterprisePolling();
-    localStorage.removeItem('lumina_enterprise_session');
-    renderEnterprisePage();
-    updateNotificationUI();
-    showToast('已離開群組', 'success');
+/**
+ * Leave one membership (by code) or the active group.
+ * Removes from local multi-group list; auto-switches to another if available.
+ */
+function leaveEnterpriseGroup(groupCode) {
+    ensureEnterpriseMembershipsLoaded();
+    const code = normalizeEnterpriseCode(groupCode || S.enterpriseSession?.groupCode || '');
+    if (!code) {
+        showToast('沒有可離開的群組', 'error');
+        return;
+    }
+    const target = S.enterpriseMemberships.find((m) => m.groupCode === code);
+    const label = target?.groupName || code;
+    if (!confirm(`確定退出群組「${label}」？\n代碼：${code}\n（只會從本機清單移除，之後可用代碼再加入）`)) return;
+
+    S.enterpriseMemberships = S.enterpriseMemberships.filter((m) => m.groupCode !== code);
+    saveEnterpriseMemberships();
+
+    const leavingActive = normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '') === code;
+    if (leavingActive) {
+        try { stopEnterprisePolling(); } catch (_) {}
+        clearActiveEnterpriseWorkspaceCaches();
+        const next = S.enterpriseMemberships[0] || null;
+        setActiveEnterpriseSession(next);
+        S.enterpriseJoinFormOpen = false;
+        if (next) {
+            try { loadLocallyReadNotificationIds(); } catch (_) {}
+            showToast(`已退出 ${code}，已切換至 ${next.groupName || next.groupCode}`, 'success');
+            refreshEnterpriseData(true).then(() => {
+                renderEnterprisePage();
+                try { startEnterprisePolling(); } catch (_) {}
+                try { refreshTeamNotifications(true); } catch (_) {}
+                try { updateNotificationUI(); } catch (_) {}
+            }).catch(() => renderEnterprisePage());
+        } else {
+            setActiveEnterpriseSession(null);
+            renderEnterprisePage();
+            try { updateNotificationUI(); } catch (_) {}
+            showToast(`已退出群組 ${code}`, 'success');
+        }
+    } else {
+        renderEnterprisePage();
+        showToast(`已退出群組 ${code}`, 'success');
+    }
 }
 
 /**
  * Team workspace primary tabs: members | knowledge (not main nav).
  */
+function onTeamGroupSwitcherChange(el) {
+    const code = el?.value || document.getElementById('team-group-switcher')?.value;
+    if (code) selectEnterpriseGroup(code);
+}
+
 function switchTeamWorkspaceTab(tab) {
     const next = tab === 'knowledge' ? 'knowledge' : 'members';
     S.teamWorkspaceTab = next;
@@ -410,37 +633,72 @@ function renderEnterprisePage() {
     const badge = document.getElementById('team-status-badge');
     const apiHint = document.getElementById('team-api-hint');
     const tabs = document.getElementById('team-workspace-tabs');
-    
-    if (!S.enterpriseSession) {
-        onboarding?.classList.remove('hidden');
+    const joinFormBar = document.getElementById('team-join-form-bar');
+
+    ensureEnterpriseMembershipsLoaded();
+    renderEnterpriseMembershipsPanel();
+
+    const hasSession = !!S.enterpriseSession?.groupCode;
+    const showJoinForm = !hasSession || !!S.enterpriseJoinFormOpen;
+    const memCount = (S.enterpriseMemberships || []).length;
+
+    // Join/create forms: when no group, or user asked to add another
+    onboarding?.classList.toggle('hidden', !showJoinForm);
+    joinFormBar?.classList.toggle('hidden', !(showJoinForm && hasSession));
+    apiHint?.classList.toggle('hidden', hasSession && !S.enterpriseJoinFormOpen);
+
+    if (!hasSession) {
         workspace?.classList.add('hidden');
         tabs?.classList.add('hidden');
-        if (badge) { badge.textContent = '未加入群組'; badge.className = 'self-start sm:self-auto text-xs px-4 py-2 rounded-full bg-slate-800/80 text-slate-400 border border-slate-700/60'; }
+        if (badge) {
+            badge.textContent = memCount ? `${memCount} 個群組（請選擇）` : '未加入群組';
+            badge.className = 'self-start sm:self-auto text-xs px-4 py-2 rounded-full bg-slate-800/80 text-slate-400 border border-slate-700/60';
+        }
         document.getElementById('team-stats-row')?.classList.add('hidden');
-        apiHint?.classList.remove('hidden');
         return;
     }
-    
-    onboarding?.classList.add('hidden');
+
     workspace?.classList.remove('hidden');
     tabs?.classList.remove('hidden');
-    apiHint?.classList.add('hidden');
 
     const offlineBanner = document.getElementById('team-offline-banner');
     if (offlineBanner) {
         offlineBanner.classList.toggle('hidden', !S.enterpriseSession.offline);
     }
-    
+
+    // Sync membership label if group name refreshed from server
+    if (S.enterpriseGroupData?.name && S.enterpriseSession.groupName !== S.enterpriseGroupData.name) {
+        S.enterpriseSession.groupName = S.enterpriseGroupData.name;
+        setActiveEnterpriseSession(S.enterpriseSession);
+    }
+
     setElText('team-group-name', S.enterpriseSession.groupName);
     setElText('team-group-code', S.enterpriseSession.groupCode);
     setElText('team-user-name', S.enterpriseSession.name);
     setElText('team-user-role', S.enterpriseSession.role === 'manager' ? '主管' : '成員');
-    
+
+    // Group switcher select
+    const switcher = document.getElementById('team-group-switcher');
+    if (switcher) {
+        const active = S.enterpriseSession.groupCode;
+        switcher.innerHTML = (S.enterpriseMemberships || []).map((m) =>
+            `<option value="${escapeHtml(m.groupCode)}" ${m.groupCode === active ? 'selected' : ''}>${escapeHtml(m.groupName || m.groupCode)}（${escapeHtml(m.groupCode)}）</option>`
+        ).join('');
+        switcher.classList.toggle('hidden', (S.enterpriseMemberships || []).length < 2);
+    }
+    const switcherWrap = document.getElementById('team-group-switcher-wrap');
+    if (switcherWrap) {
+        switcherWrap.classList.toggle('hidden', (S.enterpriseMemberships || []).length < 2);
+    }
+
     if (badge) {
-        badge.textContent = `${S.enterpriseSession.groupCode} · ${S.enterpriseSession.role === 'manager' ? '主管' : '成員'}`;
+        const role = S.enterpriseSession.role === 'manager' ? '主管' : '成員';
+        badge.textContent = memCount > 1
+            ? `${S.enterpriseSession.groupCode} · ${role} · 共 ${memCount} 組`
+            : `${S.enterpriseSession.groupCode} · ${role}`;
         badge.className = 'self-start sm:self-auto text-xs px-4 py-2 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/25';
     }
-    
+
     const isManager = S.enterpriseSession.role === 'manager';
     document.getElementById('team-manager-panel')?.classList.toggle('hidden', !isManager);
     document.getElementById('team-overview-panel')?.classList.toggle('hidden', !isManager);

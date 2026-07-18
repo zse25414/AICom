@@ -543,12 +543,19 @@
                             <i class="fa-solid fa-users"></i><span>Enterprise</span>
                         </div>
                         <h2 class="text-3xl sm:text-4xl font-semibold tracking-tighter">企業團隊模式</h2>
-                        <p class="text-slate-400 mt-1.5 text-sm sm:text-base max-w-lg">輸入群組代碼加入團隊，主管指派任務、成員勾選完成，狀態即時同步</p>
+                        <p class="text-slate-400 mt-1.5 text-sm sm:text-base max-w-lg">可同時加入多個群組，用代碼辨識；切換工作區、退出清單，或再加入其他團隊</p>
                     </div>
                     <div id="team-status-badge" class="self-start sm:self-auto text-xs px-4 py-2 rounded-full bg-slate-800/80 text-slate-400 border border-slate-700/60">未加入群組</div>
                 </div>
+
+                <!-- Multi-group membership list -->
+                <div id="team-memberships" class="team-memberships hidden mt-5" aria-label="我的群組列表"></div>
                 
                 <!-- Join / Create -->
+                <div id="team-join-form-bar" class="hidden mt-4 mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div class="text-sm text-slate-400"><i class="fa-solid fa-user-plus text-indigo-400 mr-1.5"></i>加入或建立另一個群組</div>
+                    <button type="button" data-lumina-action="closeEnterpriseJoinForm" class="text-xs px-3 py-1.5 rounded-lg border border-slate-600 text-slate-400 hover:bg-slate-800">收起表單</button>
+                </div>
                 <div id="team-onboarding" class="grid grid-cols-1 lg:grid-cols-2 gap-5 lg:gap-6">
                     <div class="panel-card panel-card-accent-indigo p-6 sm:p-7">
                         <div class="flex items-center gap-3 mb-5">
@@ -635,20 +642,28 @@
                                 <div class="w-12 h-12 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 text-xl flex-shrink-0">
                                     <i class="fa-solid fa-people-group"></i>
                                 </div>
-                                <div>
-                                    <div class="text-[10px] uppercase tracking-widest text-indigo-300/70 font-medium">目前群組</div>
-                                    <div class="font-semibold text-xl mt-0.5"><span id="team-group-name">—</span></div>
+                                <div class="min-w-0">
+                                    <div class="text-[10px] uppercase tracking-widest text-indigo-300/70 font-medium">目前工作區群組</div>
+                                    <div class="font-semibold text-xl mt-0.5 truncate"><span id="team-group-name">—</span></div>
                                     <div class="flex flex-wrap items-center gap-2 mt-1.5">
                                         <span class="text-indigo-300 font-mono text-sm px-2 py-0.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20" id="team-group-code"></span>
                                         <span class="text-xs text-slate-400"><span id="team-user-role"></span> · <span id="team-user-name"></span></span>
+                                    </div>
+                                    <div id="team-group-switcher-wrap" class="hidden mt-3">
+                                        <label for="team-group-switcher" class="text-[10px] text-slate-500 block mb-1">快速切換群組</label>
+                                        <select id="team-group-switcher"
+                                            data-lumina-change="onTeamGroupSwitcherChange"
+                                            data-lumina-change-args='["__target__"]'
+                                            class="form-input focus-ring text-sm py-2 max-w-xs"></select>
                                     </div>
                                 </div>
                             </div>
                             <div class="flex flex-wrap gap-2 items-center lg:justify-end">
                                 <span id="team-sync-status" class="text-[10px] px-2.5 py-1 rounded-full bg-slate-800 text-slate-500">同步中…</span>
-                                <button data-lumina-action="copyGroupCode" class="text-xs px-3.5 py-2 rounded-xl border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10 transition-colors"><i class="fa-solid fa-copy mr-1"></i>複製代碼</button>
-                                <button data-lumina-action="refreshEnterpriseData" class="text-xs px-3.5 py-2 rounded-xl border border-slate-600 hover:bg-slate-800/80 transition-colors"><i class="fa-solid fa-sync-alt mr-1"></i>同步</button>
-                                <button data-lumina-action="leaveEnterpriseGroup" class="text-xs px-3.5 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors">離開</button>
+                                <button type="button" data-lumina-action="openEnterpriseJoinForm" class="text-xs px-3.5 py-2 rounded-xl border border-emerald-500/35 text-emerald-300 hover:bg-emerald-500/10 transition-colors"><i class="fa-solid fa-plus mr-1"></i>其他群組</button>
+                                <button type="button" data-lumina-action="copyGroupCode" class="text-xs px-3.5 py-2 rounded-xl border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/10 transition-colors"><i class="fa-solid fa-copy mr-1"></i>複製代碼</button>
+                                <button type="button" data-lumina-action="refreshEnterpriseData" class="text-xs px-3.5 py-2 rounded-xl border border-slate-600 hover:bg-slate-800/80 transition-colors"><i class="fa-solid fa-sync-alt mr-1"></i>同步</button>
+                                <button type="button" data-lumina-action="leaveEnterpriseGroup" class="text-xs px-3.5 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors">退出此組</button>
                             </div>
                         </div>
                     </div>

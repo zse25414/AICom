@@ -28,6 +28,7 @@ async function initializeApp() {
     // Only preload enterprise chunk when needed — never block whole app if chunk fails
     const needsEnterprise =
         !!S.enterpriseSession ||
+        (Array.isArray(S.enterpriseMemberships) && S.enterpriseMemberships.length > 0) ||
         !!(typeof URLSearchParams !== 'undefined' &&
             new URLSearchParams(window.location.search || '').get('group'));
     if (needsEnterprise && typeof window.__luminaEnsureEnterprise === 'function') {

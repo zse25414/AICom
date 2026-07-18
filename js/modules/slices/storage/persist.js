@@ -228,15 +228,47 @@ function loadState() {
             }
         }
 
-        const savedEnterprise = localStorage.getItem('lumina_enterprise_session');
+        const sessionKey = (typeof C !== 'undefined' && C.ENTERPRISE_SESSION_KEY) || 'lumina_enterprise_session';
+        const membershipsKey = (typeof C !== 'undefined' && C.ENTERPRISE_MEMBERSHIPS_KEY) || 'lumina_enterprise_memberships';
+        const savedEnterprise = localStorage.getItem(sessionKey);
         if (savedEnterprise) {
             const ent = safeParseJson(savedEnterprise, null);
             S.enterpriseSession = (ent && typeof ent === 'object' && ent.groupCode)
                 ? ent
                 : null;
             if (!S.enterpriseSession) {
-                try { localStorage.removeItem('lumina_enterprise_session'); } catch (_) {}
+                try { localStorage.removeItem(sessionKey); } catch (_) {}
             }
+        }
+        // Multi-group memberships (migrate single session → list)
+        try {
+            const rawMem = safeParseJson(localStorage.getItem(membershipsKey) || '[]', []);
+            let list = Array.isArray(rawMem) ? rawMem.filter(m => m && m.groupCode) : [];
+            if (!list.length && S.enterpriseSession?.groupCode) {
+                list = [S.enterpriseSession];
+            }
+            // Dedupe by groupCode
+            const map = new Map();
+            list.forEach((m) => {
+                const code = String(m.groupCode || '').toUpperCase();
+                if (code) map.set(code, { ...m, groupCode: code });
+            });
+            S.enterpriseMemberships = [...map.values()];
+            localStorage.setItem(membershipsKey, JSON.stringify(S.enterpriseMemberships));
+            // If active session missing from list, clear active; if list has items but no active, pick first
+            if (S.enterpriseSession?.groupCode) {
+                const code = String(S.enterpriseSession.groupCode).toUpperCase();
+                if (!map.has(code)) {
+                    S.enterpriseMemberships.push({ ...S.enterpriseSession, groupCode: code });
+                    localStorage.setItem(membershipsKey, JSON.stringify(S.enterpriseMemberships));
+                }
+            } else if (S.enterpriseMemberships.length) {
+                S.enterpriseSession = S.enterpriseMemberships[0];
+                localStorage.setItem(sessionKey, JSON.stringify(S.enterpriseSession));
+            }
+        } catch (e) {
+            console.warn('[Lumina] load enterprise memberships', e);
+            S.enterpriseMemberships = S.enterpriseSession ? [S.enterpriseSession] : [];
         }
 
         try { migrateTasks(); } catch (e) {

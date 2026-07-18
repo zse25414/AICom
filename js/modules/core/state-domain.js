@@ -29,6 +29,10 @@ export function createSlice() {
             enterpriseApiUrl: 'http://localhost:3001'
         },
         enterpriseSession: null,
+        /** Multi-group memberships (local); active one is enterpriseSession */
+        enterpriseMemberships: [],
+        /** Show join/create forms even when already in a group */
+        enterpriseJoinFormOpen: false,
         enterpriseGroupData: null,
         teamNotifications: [],
         chatHistory: [],

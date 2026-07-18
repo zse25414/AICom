@@ -4022,3 +4022,60 @@ body.simple-mode .positioning-tagline { font-size: 0.9rem; }
     background: rgba(51, 65, 85, 0.7);
 }
 .auth-divider span { white-space: nowrap; }
+
+/* ── Team multi-group memberships ── */
+.team-memberships {
+    border-radius: 1.25rem;
+    border: 1px solid rgba(99, 102, 241, 0.22);
+    background: linear-gradient(160deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.55) 100%);
+    padding: 1rem 1.15rem 1.15rem;
+}
+.team-memberships-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.85rem;
+}
+.team-memberships-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.65rem;
+}
+@media (min-width: 640px) {
+    .team-memberships-grid { grid-template-columns: 1fr 1fr; }
+}
+.team-membership-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.85rem 0.95rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(51, 65, 85, 0.7);
+    background: rgba(15, 23, 42, 0.55);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.team-membership-card.is-active {
+    border-color: rgba(99, 102, 241, 0.55);
+    box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.2), 0 8px 24px rgba(99, 102, 241, 0.08);
+    background: rgba(99, 102, 241, 0.08);
+}
+.team-membership-code {
+    font-family: ui-monospace, monospace;
+    font-size: 0.7rem;
+    color: #a5b4fc;
+    padding: 0.1rem 0.45rem;
+    border-radius: 0.4rem;
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+}
+.team-membership-active-pill {
+    font-size: 0.6rem;
+    font-weight: 600;
+    color: #c7d2fe;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.25);
+    border: 1px solid rgba(99, 102, 241, 0.35);
+}
