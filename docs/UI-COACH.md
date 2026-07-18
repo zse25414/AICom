@@ -25,8 +25,16 @@
 - 任務切換：頂部 `<select id="coach-task-select">`  
 - `[選項: …]` 僅最後一則教練訊息顯示 chip  
 
+## 回覆可讀性（必守）
+
+- System prompt：短句、先結論、條列 ≤5、禁止花式 markdown／雞湯  
+- `normalizeCoachReplyText`：剝除 `**`、`#`、代碼塊後再顯示  
+- 溫度約 0.45；單則上限約 1800 字  
+- 選項 chip 短（≤16 字）、每則 2 個為主  
+
 ## 禁止
 
 - 整頁重做教練 layout（無 RFC + 前後截圖）  
 - 使用者氣泡使用 `word-break: break-word` + `min-width: 0` 的 shrink-to-fit 組合  
 - 輸入框固定多行 `rows>=2` 或 `field-sizing: content` 造成空框過高  
+- 鼓勵模型「深入、嚴謹、markdown 結構化」導致閱讀障礙的 prompt 文案

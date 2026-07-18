@@ -3378,11 +3378,25 @@ body {
 }
 
 .coach-agent-msg {
-    font-size: 0.95rem;
+    font-size: 0.92rem;
     line-height: 1.55;
     flex-shrink: 0;
     border: none;
     background: transparent;
+}
+
+/* Readable coach prose — no dense markdown visual noise */
+.coach-agent-msg-coach .coach-msg-text {
+    font-size: 0.9rem;
+    line-height: 1.65;
+    letter-spacing: 0.01em;
+    color: #e4e4e7;
+    font-weight: 400;
+}
+.coach-agent-msg-coach .coach-msg-text br + br {
+    display: block;
+    content: '';
+    margin-top: 0.15rem;
 }
 
 .coach-msg-body {

@@ -753,14 +753,15 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                 if (!reply) {
                     ragDegraded = true;
                 } else {
+                    reply = normalizeCoachReplyText(reply);
                     if (!reply.includes('[選項:')) {
                         reply += freeform
-                            ? `\n\n[選項: 再說明得更具體一點]\n[選項: 幫我建立一項今日任務]`
-                            : `\n\n[選項: 我了解，繼續執行當前步驟]\n[選項: 請幫我把這段資料再做詳細拆解]`;
+                            ? `\n\n[選項: 再說清楚一點]\n[選項: 加到今日待辦]`
+                            : `\n\n[選項: 繼續這一步]\n[選項: 拆更細]`;
                     }
 
                     const result = {
-                        reply: clampText(reply, 5000),
+                        reply: clampText(reply, 1800),
                         sources,
                         meta: {
                             usedKnowledge: true,
@@ -799,34 +800,30 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
     };
 
     const contextBlock = buildCoachContextText(getCoachContext());
-    const COACH_REPLY_MAX = 3500;
+    // Keep replies scannable on mobile; long essays create reading friction
+    const COACH_REPLY_MAX = 1800;
+    const styleRules = `寫作規則（必守，降低閱讀障礙）：
+1. 繁體中文、短句、口語清楚，像同事講話，不要演講腔或雞湯。
+2. 先給結論或「現在做這一步」（1–2 句），再列行動。
+3. 條列最多 5 點；每點一行、一句話說完。
+4. 禁止：大段引言、過度形容詞、表情符號堆砌、代碼塊、表格、JSON。
+5. 禁止 markdown 花式格式（不要 **粗體**、# 標題、\`\`\` 程式碼）；純文字即可。
+6. 全文以 80–220 字為佳，除非用戶要求詳細說明。
+7. 文末固定 2 個短選項（每行一個，文字 ≤16 字）：
+[選項: …]
+[選項: …]`;
 
     let systemPrompt;
     if (freeform) {
-        systemPrompt = `你是 Lumina 知識庫助理與行動教練。繁體中文，專業、可執行。
-用戶目前沒有聚焦任務，請回答他的問題；若適合，建議他建立一項今日任務。
-回答最後必須附 2-3 個選項，格式每行：[選項: 文字]
-禁止回傳 JSON。可用 markdown。
+        systemPrompt = `你是 Lumina 教練助手。回答使用者關於工作／知識庫的問題，能做就給下一步。
+${styleRules}
 ${contextBlock}`;
     } else {
         const step = session?.steps?.[session.currentStep];
-        systemPrompt = `你是 Lumina 行動教練，是引導用戶高效工作的專業教練。
-請使用繁體中文，語氣專業嚴謹、邏輯條理清晰。請根據用戶當前的情境給予深入且具實用性、結構化的專業引導與建議。
-用戶剛傳了一則訊息——請針對他的訊息進行嚴謹的回應，不要重複貼上無關的完整步驟說明。
-
-重要要求——動態行動選項：
-你必須在回答的最後，根據當前的對話進度與情境，額外設計 2 到 3 個用戶可能想要選擇的「具體行動選項」，供用戶點選回答（類似 Claude 的引導選項）。
-請嚴格遵守以下格式，在回答的最底部每行輸出一個選項（不要放在代碼塊中）：
-[選項: 選項文字]
-例如：
-[選項: 沒問題，我準備好開始寫第一段]
-[選項: 遇到瓶頸，請幫我把當前步驟再拆更細]
-[選項: 我需要找一些範本參考，能給我關鍵字嗎]
-
-若用戶詢問如何執行或怎麼做：請給予結構化、有步驟邏輯的引導，列出清晰的步驟。
-若用戶表示卡住、遇到瓶頸或拖延：請為他分析可能原因，並提供具體的應對方法或重新規劃子步驟。
-禁止：直接回傳原始 JSON。
-允許且建議：使用 markdown（例如粗體、無序列表、有序列點、程式碼區塊等）使回答更具結構性。
+        systemPrompt = `你是 Lumina 行動教練。只針對使用者當前訊息與「現在這一步」給可執行建議，不要重貼整份計畫。
+${styleRules}
+若使用者卡住：把步驟再拆成 2 分鐘可做的最小動作。
+若使用者問怎麼做：最多 3–5 個短步驟。
 ${contextBlock}
 當前任務：${task.name}
 當前步驟（${(session.currentStep || 0) + 1}/${session.steps.length}）「${step?.title}」：${step?.action}`;
@@ -839,8 +836,9 @@ ${contextBlock}
             content: m.content.slice(0, 500)
         }))
     ];
-    const content = await callDeepSeek(messages, { temperature: 0.75, source: 'coach' });
-    const text = String(content || '').trim();
+    // Lower temperature → fewer flowery digressions
+    const content = await callDeepSeek(messages, { temperature: 0.45, source: 'coach' });
+    const text = normalizeCoachReplyText(String(content || '').trim());
 
     let result;
     if (text.startsWith('{') && task) {
@@ -848,7 +846,7 @@ ${contextBlock}
         if (parsed.reply && !isGenericCoachFallback(parsed.reply)) {
             result = {
                 ...parsed,
-                reply: clampText(parsed.reply, COACH_REPLY_MAX),
+                reply: clampText(normalizeCoachReplyText(parsed.reply), COACH_REPLY_MAX),
                 meta: kbMeta,
                 ...inferAgentActionsFromUserMsg(userMsg, session)
             };
@@ -978,8 +976,44 @@ function getCoachWorkspace() {
     return document.getElementById('coach-workspace');
 }
 
+/**
+ * Strip flashy markdown / noise so coach text is easy to scan on mobile.
+ * Applied when storing AI replies and when rendering.
+ */
+function normalizeCoachReplyText(text) {
+    let t = String(text || '').replace(/^\uFEFF/, '').trim();
+    if (!t) return '';
+
+    // Preserve option tags, strip code fences (keep inner text)
+    t = t.replace(/```[\w]*\r?\n?([\s\S]*?)```/g, (_, inner) => String(inner || '').trim());
+    t = t.replace(/`([^`]+)`/g, '$1');
+
+    // Headings / bold / italic → plain (no lookbehind — broader browser support)
+    t = t.replace(/^#{1,6}\s+/gm, '');
+    t = t.replace(/\*\*([^*]+)\*\*/g, '$1');
+    t = t.replace(/__([^_]+)__/g, '$1');
+    // single *italic* after ** removed
+    t = t.replace(/\*([^*\n]+)\*/g, '$1');
+    t = t.replace(/_([^_\n]+)_/g, '$1');
+
+    // Decorative lines / noisy emoji clusters
+    t = t.replace(/^[-=*]{3,}\s*$/gm, '');
+    try {
+        t = t.replace(/[\u{1F300}-\u{1FAFF}]{3,}/gu, '');
+    } catch (_) { /* older engines without unicode property */ }
+
+    // Collapse blank lines and trim each line
+    t = t.split(/\r?\n/).map(line => line.replace(/[ \t]+$/g, '').replace(/[ \t]{2,}/g, ' ')).join('\n');
+    t = t.replace(/\n{3,}/g, '\n\n').trim();
+    return t;
+}
+
+/** Safe HTML for coach bubble: plain text + line breaks only */
 function formatCoachContent(text) {
-    return sanitizeHtml(String(text || '').replace(/\n/g, '<br>'));
+    const clean = normalizeCoachReplyText(text);
+    const esc = typeof escapeHtml === 'function' ? escapeHtml(clean) : clean
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return esc.replace(/\n/g, '<br>');
 }
 
 /** Strip coach option tags / markdown noise before creating tasks */
