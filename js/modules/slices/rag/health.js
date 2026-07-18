@@ -137,7 +137,7 @@ async function checkRagServiceHealth() {
         if (probe.retrieval) S.ragRetrievalMode = probe.retrieval;
         if (!S.ragServiceActive) {
             S.ragServiceActive = true;
-            console.log(`[Lumina RAG] 已連線（via ${probe.via}）${probe.retrieval ? ' — 檢索：' + probe.retrieval : ''}`);
+            console.debug(`[Lumina RAG] 已連線（via ${probe.via}）${probe.retrieval ? ' — 檢索：' + probe.retrieval : ''}`);
             await ensureEnterpriseDocsInRag({ toast: true, force: true });
         }
         updateRagSelectorChrome();
@@ -147,7 +147,7 @@ async function checkRagServiceHealth() {
 
     if (S.ragServiceActive) {
         S.ragServiceActive = false;
-        console.log('[Lumina RAG] RAG 服務中斷，自動切回本地離線/純文字模式。');
+        console.debug('[Lumina RAG] RAG 服務中斷，自動切回本地離線/純文字模式。');
     }
     updateRagSelectorChrome();
     await window.renderRagKbCheckboxes();
@@ -223,7 +223,9 @@ function setupRagHealthMonitoring() {
     setInterval(checkRagServiceHealth, 10000);
 }
 
+/** Demo helper for goal decomposer sample (console / advanced demos). */
 function pregenerateExample() {
-    document.getElementById('goal-input').value = '完成 Q3 產品路線圖並獲得團隊共識';
-    decomposeGoal();
+    const el = document.getElementById('goal-input');
+    if (el) el.value = '完成 Q3 產品路線圖並準備簡報';
+    if (typeof decomposeGoal === 'function') decomposeGoal();
 }

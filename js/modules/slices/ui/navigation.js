@@ -302,5 +302,5 @@ function setupKeyboardShortcuts() {
         }
     });
 
-    console.log('%c[Lumina AI] 快捷鍵：? 說明 · 1-5 切換頁面 · t 團隊 · k 知識庫 · Ctrl+/ 新增任務 · Esc 關閉', 'color:#64748b');
+    console.debug('%c[Lumina AI] 快捷鍵：? 說明 · 1-5 切換頁面 · t 團隊 · k 知識庫 · Ctrl+/ 新增任務 · Esc 關閉', 'color:#64748b');
 }

@@ -655,11 +655,27 @@ function updateNextStepCard(stats) {
     const scoreCtx = getScoringContext();
     
     if (S.tasks.length === 0) {
-        el.innerHTML = `<div class="next-step-label">今日第一步</div>
-               <div class="font-semibold text-lg">你有個大目標，但不知從哪開始？</div>
-               <p class="text-sm text-slate-400 mt-1">輸入目標，AI 幫你拆解並推薦今天該做的第一件</p>
-               <button ${luminaAction('openDecomposeTab')} class="mt-3 text-sm px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">分解我的目標</button>
-               <button ${luminaAction('focusQuickAdd')} class="mt-2 text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-300">或直接新增任務</button>`;
+        el.innerHTML = `
+            <div class="next-step-label">從這裡開始（只要 30 秒）</div>
+            <div class="font-semibold text-lg text-slate-100">今天只做一件事</div>
+            <p class="text-sm text-slate-400 mt-1.5 leading-relaxed">
+                先有一項待辦，Lumina 才會幫你排出「今日第一步」並可用教練帶做。
+            </p>
+            <div class="flex flex-wrap gap-2 mt-4">
+                <button type="button" ${luminaAction('seedDemoFirstTask')}
+                    class="text-sm px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium shadow-lg shadow-indigo-500/20">
+                    <i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i>一鍵體驗（加入範例任務）
+                </button>
+                <button type="button" ${luminaAction('focusQuickAdd')}
+                    class="text-sm px-4 py-2.5 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-200 font-medium">
+                    自己輸入任務
+                </button>
+                <button type="button" ${luminaAction('openDecomposeTab')}
+                    class="text-sm px-4 py-2.5 rounded-xl border border-purple-500/35 hover:bg-purple-500/10 text-purple-200 font-medium">
+                    我有大目標，先拆解
+                </button>
+            </div>
+            <p class="text-[10px] text-slate-500 mt-3">進階功能（團隊知識庫、數據洞察）在「更多」裡，之後需要再打開即可。</p>`;
         return;
     }
     
@@ -745,11 +761,43 @@ function quickAddTask() {
     };
     
     S.tasks.unshift(newTask);
+    S.todayFocusTaskId = newTask.id;
     saveState();
     input.value = '';
     
-    showToast('任務已快速加入！', 'success');
+    showToast('任務已加入今日！可按「開始做這件」', 'success');
     refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+    try { pulseNextStepCard(); } catch (_) {}
+}
+
+/** One-click demo task so newcomers can feel the full loop immediately. */
+function seedDemoFirstTask() {
+    if (S.tasks.some(t => !t.completed && t.due <= getTodayISO())) {
+        showToast('你已有今日待辦，直接從上方「今日第一步」開始即可', 'success');
+        showSection('dashboard');
+        try { pulseNextStepCard(); } catch (_) {}
+        return;
+    }
+    const demo = {
+        id: Date.now(),
+        name: '整理今天最重要的一件事（5 分鐘）',
+        duration: 10,
+        energy: 2,
+        category: 'admin',
+        due: getTodayISO(),
+        completed: false,
+        updatedAt: new Date().toISOString(),
+        source: 'demo'
+    };
+    S.tasks.unshift(demo);
+    S.todayFocusTaskId = demo.id;
+    saveState();
+    localStorage.setItem('lumina_beginner_dismissed', 'true');
+    showSection('dashboard');
+    refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+    showToast('已加入範例任務 — 點「開始做這件」或「教練帶我做」', 'success');
+    try { pulseNextStepCard(); } catch (_) {}
+    try { renderBeginnerWelcome(); } catch (_) {}
 }
 
 function renderTaskList() {

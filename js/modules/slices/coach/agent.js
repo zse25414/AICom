@@ -1027,9 +1027,16 @@ function renderCoachEmptyState(container) {
     container.innerHTML = `
         <div class="coach-empty-state">
             <div class="coach-empty-icon"><i class="fa-solid fa-route"></i></div>
-            <div class="coach-empty-title">尚無今日待辦</div>
-            <div class="coach-empty-desc">分解一個大目標後，教練會帶你從第一步開始做</div>
-            <button type="button" ${luminaAction('openDecomposeTab')} class="coach-empty-btn"><i class="fa-solid fa-magic mr-1"></i> 分解目標</button>
+            <div class="coach-empty-title">先有一項今日任務</div>
+            <div class="coach-empty-desc">教練會針對「正在做的那一件」一步步帶你，而不是空聊。</div>
+            <div class="flex flex-wrap gap-2 justify-center mt-3">
+                <button type="button" ${luminaAction('seedDemoFirstTask')} class="coach-empty-btn">
+                    <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> 一鍵體驗
+                </button>
+                <button type="button" ${luminaAction('showSection', { arg: 'dashboard' })} class="coach-empty-btn opacity-90">
+                    回今日新增
+                </button>
+            </div>
         </div>`;
 }
 

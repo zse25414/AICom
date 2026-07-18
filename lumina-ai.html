@@ -123,20 +123,22 @@
                 <p class="dash-summary" id="today-summary">載入中…</p>
             </div>
             
+            <div id="beginner-welcome" class="beginner-welcome hidden" aria-live="polite"></div>
+
             <div id="next-step-card" class="next-step-card"></div>
             
             <div class="quick-actions">
-                <button data-lumina-action="openDecomposeTab" class="quick-action-btn">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i><span>分解目標</span>
+                <button data-lumina-action="focusQuickAdd" class="quick-action-btn" data-simple-keep>
+                    <i class="fa-solid fa-plus"></i><span>新增任務</span>
                 </button>
-                <button data-lumina-action="quickStartToday" class="quick-action-btn">
+                <button data-lumina-action="quickStartToday" class="quick-action-btn" data-simple-keep>
                     <i class="fa-solid fa-forward-step"></i><span>今日第一步</span>
                 </button>
-                <button data-lumina-action="openCoachForNextTask" class="quick-action-btn">
+                <button data-lumina-action="openCoachForNextTask" class="quick-action-btn" data-simple-keep>
                     <i class="fa-solid fa-bolt"></i><span>行動教練</span>
                 </button>
-                <button data-lumina-action="focusQuickAdd" class="quick-action-btn">
-                    <i class="fa-solid fa-plus"></i><span>新增任務</span>
+                <button data-lumina-action="openDecomposeTab" class="quick-action-btn quick-action-advanced">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i><span>分解目標</span>
                 </button>
             </div>
             
@@ -1066,7 +1068,18 @@
                 <div class="text-center mb-8">
                     <div class="inline-flex items-center gap-x-2 px-4 py-1 rounded-full bg-indigo-500/10 text-indigo-400 text-xs tracking-widest font-medium mb-3">LUMINA AI 光流</div>
                     <h2 class="text-4xl font-semibold tracking-tighter">使用指南</h2>
-                    <p class="text-slate-400 mt-2 max-w-xl mx-auto">了解光流 AI 如何幫你化解迷茫、安排今天，並養成可持續的高效節奏</p>
+                    <p class="text-slate-400 mt-2 max-w-xl mx-auto">新人只要記住三步：加任務 → 開始做 → 卡住找教練</p>
+                    <div class="flex flex-wrap justify-center gap-2 mt-4">
+                        <button type="button" data-lumina-action="seedDemoFirstTask" class="text-sm px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium">
+                            <i class="fa-solid fa-play mr-1.5"></i>一鍵體驗
+                        </button>
+                        <button type="button" data-lumina-action="restartBeginnerTour" class="text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-200 font-medium">
+                            <i class="fa-solid fa-route mr-1.5"></i>重看 3 步導覽
+                        </button>
+                        <button type="button" data-lumina-action="showSection" data-lumina-arg="dashboard" class="text-sm px-4 py-2 rounded-xl border border-slate-600 hover:bg-slate-800 text-slate-300">
+                            回今日
+                        </button>
+                    </div>
                 </div>
                 
                 <div class="flex flex-wrap justify-center gap-2 mb-8">
@@ -1079,7 +1092,7 @@
                 <div id="guide-panel-solutions" class="guide-panel active space-y-5">
                     <div class="bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-transparent border border-indigo-500/20 rounded-3xl p-6 text-center">
                         <p class="text-lg font-medium leading-relaxed">光流 AI 只做一件事：<br><span class="text-indigo-300">把模糊大目標，變成你今天就能做的第一步。</span></p>
-                        <p class="text-sm text-slate-500 mt-3">不是又一個待辦清單，而是任務行動代理——拆解、排序、陪你做。</p>
+                        <p class="text-sm text-slate-500 mt-3">不是又一個待辦清單，而是任務行動代理——拆解、排序、陪你做。團隊知識庫屬於進階功能。</p>
                     </div>
                     
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1168,10 +1181,10 @@
                     <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6">
                         <div class="font-semibold mb-4 flex items-center gap-x-2"><i class="fa-solid fa-home text-indigo-400"></i><span>儀表板</span></div>
                         <div class="space-y-3 text-sm text-slate-300">
-                            <div class="flex gap-x-3"><span class="guide-step-num">1</span><span>查看今日完成進度、專注時間與連續高效天數。</span></div>
-                            <div class="flex gap-x-3"><span class="guide-step-num">2</span><span>在「今日核心目標」勾選任務，或用分類篩選聚焦重點。</span></div>
-                            <div class="flex gap-x-3"><span class="guide-step-num">3</span><span>「快速新增任務」輸入後按 Enter，任務會自動加入排程。</span></div>
-                            <div class="flex gap-x-3"><span class="guide-step-num">4</span><span>點「啟動今日模式」可一次體驗完整流程。</span></div>
+                            <div class="flex gap-x-3"><span class="guide-step-num">1</span><span>在「今日」輸入任務名稱按 Enter（或點一鍵體驗）。</span></div>
+                            <div class="flex gap-x-3"><span class="guide-step-num">2</span><span>上方會出現「今日第一步」— 點「開始做這件」。</span></div>
+                            <div class="flex gap-x-3"><span class="guide-step-num">3</span><span>卡住就點「教練帶我做」，一步步帶你完成。</span></div>
+                            <div class="flex gap-x-3"><span class="guide-step-num">4</span><span>數據摘要、分解目標、團隊知識庫可之後再學。</span></div>
                         </div>
                     </div>
                     
@@ -1595,9 +1608,9 @@
                 <div class="onboarding-dot"></div>
                 <div class="onboarding-dot"></div>
             </div>
-            <div id="onboarding-icon" class="onboarding-icon bg-indigo-500/15 text-indigo-400"><i class="fa-solid fa-plus"></i></div>
-            <h3 id="onboarding-title" class="font-semibold text-lg mb-2">新增第一個任務</h3>
-            <p id="onboarding-desc" class="text-sm text-slate-400 mb-5 leading-relaxed">在今日頁輸入任務名稱，按 Enter 即可加入待辦清單。</p>
+            <div id="onboarding-icon" class="onboarding-icon bg-indigo-500/15 text-indigo-400"><i class="fa-solid fa-sun"></i></div>
+            <h3 id="onboarding-title" class="font-semibold text-lg mb-2">今天只做一件事</h3>
+            <p id="onboarding-desc" class="text-sm text-slate-400 mb-5 leading-relaxed">Lumina 不是另一個待辦堆。核心就三步：加任務 → 開始做 → 卡住找教練。</p>
             <div class="flex gap-2">
                 <button data-lumina-action="skipOnboarding" class="flex-1 py-2.5 rounded-xl text-sm text-slate-500 hover:text-slate-300">略過</button>
                 <button data-lumina-action="nextOnboardingStep" id="onboarding-next-btn" class="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium">下一步</button>
@@ -1605,19 +1618,26 @@
         </div>
     </div>
     
-    <!-- Auth: Register / Login -->
+    <!-- Auth: Register / Login — guest-first for newcomers -->
     <div id="auth-overlay" class="auth-overlay hidden" role="dialog" aria-labelledby="auth-title" aria-modal="true">
         <div class="auth-card" data-lumina-stop>
             <div class="auth-logo"><i class="fa-solid fa-bolt"></i></div>
             <h2 id="auth-title" class="text-xl font-semibold text-center tracking-tight">歡迎來到 Lumina</h2>
-            <p class="text-sm text-slate-400 text-center mt-1.5 mb-5">大目標拆成小步，從今日第一步開始</p>
+            <p class="text-sm text-slate-400 text-center mt-1.5 mb-4">30 秒上手：加一項任務，今天只做那一件</p>
+
+            <button type="button" data-lumina-action="dismissAuthAsGuest" class="auth-guest-primary w-full text-sm px-4 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium shadow-lg shadow-indigo-500/20">
+                <i class="fa-solid fa-play mr-1.5"></i>先試試看（訪客，免註冊）
+            </button>
+            <p class="text-[10px] text-slate-500 text-center mt-2 mb-4 leading-relaxed">資料存在本機瀏覽器。之後要同步再註冊即可。</p>
+
+            <div class="auth-divider"><span>或登入 / 註冊</span></div>
             
             <div class="auth-tabs" role="tablist">
-                <button type="button" id="auth-tab-login" class="auth-tab" role="tab" aria-selected="false" data-lumina-action="switchAuthTab" data-lumina-arg="login">登入</button>
-                <button type="button" id="auth-tab-register" class="auth-tab active" role="tab" aria-selected="true" data-lumina-action="switchAuthTab" data-lumina-arg="register">註冊</button>
+                <button type="button" id="auth-tab-login" class="auth-tab active" role="tab" aria-selected="true" data-lumina-action="switchAuthTab" data-lumina-arg="login">登入</button>
+                <button type="button" id="auth-tab-register" class="auth-tab" role="tab" aria-selected="false" data-lumina-action="switchAuthTab" data-lumina-arg="register">註冊</button>
             </div>
             
-            <form id="auth-register-form" class="auth-form-panel active" data-lumina-submit="handleRegister" novalidate>
+            <form id="auth-register-form" class="auth-form-panel" data-lumina-submit="handleRegister" novalidate>
                 <div class="space-y-3.5">
                     <div>
                         <label class="text-xs text-slate-400 block mb-1.5" for="auth-reg-name">顯示名稱</label>
@@ -1628,7 +1648,7 @@
                         <input id="auth-reg-email" type="email" class="auth-field" placeholder="you@example.com" autocomplete="email" required maxlength="120">
                     </div>
                     <div>
-                        <label class="text-xs text-slate-400 block mb-1.5" for="auth-reg-role">職稱 / 角色</label>
+                        <label class="text-xs text-slate-400 block mb-1.5" for="auth-reg-role">職稱 / 角色（選填）</label>
                         <input id="auth-reg-role" type="text" class="auth-field" placeholder="產品經理" autocomplete="organization-title" maxlength="40">
                     </div>
                     <div>
@@ -1644,7 +1664,7 @@
                 </div>
             </form>
             
-            <form id="auth-login-form" class="auth-form-panel" data-lumina-submit="handleLogin" novalidate>
+            <form id="auth-login-form" class="auth-form-panel active" data-lumina-submit="handleLogin" novalidate>
                 <div class="space-y-3.5">
                     <div>
                         <label class="text-xs text-slate-400 block mb-1.5" for="auth-login-email">電子郵件</label>
@@ -1658,11 +1678,6 @@
                     <button type="submit" id="auth-login-btn" class="auth-submit">登入</button>
                 </div>
             </form>
-            
-            <button type="button" data-lumina-action="dismissAuthAsGuest" class="auth-guest-btn w-full mt-4 text-sm px-4 py-2.5 rounded-2xl border border-slate-700 hover:bg-slate-800 text-slate-400">
-                先以訪客試用
-            </button>
-            <p class="text-[10px] text-slate-500 text-center mt-4 leading-relaxed">訪客模式資料保存在本機；註冊後可同步至雲端（需啟動後端 API）。</p>
         </div>
     </div>
     

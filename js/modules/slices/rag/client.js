@@ -59,7 +59,7 @@ async function syncDocumentToRag({ groupCode, kbId, docType, title, content, fil
             throw new Error('沒有可索引的文件內容');
         }
 
-        console.log(`[Lumina RAG] 已索引：${title} (${kb})`);
+        console.debug(`[Lumina RAG] 已索引：${title} (${kb})`);
         if (options.toastOnSuccess) showToast(`已同步至 RAG：${title}`, 'success');
         return true;
     } catch (e) {
@@ -145,7 +145,7 @@ async function deleteDocumentFromRag({ groupCode, kbId, filename, documentId }) 
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || `RAG 刪除失敗 (${res.status})`);
         }
-        console.log('[Lumina RAG] 文件已從知識庫索引移除。');
+        console.debug('[Lumina RAG] 文件已從知識庫索引移除。');
     } catch (e) {
         console.warn('[Lumina RAG] 知識庫刪除同步失敗:', e.message);
     }

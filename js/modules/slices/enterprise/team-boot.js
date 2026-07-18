@@ -118,29 +118,30 @@ const PAGE_TITLES = {
 const MORE_SECTIONS = ['insights', 'team', 'guide', 'settings'];
 
 
+/** Newcomer-first tour: stay simple, personal loop only (no team/RAG yet). */
 const ONBOARDING_STEPS = [
     {
-        title: '從大目標開始',
-        desc: '有模糊的大目標？先到「任務」頁用目標分解器拆開，AI 會推薦你今日第一步。',
-        icon: 'fa-wand-magic-sparkles',
-        iconBg: 'bg-purple-500/15 text-purple-400',
-        section: 'scheduler',
-        highlight: null,
-        onEnter: () => openDecomposeTab()
-    },
-    {
-        title: '鎖定今日第一步',
-        desc: '回到「今日」頁，你會看到系統推薦的今日第一步——今天只做最重要那一件。',
-        icon: 'fa-forward-step',
+        title: '今天只做一件事',
+        desc: 'Lumina 不是另一個待辦堆。核心就三步：加任務 → 開始做 → 卡住找教練。',
+        icon: 'fa-sun',
         iconBg: 'bg-indigo-500/15 text-indigo-400',
         section: 'dashboard',
         highlight: 'next-step-card'
     },
     {
-        title: '行動教練帶你做',
-        desc: '卡住或拖延？點「教練」，它會讀取你的任務，告訴你怎麼開始——不是空泛聊天。',
+        title: '先有一項待辦',
+        desc: '在「今日」輸入任務名稱按 Enter，或等下用「一鍵體驗」。不需要一次填完整天。',
+        icon: 'fa-plus',
+        iconBg: 'bg-emerald-500/15 text-emerald-400',
+        section: 'dashboard',
+        highlight: 'quick-task-input'
+    },
+    {
+        title: '開始做，或讓教練帶',
+        desc: '有任務後，點「開始做這件」進入專注；不知道怎麼下手就點「教練帶我做」。',
         icon: 'fa-bolt',
         iconBg: 'bg-sky-500/15 text-sky-400',
-        section: 'coach'
+        section: 'dashboard',
+        highlight: 'next-step-card'
     }
 ];

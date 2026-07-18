@@ -3894,3 +3894,131 @@ body {
 }
 
 .team-notif-toggle:last-child { border-bottom: none; }
+
+/* ── Beginner / simple-mode (newcomer simplification) ── */
+.beginner-welcome {
+    margin-bottom: 1.25rem;
+    border-radius: 1.5rem;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    background: linear-gradient(145deg, rgba(99, 102, 241, 0.14) 0%, rgba(14, 165, 233, 0.08) 55%, rgba(15, 23, 42, 0.6) 100%);
+    box-shadow: 0 8px 28px rgba(99, 102, 241, 0.12);
+    overflow: hidden;
+}
+.beginner-welcome.hidden { display: none !important; }
+.beginner-welcome-inner { padding: 1.25rem 1.4rem 1.15rem; }
+.beginner-welcome-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #a5b4fc;
+    background: rgba(99, 102, 241, 0.15);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 9999px;
+    padding: 0.2rem 0.65rem;
+    margin-bottom: 0.65rem;
+}
+.beginner-welcome-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #f1f5f9;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.75rem;
+}
+.beginner-welcome-steps {
+    margin: 0 0 1rem;
+    padding-left: 1.15rem;
+    color: #cbd5e1;
+    font-size: 0.875rem;
+    line-height: 1.65;
+}
+.beginner-welcome-steps li { margin-bottom: 0.2rem; }
+.beginner-welcome-steps strong { color: #e2e8f0; font-weight: 600; }
+.beginner-welcome-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.beginner-cta-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.6rem 1rem;
+    border-radius: 0.85rem;
+    background: #6366f1;
+    color: #fff;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(99, 102, 241, 0.28);
+}
+.beginner-cta-primary:hover { filter: brightness(1.08); }
+.beginner-cta-secondary {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.6rem 1rem;
+    border-radius: 0.85rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.45);
+    color: #e2e8f0;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+.beginner-cta-secondary:hover { background: rgba(30, 41, 59, 0.8); }
+.beginner-cta-ghost {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.6rem 0.85rem;
+    border-radius: 0.85rem;
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+.beginner-cta-ghost:hover { color: #cbd5e1; }
+.beginner-welcome-note {
+    margin: 0.85rem 0 0;
+    font-size: 0.68rem;
+    color: #64748b;
+    line-height: 1.45;
+}
+.beginner-empty-list {
+    text-align: center;
+    padding: 1.25rem 0.75rem;
+}
+
+/* Progressive disclosure: hide advanced chrome for newcomers */
+body.simple-mode .quick-action-advanced { display: none; }
+body.simple-mode #dash-stats-toggle { opacity: 0.75; }
+body.simple-mode #dashboard-category-filters { display: none; }
+body.simple-mode #nav-more-wrap .nav-dropdown-item[data-lumina-arg="insights"],
+body.simple-mode #nav-dropdown-insights { opacity: 0.65; }
+body.simple-mode .positioning-tagline { font-size: 0.9rem; }
+
+.auth-guest-primary {
+    transition: filter 0.15s ease, transform 0.15s ease;
+}
+.auth-guest-primary:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.auth-guest-primary:active { transform: scale(0.98); }
+
+.auth-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0.25rem 0 1rem;
+    color: #64748b;
+    font-size: 0.7rem;
+}
+.auth-divider::before,
+.auth-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: rgba(51, 65, 85, 0.7);
+}
+.auth-divider span { white-space: nowrap; }

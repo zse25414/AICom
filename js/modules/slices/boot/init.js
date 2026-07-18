@@ -81,15 +81,20 @@ async function initializeApp() {
 
     setTimeout(() => {
         try {
-            if (document.getElementById('auth-overlay')?.classList.contains('hidden') &&
-                !localStorage.getItem('lumina_onboarding_v2') && (S.tasks?.length || 0) === 0) {
+            const authHidden = document.getElementById('auth-overlay')?.classList.contains('hidden');
+            const onboardDone = typeof hasCompletedOnboarding === 'function'
+                ? hasCompletedOnboarding()
+                : !!(localStorage.getItem('lumina_onboarding_v3') || localStorage.getItem('lumina_onboarding_v2'));
+            if (authHidden && !onboardDone && (S.tasks?.length || 0) === 0) {
                 startOnboarding();
-            } else if (!document.getElementById('auth-overlay')?.classList.contains('hidden')) {
-                /* wait for auth */
+            } else if (!authHidden) {
+                /* wait for auth dismiss */
             } else if (!localStorage.getItem('lumina_welcomed')) {
-                showToast('歡迎使用 Lumina AI！', 'success');
+                showToast('歡迎！從「今日」開始就好', 'success');
                 localStorage.setItem('lumina_welcomed', 'true');
             }
+            try { renderBeginnerWelcome?.(); } catch (_) {}
+            try { applySimpleModeChrome?.(); } catch (_) {}
         } catch (e) {
             console.warn('[Lumina] post-init onboarding', e);
         }

@@ -16,8 +16,8 @@ function updateDashboard() {
         summaryEl.textContent = `${formatDateTW()} · 今日 ${stats.completed}/${todayRelevant.length} 項（${stats.rate}%）${futureNote} · 連續 ${S.userProfile.streak} 天 · 本週 ${weekScore} 分`;
     }
     
-    setElText('S.tasks-completed', stats.completed);
-    setElText('S.tasks-total', todayTotal);
+    setElText('tasks-completed', stats.completed);
+    setElText('tasks-total', todayTotal);
     setElText('focus-time', (stats.focusMinutes / 60).toFixed(1));
     
     const comparison = getFocusComparisonText(stats.focusMinutes);
@@ -56,16 +56,26 @@ function updateDashboard() {
     const displayRanked = ranked.slice(0, 8);
     
     if (displayRanked.length === 0) {
-        const futureHint = stats.futureCount > 0
-            ? `<span class="text-xs text-slate-500 mt-1">之後還有 ${stats.futureCount} 項待辦，可到「任務」頁查看</span>`
-            : '';
-        container.innerHTML = `<div class="text-center py-4 text-emerald-400 flex flex-col items-center"><i class="fa-solid fa-check-circle text-3xl mb-2"></i><span class="text-sm">太棒了！今日任務已全部完成</span>${futureHint}</div>`;
+        if (S.tasks.length === 0) {
+            container.innerHTML = `
+                <div class="beginner-empty-list">
+                    <div class="text-sm text-slate-300 font-medium">還沒有任務</div>
+                    <div class="text-xs text-slate-500 mt-1">在上方輸入一項，或用「一鍵體驗」看看流程</div>
+                </div>`;
+        } else {
+            const futureHint = stats.futureCount > 0
+                ? `<span class="text-xs text-slate-500 mt-1">之後還有 ${stats.futureCount} 項待辦，可到「任務」頁查看</span>`
+                : '';
+            container.innerHTML = `<div class="text-center py-4 text-emerald-400 flex flex-col items-center"><i class="fa-solid fa-check-circle text-3xl mb-2"></i><span class="text-sm">太棒了！今日任務已全部完成</span>${futureHint}</div>`;
+        }
     } else {
         container.innerHTML = displayRanked.map(t => renderPersonalTaskRow(t, 'dashboard')).join('');
     }
     
     renderActiveGoalsPanel();
     updateNextStepCard(stats);
+    try { renderBeginnerWelcome(); } catch (_) {}
+    try { applySimpleModeChrome(); } catch (_) {}
 }
 
 function syncCategoryFromEnergy() {
