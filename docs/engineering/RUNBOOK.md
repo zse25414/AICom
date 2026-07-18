@@ -34,7 +34,24 @@
 2. 確認 `npm run build` 產物已部署  
 3. 查 bundle size CI 是否綠  
 
-## 聯絡資訊
+## 6. 使用者回報／試點客訴
 
-- 工程 On-call：（填寫）  
-- 試點客戶窗口：（填寫）  
+1. 請對方在產品內：**設定 → 說明與回報 → 回報問題**  
+2. 複製全文（含診斷摘要）貼到工單或寄 on-call  
+3. 對照本文件第 1–5 節分類處理  
+4. 本機歷史：瀏覽器 `localStorage.lumina_support_reports_v1`（僅用戶端）
+
+## 聯絡資訊（部署時填寫）
+
+| 欄位 | 值 | 說明 |
+|------|-----|------|
+| 工程 On-call | （填寫姓名／輪值表 URL） | 事故與 P0 |
+| On-call 郵件 | 設 `window.__LUMINA_SUPPORT_EMAIL__` 或改 `getSupportContactEmail()` 預設 | 產品「開郵件」收件人 |
+| 試點客戶窗口 | （填寫） | 商務／成功經理 |
+| 狀態頁／群組 | （填寫 Slack／Discord） | 對外公告 |
+
+環境建議（文件化，非強制 env）：
+
+- `LUMINA_SUPPORT_EMAIL` — 部署說明用，前端可注入為 `window.__LUMINA_SUPPORT_EMAIL__`
+- `LUMINA_ONCALL_URL` — 輪值表或 PagerDuty  
+

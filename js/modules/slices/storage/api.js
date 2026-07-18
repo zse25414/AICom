@@ -3,6 +3,14 @@ function hasStoredApiKey() {
     return !!getStoredApiKey();
 }
 
+function isApiKeyPersisted() {
+    try {
+        return localStorage.getItem(C.API_KEY_PERSIST_FLAG) === '1';
+    } catch (_) {
+        return false;
+    }
+}
+
 function migrateApiSettings() {
     if (hasStoredApiKey() && !S.userProfile.apiEnabled && S.userProfile.apiMode !== 'proxy') {
         S.userProfile.apiEnabled = true;
@@ -10,23 +18,70 @@ function migrateApiSettings() {
     }
 }
 
+/**
+ * Session-first; optional localStorage when user opts in ("本機記住").
+ * Legacy local keys without persist flag migrate into session only.
+ */
 function migrateApiKeyStorage() {
-    const legacy = localStorage.getItem(C.API_KEY_STORAGE);
-    if (legacy && !sessionStorage.getItem(C.API_KEY_STORAGE)) {
-        sessionStorage.setItem(C.API_KEY_STORAGE, legacy);
-        localStorage.removeItem(C.API_KEY_STORAGE);
-    }
+    try {
+        const sess = sessionStorage.getItem(C.API_KEY_STORAGE);
+        const local = localStorage.getItem(C.API_KEY_STORAGE);
+        const persist = localStorage.getItem(C.API_KEY_PERSIST_FLAG) === '1';
+        if (local && !sess) {
+            sessionStorage.setItem(C.API_KEY_STORAGE, local);
+            if (!persist) localStorage.removeItem(C.API_KEY_STORAGE);
+        }
+        if (sess && persist && !local) {
+            localStorage.setItem(C.API_KEY_STORAGE, sess);
+        }
+    } catch (_) {}
 }
 
 function getStoredApiKey() {
-    return (sessionStorage.getItem(C.API_KEY_STORAGE) || '').trim();
+    try {
+        const sess = (sessionStorage.getItem(C.API_KEY_STORAGE) || '').trim();
+        if (sess) return sess;
+        if (isApiKeyPersisted()) {
+            const local = (localStorage.getItem(C.API_KEY_STORAGE) || '').trim();
+            if (local) {
+                sessionStorage.setItem(C.API_KEY_STORAGE, local);
+                return local;
+            }
+        }
+    } catch (_) {}
+    return '';
 }
 
-function setStoredApiKey(key) {
+/**
+ * @param {string} key
+ * @param {{ persist?: boolean }} [options] — omit persist to keep current preference
+ */
+function setStoredApiKey(key, options = {}) {
     const trimmed = String(key || '').trim();
-    if (trimmed) sessionStorage.setItem(C.API_KEY_STORAGE, trimmed);
-    else sessionStorage.removeItem(C.API_KEY_STORAGE);
-    localStorage.removeItem(C.API_KEY_STORAGE);
+    const persist = options.persist !== undefined ? !!options.persist : isApiKeyPersisted();
+    try {
+        if (trimmed) {
+            sessionStorage.setItem(C.API_KEY_STORAGE, trimmed);
+            if (persist) {
+                localStorage.setItem(C.API_KEY_STORAGE, trimmed);
+                localStorage.setItem(C.API_KEY_PERSIST_FLAG, '1');
+            } else {
+                localStorage.removeItem(C.API_KEY_STORAGE);
+                localStorage.removeItem(C.API_KEY_PERSIST_FLAG);
+            }
+        } else {
+            sessionStorage.removeItem(C.API_KEY_STORAGE);
+            localStorage.removeItem(C.API_KEY_STORAGE);
+            localStorage.removeItem(C.API_KEY_PERSIST_FLAG);
+        }
+    } catch (_) {}
+}
+
+function readApiKeyPersistCheckbox() {
+    const el = document.getElementById('settings-api-key-persist')
+        || document.getElementById('key-wizard-persist');
+    if (el && typeof el.checked === 'boolean') return el.checked;
+    return isApiKeyPersisted();
 }
 
 function getDeepSeekClientCredentials() {
@@ -145,8 +200,9 @@ async function callDeepSeek(messages, options = {}) {
 
 async function testApiConnection() {
     const keyInput = document.getElementById('settings-api-key').value.trim();
+    const persist = readApiKeyPersistCheckbox();
     if (keyInput) {
-        setStoredApiKey(keyInput);
+        setStoredApiKey(keyInput, { persist });
         S.userProfile.apiEnabled = true;
         document.getElementById('settings-api-enabled').checked = true;
     } else {
@@ -184,6 +240,8 @@ function loadSettingsForm() {
     document.getElementById('settings-api-enabled').checked = !!S.userProfile.apiEnabled;
     document.getElementById('settings-api-mode').value = S.userProfile.apiMode || 'direct';
     document.getElementById('settings-api-key').value = getStoredApiKey();
+    const persistEl = document.getElementById('settings-api-key-persist');
+    if (persistEl) persistEl.checked = isApiKeyPersisted();
     document.getElementById('settings-api-proxy').value = S.userProfile.apiProxyUrl || 'http://localhost:3001/api/chat';
     document.getElementById('settings-api-model').value = S.userProfile.apiModel || 'deepseek-chat';
     document.getElementById('settings-enterprise-api').value = S.userProfile.enterpriseApiUrl || 'http://localhost:3001';
@@ -199,6 +257,8 @@ function clearApiKey() {
     setStoredApiKey('');
     const input = document.getElementById('settings-api-key');
     if (input) input.value = '';
+    const persistEl = document.getElementById('settings-api-key-persist');
+    if (persistEl) persistEl.checked = false;
     updateApiStatusBadge();
     showToast('API Key 已清除', 'success');
 }
@@ -232,10 +292,14 @@ function saveSettings() {
     S.userProfile.enterpriseApiUrl = enterpriseUrl;
     
     const apiKey = document.getElementById('settings-api-key').value.trim();
+    const persist = readApiKeyPersistCheckbox();
     if (apiKey) {
-        setStoredApiKey(apiKey);
+        setStoredApiKey(apiKey, { persist });
         S.userProfile.apiEnabled = true;
         document.getElementById('settings-api-enabled').checked = true;
+    } else if (hasStoredApiKey()) {
+        // Re-apply persist preference to existing key without retyping
+        setStoredApiKey(getStoredApiKey(), { persist });
     }
     
     saveState();

@@ -506,75 +506,114 @@ function coachCompleteTaskFromAgent() {
 
 function buildOfflineAgentReply(userMsg, task, session) {
     const lower = String(userMsg || '').toLowerCase();
+    const mins = Math.min(25, Math.max(10, Number(task?.duration) || 25));
 
     // Free-form knowledge mode (no task)
     if (!task || session?.freeform) {
         if (/加入|建立|新增.*任務|待辦/.test(userMsg)) {
             return {
-                reply: '可以先到「今日」快速新增一項任務，或點「一鍵體驗」。有任務後我就能一步步帶你做。\n\n[選項: 一鍵體驗範例任務]\n[選項: 去今日新增任務]',
+                reply: '可以。最快路徑：到「今日」輸入任務名稱按 Enter，或點「一鍵體驗」載入示範任務。\n\n有任務後回來點「教練帶我做」，我會依步驟帶你走完第一件。\n\n[選項: 一鍵體驗範例任務]\n[選項: 去今日新增任務]',
+                advance: false, complete: false
+            };
+        }
+        if (/環境|設定|安裝|啟動|怎麼用/.test(userMsg)) {
+            return {
+                reply: '本機啟動建議：`npm run dev:all`（前端 + API + RAG）。API 就緒後可登入、建團隊、上傳知識庫。\n\n沒有 Key 也能用內建引導完成「建任務 → 教練帶做 → 勾選完成」。要個人化回覆再連 DeepSeek。\n\n[選項: 幫我建立一項今日任務]\n[選項: 連上 AI（約 1 分鐘）]\n[選項: 新人第一天要做什麼？]',
+                advance: false, complete: false
+            };
+        }
+        if (/新人|第一天|上手|開始/.test(userMsg)) {
+            return {
+                reply: '新人 5 分鐘路徑：\n1) 今日新增（或一鍵體驗）一項任務\n2) 點「教練帶我做」，跟完第一步\n3) 做完勾選完成，感受閉環\n\n之後再決定是否建團隊／上傳知識庫。卡住就直接打字問我。\n\n[選項: 一鍵體驗範例任務]\n[選項: 幫我建立一項今日任務]\n[選項: 連上 AI（約 1 分鐘）]',
                 advance: false, complete: false
             };
         }
         return {
-            reply: '目前是知識庫問答模式（尚無聚焦任務）。\n\n請用一句話說清楚你要查的流程或文件重點；若已加入團隊並選知識庫，我會優先依庫回答。有具體任務後，點「教練帶我做」會更精準。\n\n[選項: 環境怎麼設定？]\n[選項: 新人第一天要做什麼？]\n[選項: 幫我建立一項今日任務]',
+            reply: '目前是自由問答（尚無聚焦任務）。請用一句話說你要查的流程、文件重點，或想推進的工作；若已加入團隊並勾知識庫，我會優先依庫回答。\n\n有具體待辦時，點「教練帶我做」會依步驟陪跑，比空談更準。\n\n[選項: 環境怎麼設定？]\n[選項: 新人第一天要做什麼？]\n[選項: 幫我建立一項今日任務]',
             advance: false, complete: false
         };
     }
 
     const steps = session?.steps || [];
+    const total = Math.max(1, steps.length);
     const cur = Math.min(session?.currentStep || 0, Math.max(0, steps.length - 1));
     const step = steps[cur] || { title: '執行', action: task.name };
     const cat = typeof resolveCategory === 'function' ? resolveCategory(task) : 'execution';
-    const micro = String(step.action || '').split(/[，。]/)[0] || step.action || task.name;
+    const micro = String(step.action || step.title || task.name).split(/[，。；\n]/)[0].slice(0, 80) || task.name;
+    const progress = `進度 ${cur + 1}/${total}`;
+    const catLabel = ({ meeting: '會議', learning: '學習', deep: '深度工作', admin: '行政', execution: '執行' })[cat] || '執行';
 
-    if (/完成這步|做完了|好了|done/.test(lower)) {
+    if (/完成這步|做完了|做好了|好了|done/.test(lower)) {
         const isLast = cur >= steps.length - 1;
         if (isLast) {
-            return { reply: '太棒了！點「完成這件」勾選任務。\n\n[選項: 完成這件]', advance: false, complete: false };
+            return {
+                reply: `很好，這件「${task.name}」的步驟都走完了（${progress}）。\n\n請點「完成這件」勾選任務，把成果鎖進今日進度。若還有收尾，可先寫一句完成標準再勾。\n\n[選項: 完成這件]`,
+                advance: false, complete: false
+            };
         }
-        return { reply: '收到，幫你進下一步。', advance: true, complete: false };
+        const next = steps[cur + 1] || {};
+        const nextMicro = String(next.action || next.title || '下一步').split(/[，。]/)[0].slice(0, 60);
+        return {
+            reply: `收到，第 ${cur + 1} 步完成。下一手：「${next.title || nextMicro}」——先做 ${nextMicro || '最小動作'}。\n\n設 ${Math.min(15, mins)} 分鐘計時，做完回報「完成這步」。\n\n[選項: 完成這步]\n[選項: 卡住了]`,
+            advance: true, complete: false
+        };
     }
-    if (/卡住|難|不會|拖延|不想/.test(lower)) {
+    if (/卡住|難|不會|拖延|不想|放棄/.test(lower)) {
         const byCat = {
-            meeting: `只做 2 分鐘：寫下「${task.name}」要達成的 1 個決議，其餘之後補。`,
-            learning: `只做 2 分鐘：用一句話寫出學完要能解釋的重點。`,
-            deep: `只做 2 分鐘：打開檔案，寫下最小可交付版本的標題。`,
-            admin: `只做 2 分鐘：列出要處理的 3 個項目名稱即可。`,
-            execution: `只做 2 分鐘：${String(micro).slice(0, 70)}。`
+            meeting: `只做 2 分鐘：在備註寫「${task.name}」要帶走的 1 個決議＋1 個待確認問題，其餘會後補。`,
+            learning: `只做 2 分鐘：用一句話寫「學完要能跟別人解釋的重點」，先不追求完整筆記。`,
+            deep: `只做 2 分鐘：打開相關檔案，寫下最小可交付的標題或骨架，不必寫完。`,
+            admin: `只做 2 分鐘：列出要清的 3 個項目名稱（不用做完），再挑最短的一項動手。`,
+            execution: `只做 2 分鐘：${String(micro).slice(0, 70)}——只求有產出痕跡，不求完美。`
         };
         return {
-            reply: `沒問題，再縮小。\n\n${byCat[cat] || byCat.execution}\n做完跟我說「完成這步」。\n\n[選項: 完成這步]\n[選項: 再拆更細]\n[選項: 換簡單一點]`,
+            reply: `沒關係，把範圍再砍小（${catLabel}·${progress}）。\n\n${byCat[cat] || byCat.execution}\n\n做完跟我說「完成這步」；若仍卡住，選「換簡單一點」。\n\n[選項: 完成這步]\n[選項: 換簡單一點]\n[選項: 再拆更細]`,
             advance: false, complete: false
         };
     }
-    if (/簡單|太難|換/.test(lower)) {
+    if (/簡單|太難|換|再拆/.test(lower)) {
+        const simpleByCat = {
+            meeting: `只寫會議目標一句話 + 兩個討論點，時間盒 10 分鐘。`,
+            learning: `只看一個來源 10 分鐘，最後用三句話總結。`,
+            deep: `只產出「一句話版本」的結論或標題，再決定要不要加深。`,
+            admin: `清單上只留最短一項，其餘移到明天。`,
+            execution: `把「${step.title}」改成：打開檔案 → 寫下今天要交出的一句話版本。`
+        };
         return {
-            reply: `好，把「${step.title}」簡化成：先打開相關檔案，寫下今天要交出的「一句話版本」。\n\n[選項: 我準備好了，開始第一步]\n[選項: 完成這步]`,
+            reply: `好，簡化版（${progress}）：\n${simpleByCat[cat] || simpleByCat.execution}\n\n完成這版就回報「完成這步」，我們再決定是否加深。\n\n[選項: 我準備好了，開始第一步]\n[選項: 完成這步]\n[選項: 卡住了]`,
             advance: false, complete: false
         };
     }
-    if (/資料|參考|範本|文件|SOP|流程/.test(lower)) {
+    if (/資料|參考|範本|文件|SOP|流程|知識庫/.test(lower)) {
         const q = encodeURIComponent(`${task.name} 範本`);
         return {
-            reply: `先找 1 份範本就好，關鍵字：「${task.name}」。\n搜尋：https://www.google.com/search?q=${q}\n\n若已在團隊知識庫上傳過，可勾選知識庫或用 @庫名 再問一次。\n\n[選項: 我找到了，繼續執行]\n[選項: 用知識庫再查一次]`,
+            reply: `資料先求「夠用一份」，不要一次找齊（${progress}）。\n\n1) 關鍵字：「${task.name}」\n2) 外部搜尋：https://www.google.com/search?q=${q}\n3) 若團隊已上傳，勾選知識庫或用 @庫名 再問一次\n\n找到能直接套用的段落就回來繼續「${step.title}」。\n\n[選項: 我找到了，繼續執行]\n[選項: 用知識庫再查一次]\n[選項: 卡住了]`,
             advance: false, complete: false
         };
     }
     if (/怎麼|如何|什麼|為何|哪裡|嗎|？|\?/.test(userMsg)) {
         const guide = {
-            meeting: `1) 寫下會議目標一句話\n2) 列出 3 個討論點\n3) 預留會後「誰／做什麼／何時」欄位`,
-            learning: `1) 定義學完要能說出的一件事\n2) 只看一個來源 15 分鐘\n3) 用 3 句話總結`,
-            deep: `1) 定義最小可交付\n2) 關掉通知做一個番茄鐘\n3) 對照完成標準收尾`,
-            admin: `1) 列出要清的項目\n2) 每項標 2 分鐘內可做的動作\n3) 先做最短的一項`,
-            execution: `1) ${micro}\n2) 設定計時 ${Math.min(25, task.duration || 25)} 分鐘\n3) 做完回報「完成這步」`
+            meeting: `1) 寫下會議目標一句話\n2) 列出 3 個討論點（各一行）\n3) 預留會後「誰／做什麼／何時」三欄\n4) 開場 2 分鐘對齊目標，避免開場發散`,
+            learning: `1) 定義學完要能說出的一件事\n2) 只選一個來源，專心 ${Math.min(15, mins)} 分鐘\n3) 用 3 句話總結＋1 個可應用點\n4) 若要分享，先講給自己聽一遍`,
+            deep: `1) 寫下最小可交付（今天交得出的最小版）\n2) 關掉通知，做一個 ${mins} 分鐘番茄鐘\n3) 中段只擴寫核心段落，不開新分岔\n4) 對照完成標準收尾，缺的列成下一步`,
+            admin: `1) 列出要清的項目（全部寫出）\n2) 每項標「2 分鐘內可做」或「之後」\n3) 先做最短的一項並打勾\n4) 其餘排進明日或委派`,
+            execution: `1) 立刻做：${micro}\n2) 設計時 ${mins} 分鐘，中途不換任務\n3) 留下可見產出（檔案／訊息／清單）\n4) 做完回報「完成這步」`
         };
         return {
-            reply: `可以這樣做「${step.title}」：\n${guide[cat] || guide.execution}\n\n[選項: 我準備好了，開始第一步]\n[選項: 卡住了]\n[選項: 完成這步]`,
+            reply: `針對「${step.title}」（${catLabel}·${progress}）可以這樣走：\n${guide[cat] || guide.execution}\n\n先動手最小一步；卡住就說「卡住了」。\n\n[選項: 我準備好了，開始第一步]\n[選項: 完成這步]\n[選項: 卡住了]`,
             advance: false, complete: false
         };
     }
+    // Default mid-length coaching turn (balanced offline quality)
+    const focusLines = {
+        meeting: `此刻目標：把「${task.name}」收斂成可開會的材料，而不是完美簡報。`,
+        learning: `此刻目標：帶走一個說得清楚的重點，勝過讀完所有資料。`,
+        deep: `此刻目標：留下最小可交付痕跡，而不是一次做完美。`,
+        admin: `此刻目標：清掉最短的一項，讓清單開始動起來。`,
+        execution: `此刻目標：完成「${step.title}」的可見產出。`
+    };
     return {
-        reply: `收到。此刻專注「${step.title}」——${micro}。\n卡住就說「卡住了」。\n\n[選項: 完成這步]\n[選項: 卡住了]\n[選項: 換簡單一點]`,
+        reply: `收到。${focusLines[cat] || focusLines.execution}\n\n【${progress}】${step.title}\n下一步（約 2～${Math.min(10, mins)} 分鐘）：${micro}\n\n建議：設計時、關掉無關分頁，做完回報「完成這步」。若一開始就卡住，直接說「卡住了」或「換簡單一點」。\n\n[選項: 完成這步]\n[選項: 卡住了]\n[選項: 換簡單一點]`,
         advance: false, complete: false
     };
 }

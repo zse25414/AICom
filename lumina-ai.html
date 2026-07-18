@@ -1484,10 +1484,19 @@
                                 <label class="text-xs text-slate-400 block mb-1.5">API Key</label>
                                 <input id="settings-api-key" type="password" placeholder="sk-..." autocomplete="off"
                                        class="w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring font-mono">
-                                <div class="text-[10px] text-amber-400/80 mt-1.5">⚠️ Key 只存在你的瀏覽器工作階段（sessionStorage，關閉分頁即清除），教練與 RAG 知識庫查詢會使用此 Key。請勿分享或公開貼出。</div>
-                                <button type="button" data-lumina-action="clearApiKey" class="mt-2 text-[10px] px-3 py-1.5 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10">
-                                    清除已儲存的 API Key
-                                </button>
+                                <label class="mt-2.5 flex items-start gap-x-2.5 cursor-pointer text-sm text-slate-300">
+                                    <input id="settings-api-key-persist" type="checkbox" class="accent-violet-500 w-4 h-4 mt-0.5 flex-shrink-0">
+                                    <span>本機記住此 Key（關閉瀏覽器後仍保留；僅存此裝置 localStorage）</span>
+                                </label>
+                                <div class="text-[10px] text-amber-400/80 mt-1.5">⚠️ 預設僅 sessionStorage（關閉分頁即清除）。勾選「本機記住」才寫入 localStorage。教練與 RAG 查詢會使用此 Key，請勿分享。</div>
+                                <div class="flex flex-wrap gap-2 mt-2">
+                                    <button type="button" data-lumina-action="clearApiKey" class="text-[10px] px-3 py-1.5 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10">
+                                        清除已儲存的 API Key
+                                    </button>
+                                    <button type="button" data-lumina-action="openKeyWizard" class="text-[10px] px-3 py-1.5 rounded-xl border border-violet-500/30 text-violet-300 hover:bg-violet-500/10">
+                                        啟動 AI 設定嚮導
+                                    </button>
+                                </div>
                             </div>
                             <div id="api-proxy-group" class="hidden">
                                 <label class="text-xs text-slate-400 block mb-1.5">代理伺服器 URL</label>
@@ -1543,6 +1552,22 @@
                         </div>
                     </div>
                     
+                    <!-- Support / report (P1-6) -->
+                    <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6" id="settings-support-card">
+                        <div class="font-semibold mb-1 flex items-center gap-x-2">
+                            <i class="fa-solid fa-life-ring text-rose-400"></i><span>說明與回報</span>
+                        </div>
+                        <p class="text-[11px] text-slate-500 mb-4">遇到 bug、卡關或想建議功能時，可從這裡回報。診斷資訊只存在你本機，不會自動上傳。</p>
+                        <div class="flex flex-wrap gap-3">
+                            <button type="button" data-lumina-action="openReportIssue" class="text-xs px-4 py-2 rounded-2xl border border-rose-500/30 text-rose-300 hover:bg-rose-500/10 flex items-center gap-x-2">
+                                <i class="fa-solid fa-bug"></i><span>回報問題</span>
+                            </button>
+                            <button type="button" data-lumina-action="openKeyWizard" class="text-xs px-4 py-2 rounded-2xl border border-violet-500/30 text-violet-300 hover:bg-violet-500/10 flex items-center gap-x-2">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i><span>AI 設定嚮導</span>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Data -->
                     <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6">
                         <div class="font-semibold mb-4 flex items-center gap-x-2">
@@ -1750,8 +1775,11 @@
         </div>
     </div>
     
-    <!-- AI key setup wizard (rendered by ui/keywizard.js) -->
+    <!-- AI key setup wizard (rendered by coach/keywizard.js) -->
     <div id="key-wizard-overlay" class="auth-overlay hidden" role="dialog" aria-labelledby="key-wizard-title" aria-modal="true"></div>
+
+    <!-- Report issue (rendered by ui/support.js) -->
+    <div id="report-issue-overlay" class="auth-overlay hidden" role="dialog" aria-labelledby="report-issue-title" aria-modal="true"></div>
 
     <!-- Keyboard shortcuts help -->
     <div id="shortcuts-help-overlay" class="shortcuts-help-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcuts-help-title" hidden>

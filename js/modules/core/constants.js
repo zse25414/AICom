@@ -6,6 +6,8 @@ export const LAST_ACTIVE_DATE_KEY = 'lumina_last_active_date';
 export const USER_DATA_SYNC_DELAY_MS = 800;
 export const RAG_SERVICE_URL = "http://127.0.0.1:8000";
 export const API_KEY_STORAGE = 'lumina_api_key';
+/** When '1', API key is also kept in localStorage across browser restarts (opt-in). */
+export const API_KEY_PERSIST_FLAG = 'lumina_api_key_persist';
 export const ENTERPRISE_SYNC_RETRY_MS = 5000;
 export const RAG_KB_LABELS = {
     general: '一般預設 (General)',

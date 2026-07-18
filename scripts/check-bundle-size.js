@@ -11,8 +11,9 @@ const root = path.join(__dirname, '..');
 const limits = {
     // 2026-07-18d：Phase 0–3 analytics + usage + chunk-errors 進 core
     // 2026-07-18e：P5-A1 key 設定嚮導進 coach chunk（實測 115 KB + headroom）
-    'js/lumina-app.js': 300 * 1024,
-    'js/chunks/lumina-coach.js': 126 * 1024,
+    // 2026-07-18f：P1 support.js + API key persist 進 core（實測 308 KB + headroom）
+    'js/lumina-app.js': 340 * 1024,
+    'js/chunks/lumina-coach.js': 140 * 1024,
     'js/chunks/lumina-enterprise-docs.js': 130 * 1024
 };
 

@@ -17,6 +17,7 @@
 | `ui/dashboard` | 今日首屏 | core |
 | `ui/navigation` | 導覽、快捷鍵 | core |
 | `ui/onboarding` | 新人引導 / simple-mode | core |
+| `ui/support` | 產品內回報問題 | core |
 | `ui/insights` | 數據洞察頁 | core |
 | `ui/feedback` | toast / confetti | core |
 | `ui/pwa` | SW / install | core |

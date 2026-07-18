@@ -5,7 +5,14 @@ function clearSensitiveLocalData() {
         const val = localStorage.getItem(key);
         if (val) preserved[key] = val;
     }
-    const apiKey = sessionStorage.getItem(C.API_KEY_STORAGE);
+    // Opt-in "本機記住" API key must survive non-logout data scrubbing
+    const persistFlag = localStorage.getItem(C.API_KEY_PERSIST_FLAG);
+    const localApiKey = persistFlag === '1' ? localStorage.getItem(C.API_KEY_STORAGE) : null;
+    if (persistFlag === '1') {
+        preserved[C.API_KEY_PERSIST_FLAG] = '1';
+        if (localApiKey) preserved[C.API_KEY_STORAGE] = localApiKey;
+    }
+    const apiKey = sessionStorage.getItem(C.API_KEY_STORAGE) || localApiKey;
     localStorage.clear();
     Object.entries(preserved).forEach(([k, v]) => localStorage.setItem(k, v));
     if (apiKey) sessionStorage.setItem(C.API_KEY_STORAGE, apiKey);

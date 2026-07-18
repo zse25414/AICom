@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "description": "RAG golden questions for pilot quality gate (P1-4). Each item: seed document + questions with must_include substrings.",
+  "documents": [
+    {
+      "id": "culture",
+      "kb_id": "general",
+      "title": "公司文化手冊",
+      "content": "我們公司的核心價值是用戶價值第一。使命是幫助每個人完成今日第一步，簡單可執行。決策原則：先做最小可交付，再迭代。會議預設 25 分鐘，會後必寫誰／做什麼／何時。"
+    },
+    {
+      "id": "onboarding",
+      "kb_id": "onboarding",
+      "title": "新人第一天",
+      "content": "新人第一天流程：1) 領取帳號與權限 2) 閱讀文化手冊 3) 與 mentor 約 15 分鐘對齊本週目標 4) 在 Lumina 建立第一項今日任務並完成。工具：Slack #newjoiners、知識庫 onboarding。"
+    },
+    {
+      "id": "incident",
+      "kb_id": "specs",
+      "title": "事故應變 SOP",
+      "content": "事故分級：P0 全站不可用、P1 主路徑嚴重退化、P2 次要功能。P0 15 分鐘內 on-call 確認，建立戰情室，每 30 分鐘對客戶更新。恢復後 48 小時內寫 postmortem。"
+    }
+  ],
+  "questions": [
+    {
+      "id": "q-value",
+      "query": "公司的核心價值是什麼？",
+      "kb_ids": ["general"],
+      "must_include_any": ["用戶價值", "核心價值", "第一"],
+      "min_sources": 1
+    },
+    {
+      "id": "q-mission",
+      "query": "公司的使命是什麼？",
+      "kb_ids": ["general"],
+      "must_include_any": ["今日", "第一步", "使命", "簡單"],
+      "min_sources": 1
+    },
+    {
+      "id": "q-meeting",
+      "query": "會議預設多久？會後要寫什麼？",
+      "kb_ids": ["general"],
+      "must_include_any": ["25", "誰", "何時"],
+      "min_sources": 1
+    },
+    {
+      "id": "q-day1",
+      "query": "新人第一天要做什麼？",
+      "kb_ids": ["onboarding"],
+      "must_include_any": ["帳號", "mentor", "任務", "文化"],
+      "min_sources": 1
+    },
+    {
+      "id": "q-p0",
+      "query": "P0 事故要多快確認？恢復後多久寫 postmortem？",
+      "kb_ids": ["specs"],
+      "must_include_any": ["15", "48", "postmortem", "on-call", "oncall"],
+      "min_sources": 1
+    }
+  ],
+  "pass_ratio": 0.8
+}

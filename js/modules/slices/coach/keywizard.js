@@ -1,6 +1,6 @@
-/* Lumina: coach/keywizard.js — AI 連線設定嚮導（P5-A1）
+/* Lumina: coach/keywizard.js — AI 連線設定嚮導（P5-A1 / P1-2）
    給第一次接觸的使用者一條被牽著走的 key 設定路：
-   說明 → 申請 → 貼上 → 測試 → 完成。key 僅存瀏覽器 sessionStorage。 */
+   說明 → 申請 → 貼上（可選本機記住）→ 測試 → 完成。 */
 
 const KEY_WIZARD_TOTAL_STEPS = 5;
 
@@ -31,7 +31,8 @@ function keyWizardNext() {
             if (err) err.textContent = '請先貼上 API Key，或按「稍後再說」離開';
             return;
         }
-        setStoredApiKey(key);
+        const persist = !!document.getElementById('key-wizard-persist')?.checked;
+        setStoredApiKey(key, { persist });
         S.userProfile.apiEnabled = true;
         S.userProfile.apiMode = S.userProfile.apiMode || 'direct';
         persistProfile();
@@ -83,7 +84,7 @@ function keyWizardStepBody(step) {
                 <li><i class="fa-solid fa-circle-check text-emerald-400 mr-1.5"></i>用團隊知識庫生成有引用來源的回答</li>
             </ul>
             <div class="mt-4 text-[11px] text-slate-500 leading-relaxed rounded-2xl border border-slate-800 bg-slate-950/50 px-3.5 py-2.5">
-                <i class="fa-solid fa-lock mr-1"></i>Key 只存在你的瀏覽器（sessionStorage，關閉分頁即清除），不會上傳到 Lumina 伺服器。<br>
+                <i class="fa-solid fa-lock mr-1"></i>預設只存瀏覽器工作階段（關閉分頁即清除）；可在貼上時勾選「本機記住」。<br>
                 <i class="fa-solid fa-coins mr-1"></i>DeepSeek 按用量計費，一般教練對話單次成本遠低於 NT$0.1。
             </div>`;
     }
@@ -102,13 +103,18 @@ function keyWizardStepBody(step) {
             <p class="text-[11px] text-slate-500 mt-3">新帳號通常需先儲值最低額度才能呼叫 API。</p>`;
     }
     if (step === 2) {
+        const persistChecked = typeof isApiKeyPersisted === 'function' && isApiKeyPersisted() ? 'checked' : '';
         return `
             <p class="text-sm text-slate-300 leading-relaxed">把剛才複製的 Key 貼在這裡：</p>
             <input id="key-wizard-input" type="password" placeholder="sk-..." autocomplete="off"
                    class="mt-3 w-full bg-slate-950 border border-slate-700 rounded-2xl px-4 py-2.5 text-sm focus-ring font-mono"
                    value="${escapeHtml(getStoredApiKey())}">
+            <label class="mt-3 flex items-start gap-x-2.5 cursor-pointer text-sm text-slate-300">
+                <input id="key-wizard-persist" type="checkbox" class="accent-violet-500 w-4 h-4 mt-0.5 flex-shrink-0" ${persistChecked}>
+                <span>本機記住此 Key（關閉瀏覽器後仍保留；僅存你這台裝置的 localStorage）</span>
+            </label>
             <p id="key-wizard-error" class="text-[11px] text-amber-400 mt-2" role="alert"></p>
-            <p class="text-[11px] text-slate-500 mt-1">按「下一步」即儲存到本機瀏覽器並啟用 AI。</p>`;
+            <p class="text-[11px] text-slate-500 mt-1">按「下一步」即儲存並啟用 AI。預設僅本工作階段有效。</p>`;
     }
     if (step === 3) {
         return `
@@ -122,13 +128,16 @@ function keyWizardStepBody(step) {
                 跳過測試，稍後在設定頁再測
             </button>`;
     }
+    const persistHint = typeof isApiKeyPersisted === 'function' && isApiKeyPersisted()
+        ? '本機已記住 Key，下次開啟仍可直接使用。'
+        : 'Key 存在瀏覽器工作階段；關閉分頁後需重新貼上（可回設定勾選「本機記住」）。';
     return `
         <div class="text-center py-2">
             <div class="text-4xl mb-3">${S.keyWizardTested ? '🎉' : '👌'}</div>
             <p class="text-sm text-slate-300 leading-relaxed">${S.keyWizardTested
                 ? 'AI 已連線！教練現在會給你個人化的回覆與拆解。'
                 : 'Key 已儲存並啟用。之後可隨時在「設定 → DeepSeek AI 連線」測試或更換。'}</p>
-            <p class="text-[11px] text-slate-500 mt-3">提示：Key 存在瀏覽器工作階段，關閉分頁後需重新貼上（安全考量）。</p>
+            <p class="text-[11px] text-slate-500 mt-3">${persistHint}</p>
         </div>`;
 }
 

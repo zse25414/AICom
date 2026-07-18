@@ -24,6 +24,7 @@
     "ui/insights.js",
     "ui/navigation.js",
     "ui/onboarding.js",
+    "ui/support.js",
     "ui/pwa.js",
     "enterprise/team-boot.js",
     "rag/health.js",
