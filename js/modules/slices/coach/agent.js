@@ -1160,12 +1160,19 @@ function renderCoachAgentThread(thinking) {
                </button>`
             : '';
 
-        html += `
-            <div class="coach-agent-msg coach-agent-msg-${m.role}">
-                ${m.role === 'coach' ? '<span class="coach-msg-avatar" aria-hidden="true"><i class="fa-solid fa-bolt"></i></span>' : ''}
-                <div class="flex-1 min-w-0">
+        if (m.role === 'user') {
+            // User bubble: fit content width (never collapse to 1 CJK char tall strip)
+            html += `
+            <div class="coach-agent-msg coach-agent-msg-user">
+                <div class="coach-msg-text">${escapeHtml(displayContent)}</div>
+            </div>`;
+        } else {
+            html += `
+            <div class="coach-agent-msg coach-agent-msg-coach">
+                <span class="coach-msg-avatar" aria-hidden="true"><i class="fa-solid fa-bolt"></i></span>
+                <div class="coach-msg-main">
                     <div class="${bodyClass}">
-                        <div class="coach-msg-text">${m.role === 'coach' ? formatCoachContent(displayContent) : escapeHtml(displayContent)}</div>
+                        <div class="coach-msg-text">${formatCoachContent(displayContent)}</div>
                     </div>
                     ${expandBtn}
                     ${kbBadge}
@@ -1180,6 +1187,7 @@ function renderCoachAgentThread(thinking) {
                     ` : ''}
                 </div>
             </div>`;
+        }
     });
 
     if (thinkingLabel) {

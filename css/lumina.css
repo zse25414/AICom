@@ -3350,11 +3350,6 @@ body {
 .coach-agent-msg {
     font-size: 0.95rem;
     line-height: 1.55;
-    padding: 0;
-    border-radius: 0;
-    max-width: min(92%, 40rem);
-    white-space: pre-line;
-    word-break: break-word;
     flex-shrink: 0;
     border: none;
     background: transparent;
@@ -3392,7 +3387,7 @@ body {
 }
 
 .coach-agent-msg-coach {
-    align-self: flex-start;
+    align-self: stretch;
     width: 100%;
     max-width: min(100%, 42rem);
     display: flex;
@@ -3401,9 +3396,15 @@ body {
     color: #e4e4e7;
     background: transparent;
     border: none;
+    padding: 0;
 }
 
-.coach-agent-msg-coach > i,
+.coach-msg-main {
+    flex: 1 1 auto;
+    min-width: 0; /* only coach body may shrink for long text */
+    max-width: 100%;
+}
+
 .coach-msg-avatar {
     flex-shrink: 0;
     width: 1.65rem;
@@ -3413,20 +3414,34 @@ body {
     align-items: center;
     justify-content: center;
     font-size: 0.65rem !important;
-    margin-top: 0.1rem;
+    margin-top: 0.15rem;
     background: radial-gradient(circle at 30% 30%, #a78bfa, #6366f1 50%, #0ea5e9);
     color: #fff !important;
-    opacity: 1;
 }
 
+/* User bubble: horizontal pill sized to text — NOT a vertical CJK strip */
 .coach-agent-msg-user {
     align-self: flex-end;
-    max-width: min(88%, 34rem);
-    padding: 0.7rem 0.95rem;
-    border-radius: 1.25rem 1.25rem 0.35rem 1.25rem;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    display: block;
+    width: fit-content;
+    max-width: min(85%, 28rem);
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 0.55rem 0.9rem;
+    border-radius: 1.15rem 1.15rem 0.3rem 1.15rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     color: #fafafa;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: normal;
+    line-height: 1.45;
+}
+
+.coach-agent-msg-user .coach-msg-text {
+    display: inline;
+    margin: 0;
+    padding: 0;
 }
 
 .coach-agent-thread-hint {
