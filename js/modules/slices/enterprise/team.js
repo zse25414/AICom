@@ -203,6 +203,57 @@ function enterpriseSessionKey() {
 function enterpriseMembershipsKey() {
     return (typeof C !== 'undefined' && C.ENTERPRISE_MEMBERSHIPS_KEY) || 'lumina_enterprise_memberships';
 }
+function enterpriseOwnerKey() {
+    return 'lumina_enterprise_owner_id';
+}
+
+/** Current auth user id or 'guest' — used to isolate team localStorage per account. */
+function getEnterpriseOwnerId() {
+    try {
+        if (typeof getAuthSession === 'function') {
+            const id = getAuthSession()?.user?.id;
+            if (id) return String(id);
+        }
+    } catch (_) {}
+    try {
+        const raw = JSON.parse(localStorage.getItem((typeof C !== 'undefined' && C.AUTH_SESSION_KEY) || 'lumina_auth_session') || 'null');
+        if (raw?.user?.id) return String(raw.user.id);
+        if (raw?.userId) return String(raw.userId);
+    } catch (_) {}
+    return 'guest';
+}
+
+/**
+ * Wipe all client-side enterprise/team state (session, memberships, caches).
+ * Call on account switch / new register / logout so teams never leak across users.
+ */
+function clearEnterpriseClientState() {
+    try { stopEnterprisePolling(); } catch (_) {}
+    try { if (typeof stopRagStatusPolling === 'function') stopRagStatusPolling(); } catch (_) {}
+    S.enterpriseSession = null;
+    S.enterpriseMemberships = [];
+    S.enterpriseGroupData = null;
+    S.enterpriseJoinFormOpen = false;
+    S.enterpriseDataFetchedAt = 0;
+    S.teamNotifications = [];
+    S.teamNotificationsInitialized = false;
+    try { S.knownTeamNotificationIds?.clear?.(); } catch (_) {}
+    try { S.locallyReadNotificationIds?.clear?.(); } catch (_) {}
+    S.teamWorkspaceTab = 'members';
+    S.ragKbItemsById = {};
+    S.ragSyncedGroupKey = null;
+    S.docRagStatusOverrides = {};
+    S._membershipSyncAt = 0;
+    S._membershipRecoverAt = 0;
+    try { closeNotificationPanel?.(); } catch (_) {}
+    try {
+        localStorage.removeItem(enterpriseSessionKey());
+        localStorage.removeItem(enterpriseMembershipsKey());
+        localStorage.removeItem(enterpriseOwnerKey());
+    } catch (_) {}
+    try { updateNotificationUI?.(); } catch (_) {}
+    try { renderEnterprisePage?.(); } catch (_) {}
+}
 
 function normalizeEnterpriseMembership(m) {
     if (!m || typeof m !== 'object') return null;
@@ -221,28 +272,60 @@ function normalizeEnterpriseMembership(m) {
 
 function ensureEnterpriseMembershipsLoaded() {
     if (!Array.isArray(S.enterpriseMemberships)) S.enterpriseMemberships = [];
+    const owner = getEnterpriseOwnerId();
+    const storedOwner = localStorage.getItem(enterpriseOwnerKey()) || '';
+    // Different account / guest transition → never reuse previous teams
+    if (storedOwner && storedOwner !== owner) {
+        S.enterpriseMemberships = [];
+        S.enterpriseSession = null;
+        S.enterpriseGroupData = null;
+        try {
+            localStorage.removeItem(enterpriseSessionKey());
+            localStorage.removeItem(enterpriseMembershipsKey());
+        } catch (_) {}
+        localStorage.setItem(enterpriseOwnerKey(), owner);
+        return S.enterpriseMemberships;
+    }
     if (S.enterpriseMemberships.length) return S.enterpriseMemberships;
     try {
-        const raw = JSON.parse(localStorage.getItem(enterpriseMembershipsKey()) || '[]');
-        const list = (Array.isArray(raw) ? raw : []).map(normalizeEnterpriseMembership).filter(Boolean);
+        const raw = JSON.parse(localStorage.getItem(enterpriseMembershipsKey()) || 'null');
+        // Support { ownerId, items } envelope or legacy bare array
+        let list = [];
+        let fileOwner = '';
+        if (Array.isArray(raw)) {
+            list = raw;
+        } else if (raw && typeof raw === 'object') {
+            fileOwner = String(raw.ownerId || '');
+            list = Array.isArray(raw.items) ? raw.items : [];
+        }
+        if (fileOwner && fileOwner !== owner) {
+            S.enterpriseMemberships = [];
+            localStorage.setItem(enterpriseOwnerKey(), owner);
+            return S.enterpriseMemberships;
+        }
         const map = new Map();
-        list.forEach((m) => map.set(m.groupCode, m));
-        if (!map.size && S.enterpriseSession?.groupCode) {
+        list.map(normalizeEnterpriseMembership).filter(Boolean).forEach((m) => map.set(m.groupCode, m));
+        // Only adopt active session if same owner
+        if (!map.size && S.enterpriseSession?.groupCode && (!storedOwner || storedOwner === owner)) {
             const cur = normalizeEnterpriseMembership(S.enterpriseSession);
             if (cur) map.set(cur.groupCode, cur);
         }
         S.enterpriseMemberships = [...map.values()];
+        localStorage.setItem(enterpriseOwnerKey(), owner);
     } catch (_) {
-        S.enterpriseMemberships = S.enterpriseSession?.groupCode
-            ? [normalizeEnterpriseMembership(S.enterpriseSession)].filter(Boolean)
-            : [];
+        S.enterpriseMemberships = [];
     }
     return S.enterpriseMemberships;
 }
 
 function saveEnterpriseMemberships() {
     ensureEnterpriseMembershipsLoaded();
-    localStorage.setItem(enterpriseMembershipsKey(), JSON.stringify(S.enterpriseMemberships));
+    const owner = getEnterpriseOwnerId();
+    localStorage.setItem(enterpriseOwnerKey(), owner);
+    localStorage.setItem(enterpriseMembershipsKey(), JSON.stringify({
+        ownerId: owner,
+        items: S.enterpriseMemberships
+    }));
 }
 
 function upsertEnterpriseMembership(session) {
@@ -259,8 +342,10 @@ function upsertEnterpriseMembership(session) {
 function setActiveEnterpriseSession(session) {
     const m = session ? normalizeEnterpriseMembership(session) : null;
     S.enterpriseSession = m;
+    const owner = getEnterpriseOwnerId();
+    localStorage.setItem(enterpriseOwnerKey(), owner);
     if (m) {
-        localStorage.setItem(enterpriseSessionKey(), JSON.stringify(m));
+        localStorage.setItem(enterpriseSessionKey(), JSON.stringify({ ...m, ownerId: owner }));
         upsertEnterpriseMembership(m);
     } else {
         localStorage.removeItem(enterpriseSessionKey());
@@ -655,10 +740,11 @@ async function syncEnterpriseMembershipsFromServer(options = {}) {
     const api = await enterpriseFetch('GET', '/api/enterprise/memberships');
     if (!api.ok) {
         if (!api.offline) console.warn('[Lumina] memberships sync failed', api.error);
+        // On hard failure for a logged-in user: still drop memberships owned by other accounts
+        ensureEnterpriseMembershipsLoaded();
         return { ok: false, offline: !!api.offline, error: api.error };
     }
     const remote = Array.isArray(api.data?.memberships) ? api.data.memberships : [];
-    ensureEnterpriseMembershipsLoaded();
     const byCode = new Map();
     remote.forEach((m) => {
         const code = normalizeEnterpriseCode(m.groupCode);
@@ -673,38 +759,41 @@ async function syncEnterpriseMembershipsFromServer(options = {}) {
             joinedAt: m.joinedAt || null
         });
     });
-    // Keep pure offline-local memberships not present on server
-    const offlineLocals = (S.enterpriseMemberships || []).filter(
-        (m) => m.offline && !byCode.has(normalizeEnterpriseCode(m.groupCode))
-    );
-    S.enterpriseMemberships = [...byCode.values(), ...offlineLocals];
+    // Server is source of truth for logged-in accounts — never keep another user's local teams
+    S.enterpriseMemberships = [...byCode.values()];
     saveEnterpriseMemberships();
 
     const activeCode = normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '');
     if (activeCode && byCode.has(activeCode)) {
-        setActiveEnterpriseSession({ ...S.enterpriseSession, ...byCode.get(activeCode) });
-    } else if (activeCode && !byCode.has(activeCode) && !offlineLocals.some((m) => m.groupCode === activeCode)) {
-        // Kicked / left on another device
+        setActiveEnterpriseSession({ ...byCode.get(activeCode) });
+    } else if (activeCode && !byCode.has(activeCode)) {
+        // Not a member of active group on this account
         try { stopEnterprisePolling(); } catch (_) {}
         clearActiveEnterpriseWorkspaceCaches();
         const next = S.enterpriseMemberships[0] || null;
         setActiveEnterpriseSession(next);
-        if (options.toast !== false) {
+        if (options.toast !== false && !options.silent) {
             showToast(next
-                ? `帳號已不在 ${activeCode}，已切換至 ${next.groupName || next.groupCode}`
-                : `帳號已不在群組 ${activeCode}`, 'success');
+                ? `此帳號不在 ${activeCode}，已切換至 ${next.groupName || next.groupCode}`
+                : '此帳號尚無企業群組', 'success');
         }
         if (next) {
             try { loadLocallyReadNotificationIds(); } catch (_) {}
             try { await refreshEnterpriseData(true); } catch (_) {}
             try { startEnterprisePolling(); } catch (_) {}
             try { await refreshTeamNotifications(true); } catch (_) {}
+        } else {
+            try { updateNotificationUI(); } catch (_) {}
+            try { renderEnterprisePage(); } catch (_) {}
         }
     } else if (!activeCode && S.enterpriseMemberships.length && options.autoSelect !== false) {
         setActiveEnterpriseSession(S.enterpriseMemberships[0]);
         try { loadLocallyReadNotificationIds(); } catch (_) {}
         try { await refreshEnterpriseData(true); } catch (_) {}
         try { startEnterprisePolling(); } catch (_) {}
+    } else if (!activeCode && !S.enterpriseMemberships.length) {
+        setActiveEnterpriseSession(null);
+        try { stopEnterprisePolling(); } catch (_) {}
     }
 
     if (options.render !== false) {

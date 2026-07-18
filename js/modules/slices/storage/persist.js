@@ -230,45 +230,86 @@ function loadState() {
 
         const sessionKey = (typeof C !== 'undefined' && C.ENTERPRISE_SESSION_KEY) || 'lumina_enterprise_session';
         const membershipsKey = (typeof C !== 'undefined' && C.ENTERPRISE_MEMBERSHIPS_KEY) || 'lumina_enterprise_memberships';
-        const savedEnterprise = localStorage.getItem(sessionKey);
-        if (savedEnterprise) {
-            const ent = safeParseJson(savedEnterprise, null);
-            S.enterpriseSession = (ent && typeof ent === 'object' && ent.groupCode)
-                ? ent
-                : null;
-            if (!S.enterpriseSession) {
-                try { localStorage.removeItem(sessionKey); } catch (_) {}
-            }
-        }
-        // Multi-group memberships (migrate single session → list)
+        const ownerKey = 'lumina_enterprise_owner_id';
+        let authUserId = null;
         try {
-            const rawMem = safeParseJson(localStorage.getItem(membershipsKey) || '[]', []);
-            let list = Array.isArray(rawMem) ? rawMem.filter(m => m && m.groupCode) : [];
-            if (!list.length && S.enterpriseSession?.groupCode) {
-                list = [S.enterpriseSession];
-            }
-            // Dedupe by groupCode
-            const map = new Map();
-            list.forEach((m) => {
-                const code = String(m.groupCode || '').toUpperCase();
-                if (code) map.set(code, { ...m, groupCode: code });
-            });
-            S.enterpriseMemberships = [...map.values()];
-            localStorage.setItem(membershipsKey, JSON.stringify(S.enterpriseMemberships));
-            // If active session missing from list, clear active; if list has items but no active, pick first
-            if (S.enterpriseSession?.groupCode) {
-                const code = String(S.enterpriseSession.groupCode).toUpperCase();
-                if (!map.has(code)) {
-                    S.enterpriseMemberships.push({ ...S.enterpriseSession, groupCode: code });
-                    localStorage.setItem(membershipsKey, JSON.stringify(S.enterpriseMemberships));
+            const auth = safeParseJson(localStorage.getItem((typeof C !== 'undefined' && C.AUTH_SESSION_KEY) || 'lumina_auth_session') || 'null', null);
+            authUserId = auth?.user?.id || auth?.userId || null;
+        } catch (_) {}
+        const storedOwner = localStorage.getItem(ownerKey) || '';
+        // Drop enterprise local state if it belongs to another account (or was guest-owned while logged in)
+        if (authUserId && storedOwner && storedOwner !== String(authUserId)) {
+            try {
+                localStorage.removeItem(sessionKey);
+                localStorage.removeItem(membershipsKey);
+            } catch (_) {}
+            S.enterpriseSession = null;
+            S.enterpriseMemberships = [];
+            localStorage.setItem(ownerKey, String(authUserId));
+        } else {
+            const savedEnterprise = localStorage.getItem(sessionKey);
+            if (savedEnterprise) {
+                const ent = safeParseJson(savedEnterprise, null);
+                const entOwner = ent?.ownerId || storedOwner || null;
+                if (ent && typeof ent === 'object' && ent.groupCode
+                    && (!authUserId || !entOwner || String(entOwner) === String(authUserId))) {
+                    S.enterpriseSession = ent;
+                } else {
+                    S.enterpriseSession = null;
+                    try { localStorage.removeItem(sessionKey); } catch (_) {}
                 }
-            } else if (S.enterpriseMemberships.length) {
-                S.enterpriseSession = S.enterpriseMemberships[0];
-                localStorage.setItem(sessionKey, JSON.stringify(S.enterpriseSession));
             }
-        } catch (e) {
-            console.warn('[Lumina] load enterprise memberships', e);
-            S.enterpriseMemberships = S.enterpriseSession ? [S.enterpriseSession] : [];
+            // Multi-group memberships (owner-scoped)
+            try {
+                const rawMem = safeParseJson(localStorage.getItem(membershipsKey) || 'null', null);
+                let list = [];
+                let fileOwner = storedOwner;
+                if (Array.isArray(rawMem)) {
+                    list = rawMem.filter(m => m && m.groupCode);
+                } else if (rawMem && typeof rawMem === 'object') {
+                    fileOwner = rawMem.ownerId || fileOwner;
+                    list = Array.isArray(rawMem.items) ? rawMem.items.filter(m => m && m.groupCode) : [];
+                }
+                if (authUserId && fileOwner && String(fileOwner) !== String(authUserId)) {
+                    list = [];
+                    S.enterpriseSession = null;
+                    try {
+                        localStorage.removeItem(sessionKey);
+                        localStorage.removeItem(membershipsKey);
+                    } catch (_) {}
+                }
+                if (!list.length && S.enterpriseSession?.groupCode) {
+                    list = [S.enterpriseSession];
+                }
+                const map = new Map();
+                list.forEach((m) => {
+                    const code = String(m.groupCode || '').toUpperCase();
+                    if (code) map.set(code, { ...m, groupCode: code });
+                });
+                S.enterpriseMemberships = [...map.values()];
+                if (authUserId) localStorage.setItem(ownerKey, String(authUserId));
+                localStorage.setItem(membershipsKey, JSON.stringify({
+                    ownerId: authUserId || fileOwner || 'guest',
+                    items: S.enterpriseMemberships
+                }));
+                if (S.enterpriseSession?.groupCode) {
+                    const code = String(S.enterpriseSession.groupCode).toUpperCase();
+                    if (!map.has(code)) {
+                        S.enterpriseSession = S.enterpriseMemberships[0] || null;
+                        if (S.enterpriseSession) {
+                            localStorage.setItem(sessionKey, JSON.stringify(S.enterpriseSession));
+                        } else {
+                            localStorage.removeItem(sessionKey);
+                        }
+                    }
+                } else if (S.enterpriseMemberships.length) {
+                    S.enterpriseSession = S.enterpriseMemberships[0];
+                    localStorage.setItem(sessionKey, JSON.stringify(S.enterpriseSession));
+                }
+            } catch (e) {
+                console.warn('[Lumina] load enterprise memberships', e);
+                S.enterpriseMemberships = [];
+            }
         }
 
         try { migrateTasks(); } catch (e) {

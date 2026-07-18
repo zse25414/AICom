@@ -284,11 +284,52 @@ async function loadUserDataFromServer() {
     }
 }
 
+/**
+ * Drop enterprise/team client state when switching accounts.
+ * Works even if enterprise chunk is not loaded yet.
+ */
+function clearEnterpriseStateForAccountSwitch() {
+    try {
+        if (typeof window.clearEnterpriseClientState === 'function') {
+            window.clearEnterpriseClientState();
+            return;
+        }
+        if (typeof clearEnterpriseClientState === 'function') {
+            clearEnterpriseClientState();
+            return;
+        }
+    } catch (_) {}
+    // Minimal fallback (auth loads before enterprise chunk)
+    try {
+        if (typeof stopEnterprisePolling === 'function') stopEnterprisePolling();
+        else if (typeof window.stopEnterprisePolling === 'function') window.stopEnterprisePolling();
+    } catch (_) {}
+    S.enterpriseSession = null;
+    S.enterpriseMemberships = [];
+    S.enterpriseGroupData = null;
+    S.enterpriseJoinFormOpen = false;
+    S.teamNotifications = [];
+    try {
+        localStorage.removeItem((typeof C !== 'undefined' && C.ENTERPRISE_SESSION_KEY) || 'lumina_enterprise_session');
+        localStorage.removeItem((typeof C !== 'undefined' && C.ENTERPRISE_MEMBERSHIPS_KEY) || 'lumina_enterprise_memberships');
+        localStorage.removeItem('lumina_enterprise_owner_id');
+    } catch (_) {}
+}
+
 async function finishAuth(user, isNew, token) {
     const hadLocalData = S.tasks.length > 0 || Object.keys(S.dailyHistory).length > 0;
+    const prevUserId = getAuthSession()?.user?.id || null;
+
+    // Always isolate enterprise teams per account (new register OR different login)
+    const switchingAccount = !prevUserId || prevUserId !== user.id || isNew;
+    if (switchingAccount) {
+        clearEnterpriseStateForAccountSwitch();
+    }
+
     // 1) Persist session + close gate immediately — never block on network
     persistAuthSession(user, token);
     applyAuthUserToProfile(user, isNew);
+    try { localStorage.setItem('lumina_enterprise_owner_id', String(user.id)); } catch (_) {}
     if (isNew && !hadLocalData) {
         localStorage.removeItem('lumina_onboarding_v2');
         localStorage.removeItem('lumina_onboarding_v3');
@@ -298,6 +339,10 @@ async function finishAuth(user, isNew, token) {
     localStorage.setItem(C.AUTH_GUEST_DISMISSED_KEY, 'true');
     updateAuthUI();
     refreshUI({ dashboard: true, filters: true });
+    try {
+        if (typeof renderEnterprisePage === 'function') renderEnterprisePage();
+        else if (typeof window.renderEnterprisePage === 'function') window.renderEnterprisePage();
+    } catch (_) {}
     const welcomeMsg = isNew
         ? (hadLocalData ? `歡迎加入，${user.name}！已合併訪客期間的資料` : `歡迎加入，${user.name}！`)
         : `歡迎回來，${user.name}！`;
@@ -317,10 +362,14 @@ async function finishAuth(user, isNew, token) {
             console.warn('[Lumina] user data sync after auth', e);
         }
         try {
+            // Ensure enterprise chunk so sync exists (new accounts should get empty list)
+            if (typeof window.__luminaEnsureEnterprise === 'function') {
+                await window.__luminaEnsureEnterprise();
+            }
             const syncFn = window.syncEnterpriseMembershipsFromServer
                 || (typeof syncEnterpriseMembershipsFromServer === 'function' ? syncEnterpriseMembershipsFromServer : null);
             if (syncFn) {
-                await syncFn({ toast: false, render: false, autoSelect: false });
+                await syncFn({ toast: false, render: true, autoSelect: true, silent: true });
             }
         } catch (e) {
             console.warn('[Lumina] enterprise memberships sync after auth', e);
@@ -419,6 +468,7 @@ async function handleLogout() {
     try {
         await syncUserDataToServer({ immediate: true });
     } catch (_) {}
+    clearEnterpriseStateForAccountSwitch();
     localStorage.removeItem(C.AUTH_SESSION_KEY);
     hideAuthOverlay();
     updateAuthUI();
