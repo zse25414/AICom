@@ -648,7 +648,14 @@ async function leaveEnterpriseGroup(groupCode) {
     const label = target?.groupName || code;
     let memberId = target?.memberId
         || (normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '') === code ? S.enterpriseSession.memberId : null);
-    if (!confirm(`確定退出群組「${label}」？\n代碼：${code}\n（若你是唯一主管，系統會自動將主管權交給其他成員）`)) return;
+    const leaveOk = await showConfirmDialog({
+        title: '退出群組',
+        message: `確定退出群組「${label}」？\n代碼：${code}\n（若你是唯一主管，系統會自動將主管權交給其他成員）`,
+        confirmLabel: '退出',
+        cancelLabel: '取消',
+        danger: true
+    });
+    if (!leaveOk) return;
 
     S._leaveGroupInFlight = true;
     // Stop request storm before leave API
@@ -725,7 +732,14 @@ async function kickEnterpriseMember(targetMemberId) {
     }
     const target = (S.enterpriseGroupData?.members || []).find((m) => m.id === targetMemberId);
     const name = target?.name || '該成員';
-    if (!confirm(`確定將「${name}」移出群組 ${S.enterpriseSession.groupCode}？`)) return;
+    const kickOk = await showConfirmDialog({
+        title: '移出成員',
+        message: `確定將「${name}」移出群組 ${S.enterpriseSession.groupCode}？`,
+        confirmLabel: '移出',
+        cancelLabel: '取消',
+        danger: true
+    });
+    if (!kickOk) return;
 
     if (S.enterpriseSession.offline) {
         try {

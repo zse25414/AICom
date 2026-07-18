@@ -471,7 +471,13 @@ async function handleLogin(e) {
 
 async function handleLogout() {
     if (!isLoggedIn()) return;
-    if (!confirm('確定要登出嗎？你的任務與設定仍會保留在本機。')) return;
+    const ok = await showConfirmDialog({
+        title: '登出',
+        message: '確定要登出嗎？你的任務與設定仍會保留在本機。',
+        confirmLabel: '登出',
+        cancelLabel: '取消'
+    });
+    if (!ok) return;
     try {
         await syncUserDataToServer({ immediate: true });
     } catch (_) {}

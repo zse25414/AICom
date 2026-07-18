@@ -64,6 +64,21 @@ async function initializeApp() {
         try { showToast('部分介面載入失敗，請重新整理頁面', 'error'); } catch (_) {}
     }
 
+    // P2-3: restore freeform coach thread (function may be lazy stub → Promise)
+    try {
+        const loadThread = window.loadCoachFreeformThread || (typeof loadCoachFreeformThread === 'function' ? loadCoachFreeformThread : null);
+        if (typeof loadThread === 'function') {
+            Promise.resolve(loadThread()).then((restored) => {
+                if (!restored) return;
+                try {
+                    if (document.getElementById('coach')?.classList.contains('active') && typeof refreshCoachView === 'function') {
+                        refreshCoachView();
+                    }
+                } catch (_) {}
+            }).catch(() => {});
+        }
+    } catch (_) {}
+
     try {
         if (typeof track === 'function') {
             track('session_boot', {

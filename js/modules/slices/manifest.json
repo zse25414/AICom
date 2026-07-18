@@ -21,6 +21,7 @@
     "tasks/scoring.js",
     "ui/dashboard.js",
     "ui/feedback.js",
+    "ui/confirm.js",
     "ui/insights.js",
     "ui/navigation.js",
     "ui/onboarding.js",

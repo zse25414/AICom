@@ -8,6 +8,10 @@ export const RAG_SERVICE_URL = "http://127.0.0.1:8000";
 export const API_KEY_STORAGE = 'lumina_api_key';
 /** When '1', API key is also kept in localStorage across browser restarts (opt-in). */
 export const API_KEY_PERSIST_FLAG = 'lumina_api_key_persist';
+/** Freeform coach thread snapshot (messages + freeform flag). */
+export const COACH_THREAD_STORAGE = 'lumina_coach_thread_v1';
+/** App build stamp for SW / hard-refresh prompts (bump when shipping shell changes). */
+export const APP_BUILD_ID = '2026-07-18-p2';
 export const ENTERPRISE_SYNC_RETRY_MS = 5000;
 export const RAG_KB_LABELS = {
     general: '一般預設 (General)',

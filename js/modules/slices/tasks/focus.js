@@ -239,8 +239,42 @@ function startTodayTask(taskId, opts = {}) {
     }
 }
 
+/** Prefer same parent goal / category for retention (P2-4). */
+function getNextRelatedTask(completedTask, scope = 'today') {
+    const pending = typeof rankTasksByNextStepScore === 'function'
+        ? rankTasksByNextStepScore(
+            (scope === 'today' ? (getTodayStats()?.pending || []) : (S.tasks || []).filter(t => !t.completed)),
+            typeof getScoringContext === 'function' ? getScoringContext() : {}
+        )
+        : (getTodayStats()?.pending || []);
+    if (!pending.length) return null;
+    if (completedTask?.parentGoalName) {
+        const sameGoal = pending.find(t => t.parentGoalName === completedTask.parentGoalName);
+        if (sameGoal) return sameGoal;
+    }
+    if (completedTask?.splitFromId != null) {
+        const sibling = pending.find(t => t.splitFromId === completedTask.splitFromId || t.id === completedTask.splitFromId);
+        if (sibling) return sibling;
+    }
+    // Part 2 after Part 1 by name
+    if (completedTask?.name && /\(Part 1\)$/i.test(completedTask.name)) {
+        const base = completedTask.name.replace(/\s*\(Part 1\)$/i, '');
+        const part2 = pending.find(t => t.name === `${base} (Part 2)` || t.name.startsWith(base));
+        if (part2) return part2;
+    }
+    const cat = typeof resolveCategory === 'function' ? resolveCategory(completedTask) : completedTask?.category;
+    if (cat) {
+        const sameCat = pending.find(t => (typeof resolveCategory === 'function' ? resolveCategory(t) : t.category) === cat);
+        if (sameCat) return sameCat;
+    }
+    return typeof getNextRecommendedTask === 'function' ? getNextRecommendedTask(scope) : pending[0];
+}
+
 function onTodayTaskCompleted(completedId, fromFocus = false) {
     const wasFocus = fromFocus || S.focusSession?.taskId === completedId;
+    const completedTask = typeof getTaskById === 'function'
+        ? getTaskById(completedId)
+        : (S.tasks || []).find(t => t.id === completedId);
     if (S.focusSession?.taskId === completedId) endFocusSession();
     if (S.todayFocusTaskId === completedId) S.todayFocusTaskId = null;
     invalidateTodayStats();
@@ -249,20 +283,48 @@ function onTodayTaskCompleted(completedId, fromFocus = false) {
         onAction: () => typeof undoLastTaskAction === 'function' && undoLastTaskAction(),
         durationMs: 7000
     };
-    const next = getNextRecommendedTask('today');
+    const next = getNextRelatedTask(completedTask, 'today');
     if (next) {
         S.todayFocusTaskId = next.id;
+        const relatedHint = completedTask?.parentGoalName && next.parentGoalName === completedTask.parentGoalName
+            ? '（同目標）'
+            : (completedTask && typeof resolveCategory === 'function'
+                && resolveCategory(next) === resolveCategory(completedTask) ? '（同類）' : '');
         setTimeout(() => {
             if (wasFocus) {
                 startTodayTask(next.id, { quiet: true, autoContinue: true });
-                showToast(`接著做：${next.name}`, 'success', undoOpts);
+                showToast(`🎉 完成！接著做${relatedHint}：${next.name}`, 'success', {
+                    ...undoOpts,
+                    actionLabel: '復原',
+                    durationMs: 8000
+                });
             } else {
-                showToast(`完成！下一項：${next.name}`, 'success', undoOpts);
+                showToast(`🎉 完成！下一項${relatedHint}：${next.name}`, 'success', {
+                    actionLabel: '開始下一項',
+                    onAction: () => {
+                        if (typeof startTodayTask === 'function') startTodayTask(next.id);
+                    },
+                    durationMs: 9000
+                });
+                // Secondary undo path via setTaskUndo already set by toggleTaskComplete
                 pulseNextStepCard();
             }
+            try {
+                if (typeof track === 'function') {
+                    track('celebrate_next_task', {
+                        related: !!relatedHint,
+                        fromFocus: !!wasFocus
+                    });
+                }
+            } catch (_) {}
         }, wasFocus ? 350 : 120);
     } else {
-        setTimeout(() => showToast('今日待辦全部完成！', 'success', undoOpts), 120);
+        setTimeout(() => {
+            showToast('🎉 今日待辦全部完成！太棒了', 'success', undoOpts);
+            if (S.userProfile?.enableConfetti !== false && typeof triggerConfetti === 'function') {
+                try { triggerConfetti(); } catch (_) {}
+            }
+        }, 120);
     }
     updateCoachContextBar();
     renderCoachQuickActions();

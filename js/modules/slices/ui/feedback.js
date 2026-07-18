@@ -123,9 +123,16 @@ function undoLastTaskAction() {
 
 // Reset everything
 
-function resetAllData() {
-    if (!confirm('確定要重置所有資料嗎？這會清除任務與統計（API Key 與基本設定會保留）。')) return;
-    
+async function resetAllData() {
+    const ok = await showConfirmDialog({
+        title: '重置所有資料',
+        message: '這會清除任務與統計（API Key 與基本設定會保留）。此操作無法復原。',
+        confirmLabel: '確定重置',
+        cancelLabel: '取消',
+        danger: true
+    });
+    if (!ok) return;
+
     clearSensitiveLocalData();
     location.reload();
 }

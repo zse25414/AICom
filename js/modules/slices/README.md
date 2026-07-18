@@ -20,6 +20,7 @@
 | `ui/support` | 產品內回報問題 | core |
 | `ui/insights` | 數據洞察頁 | core |
 | `ui/feedback` | toast / confetti | core |
+| `ui/confirm` | App 確認 modal（取代 window.confirm） | core |
 | `ui/pwa` | SW / install | core |
 | `enterprise/team-boot` | 企業 boot 常數與就緒 | core |
 | `boot/init` | 啟動編排 | core |

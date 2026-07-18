@@ -992,30 +992,75 @@ function createMeetingFollowUpTasks(meetingTask) {
 }
 
 function splitTask(taskId) {
-    const task = S.tasks.find(t => t.id === taskId);
+    const idx = S.tasks.findIndex(t => t.id === taskId);
+    const task = idx >= 0 ? S.tasks[idx] : null;
     if (!task || task.duration < 30) {
         showToast('任務太短，無需拆分', 'error');
         return;
     }
-    
-    const half = Math.ceil(task.duration / 2);
-    const part2Duration = task.duration - half;
-    const baseName = task.name.replace(/ \(Part \d\)$/, '');
-    
-    S.tasks = S.tasks.filter(t => t.id !== taskId);
-    S.tasks.push(
-        { ...task, id: Date.now(), name: baseName + ' (Part 1)', duration: half },
-        { ...task, id: Date.now() + 1, name: baseName + ' (Part 2)', duration: part2Duration }
-    );
-    
+
+    const total = Math.max(30, Number(task.duration) || 30);
+    // Part 1 takes ceil half; Part 2 gets remainder so sum === original
+    const part1Duration = Math.ceil(total / 2);
+    const part2Duration = total - part1Duration;
+    const baseName = String(task.name || '').replace(/\s*\(Part \d+\)$/i, '').trim() || '任務';
+    const now = Date.now();
+    const part1 = {
+        ...task,
+        id: now,
+        name: `${baseName} (Part 1)`,
+        duration: part1Duration,
+        completed: false,
+        splitFromId: task.id,
+        splitPart: 1,
+        updatedAt: new Date().toISOString()
+    };
+    const part2 = {
+        ...task,
+        id: now + 1,
+        name: `${baseName} (Part 2)`,
+        duration: part2Duration,
+        completed: false,
+        splitFromId: task.id,
+        splitPart: 2,
+        updatedAt: new Date().toISOString()
+    };
+    // Drop schedule-slot fields that would keep full-block occupancy
+    delete part1.scheduledBlock;
+    delete part1.scheduledStart;
+    delete part2.scheduledBlock;
+    delete part2.scheduledStart;
+
+    S.tasks.splice(idx, 1, part1, part2);
+    if (S.todayFocusTaskId === taskId) S.todayFocusTaskId = part1.id;
+    if (S.focusSession?.taskId === taskId) {
+        try { endFocusSession(false); } catch (_) {}
+    }
+    rebuildTaskIndex();
+    invalidateTodayStats();
     saveState();
-    refreshUI({ scheduler: true, filters: true, schedule: true });
-    showToast('任務已拆分為兩部分，重新排程中', 'success');
+    refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+    try {
+        if (typeof optimizeSchedule === 'function') optimizeSchedule(true);
+    } catch (_) {}
+    showToast(`已拆成 ${part1Duration}+${part2Duration} 分鐘，已重算排程`, 'success');
+    try {
+        if (typeof track === 'function') {
+            track('task_split', { total, part1: part1Duration, part2: part2Duration });
+        }
+    } catch (_) {}
 }
 
-function deleteTask(taskId, e) {
+async function deleteTask(taskId, e) {
     e?.stopImmediatePropagation?.();
-    if (!confirm('確定要刪除這個任務嗎？')) return;
+    const ok = await showConfirmDialog({
+        title: '刪除任務',
+        message: '確定要刪除這個任務嗎？可在數秒內用「復原」救回。',
+        confirmLabel: '刪除',
+        cancelLabel: '取消',
+        danger: true
+    });
+    if (!ok) return;
 
     const idx = S.tasks.findIndex(t => t.id === taskId);
     const removed = idx >= 0 ? S.tasks[idx] : null;
@@ -1049,8 +1094,15 @@ function deleteTask(taskId, e) {
     });
 }
 
-function clearAllTasks() {
-    if (!confirm('確定清空所有任務？')) return;
+async function clearAllTasks() {
+    const ok = await showConfirmDialog({
+        title: '清空所有任務',
+        message: '確定清空所有任務？此操作無法一鍵復原。',
+        confirmLabel: '清空',
+        cancelLabel: '取消',
+        danger: true
+    });
+    if (!ok) return;
     endFocusSession(false);
     S.todayFocusTaskId = null;
     S.tasks = [];

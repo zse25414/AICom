@@ -59,11 +59,52 @@ function setupManifest() {
     appleIcon.href = iconUrl;
 }
 
+function showAppUpdateBanner() {
+    if (document.getElementById('app-update-banner')) return;
+    const bar = document.createElement('div');
+    bar.id = 'app-update-banner';
+    bar.setAttribute('role', 'status');
+    bar.className = 'app-update-banner';
+    bar.innerHTML = `
+        <span class="app-update-banner-text"><i class="fa-solid fa-arrow-rotate-right mr-1.5"></i>有新版本可用，重新整理以免用到舊畫面</span>
+        <button type="button" id="app-update-reload" class="app-update-banner-btn">立即重新整理</button>
+        <button type="button" id="app-update-dismiss" class="app-update-banner-dismiss" aria-label="關閉">×</button>
+    `;
+    document.body.appendChild(bar);
+    bar.querySelector('#app-update-reload')?.addEventListener('click', () => {
+        try {
+            if (navigator.serviceWorker?.controller) {
+                navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
+            }
+        } catch (_) {}
+        // Bypass SW cache on reload
+        const url = new URL(window.location.href);
+        url.searchParams.set('_r', String(Date.now()));
+        window.location.replace(url.toString());
+    });
+    bar.querySelector('#app-update-dismiss')?.addEventListener('click', () => bar.remove());
+    try {
+        if (typeof track === 'function') track('app_update_prompt', {});
+    } catch (_) {}
+}
+
 function registerServiceWorker() {
     if (!('serviceWorker' in navigator) || window.location.protocol === 'file:') return;
+    // jsdom / minimal mocks may expose serviceWorker without full API
+    if (typeof navigator.serviceWorker.register !== 'function') return;
+
+    const buildId = (typeof C !== 'undefined' && C.APP_BUILD_ID) ? C.APP_BUILD_ID : 'dev';
+    // Persist last seen build; mismatch after deploy → hard-refresh hint
+    try {
+        const prev = localStorage.getItem('lumina_app_build_id');
+        if (prev && prev !== buildId) {
+            setTimeout(() => showAppUpdateBanner(), 800);
+        }
+        localStorage.setItem('lumina_app_build_id', buildId);
+    } catch (_) {}
     
     const swCode = `
-        const CACHE = 'lumina-v10';
+        const CACHE = 'lumina-${buildId}';
         const origin = '${window.location.origin}';
         const LOCAL_ASSETS = [
             origin + '/lumina-ai.html',
@@ -76,6 +117,12 @@ function registerServiceWorker() {
         const CDN_ASSETS = [
             'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css'
         ];
+
+        function isShellRequest(url) {
+            const p = url.pathname || '';
+            return p.endsWith('.js') || p.endsWith('.css') || p.endsWith('.html') || p.endsWith('/')
+                || p.includes('lumina-ai');
+        }
         
         self.addEventListener('install', e => {
             e.waitUntil(
@@ -91,11 +138,30 @@ function registerServiceWorker() {
                 ).then(() => self.clients.claim())
             );
         });
+
+        self.addEventListener('message', e => {
+            if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
+        });
         
         self.addEventListener('fetch', e => {
             if (e.request.method !== 'GET') return;
             const url = new URL(e.request.url);
             const isLocal = url.origin === origin;
+            // Network-first for app shell so deploys are not stuck on old bundle (P2-5)
+            if (isLocal && isShellRequest(url)) {
+                e.respondWith(
+                    fetch(e.request).then(res => {
+                        if (res && res.ok) {
+                            const clone = res.clone();
+                            caches.open(CACHE).then(c => c.put(e.request, clone)).catch(() => {});
+                        }
+                        return res;
+                    }).catch(() => caches.match(e.request).then(cached =>
+                        cached || new Response('離線中，請稍後再試', { status: 503, statusText: 'Offline' })
+                    ))
+                );
+                return;
+            }
             e.respondWith(
                 (isLocal
                     ? caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
@@ -121,8 +187,34 @@ function registerServiceWorker() {
     
     const blob = new Blob([swCode], { type: 'application/javascript' });
     navigator.serviceWorker.register(URL.createObjectURL(blob))
-        .then(() => updatePwaStatus('已啟用離線快取'))
+        .then((reg) => {
+            updatePwaStatus('已啟用離線快取');
+            // New worker installing while page open
+            const onUpdate = () => {
+                const installing = reg.installing;
+                if (!installing) return;
+                installing.addEventListener('statechange', () => {
+                    if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+                        showAppUpdateBanner();
+                    }
+                });
+            };
+            reg.addEventListener('updatefound', onUpdate);
+            // Periodic check (tab long-open)
+            setInterval(() => {
+                try { reg.update(); } catch (_) {}
+            }, 30 * 60 * 1000);
+        })
         .catch(() => updatePwaStatus('離線快取啟用失敗（不影響正常使用）'));
+
+    if (typeof navigator.serviceWorker.addEventListener === 'function') {
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (refreshing) return;
+            refreshing = true;
+            showAppUpdateBanner();
+        });
+    }
 }
 
 function updatePwaStatus(msg) {

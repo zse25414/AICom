@@ -1,4 +1,68 @@
 /* Lumina: coach/agent.js */
+
+function persistCoachFreeformThread() {
+    try {
+        if (!S.focusSession?.freeform) return;
+        const payload = {
+            v: 1,
+            freeform: true,
+            savedAt: Date.now(),
+            messages: (S.coachAgentMessages || []).slice(-16).map((m) => ({
+                role: m.role,
+                content: m.content,
+                ts: m.ts || Date.now(),
+                sources: m.sources || null,
+                meta: m.meta || null
+            }))
+        };
+        localStorage.setItem(C.COACH_THREAD_STORAGE, JSON.stringify(payload));
+    } catch (_) {}
+}
+
+function clearPersistedCoachFreeformThread() {
+    try { localStorage.removeItem(C.COACH_THREAD_STORAGE); } catch (_) {}
+}
+
+/** Restore freeform coach Q&A across reloads (P2-3). Skip if guided session active. */
+function loadCoachFreeformThread() {
+    try {
+        if (S.focusSession?.coachActive && !S.focusSession?.freeform) return false;
+        if (S.focusSession?.taskId) return false;
+        const raw = localStorage.getItem(C.COACH_THREAD_STORAGE);
+        if (!raw) return false;
+        const data = JSON.parse(raw);
+        if (!data || !data.freeform || !Array.isArray(data.messages) || !data.messages.length) return false;
+        // Drop stale threads older than 7 days
+        if (data.savedAt && Date.now() - Number(data.savedAt) > 7 * 24 * 3600 * 1000) {
+            clearPersistedCoachFreeformThread();
+            return false;
+        }
+        S.coachAgentMessages = data.messages.slice(-16).map((m) => ({
+            role: m.role === 'user' ? 'user' : 'coach',
+            content: String(m.content || ''),
+            ts: m.ts || Date.now(),
+            sources: m.sources || null,
+            meta: m.meta || null,
+            expanded: false
+        }));
+        S.chatHistory = S.coachAgentMessages.map((m) => ({
+            role: m.role === 'coach' ? 'assistant' : 'user',
+            content: m.content
+        }));
+        S.focusSession = {
+            taskId: null,
+            freeform: true,
+            coachActive: true,
+            steps: [{ title: '知識問答', duration: '—', action: '依知識庫或一般教練回答' }],
+            currentStep: 0,
+            startedAt: Date.now()
+        };
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
 function pushCoachAgentMessage(role, content, sources, meta) {
     S.coachAgentMessages.push({
         role,
@@ -12,6 +76,7 @@ function pushCoachAgentMessage(role, content, sources, meta) {
     if (S.coachAgentMessages.length > 16) S.coachAgentMessages = S.coachAgentMessages.slice(-16);
     S.chatHistory.push({ role: role === 'coach' ? 'assistant' : 'user', content });
     if (S.chatHistory.length > 16) S.chatHistory = S.chatHistory.slice(-16);
+    if (S.focusSession?.freeform) persistCoachFreeformThread();
 }
 
 /** Long coach replies stay collapsed inside the fixed-height thread. */
@@ -435,6 +500,7 @@ function coachBeginGuidedSession() {
     // Exit freeform Q&A when starting guided execution
     if (S.focusSession?.freeform) {
         clearFocusTimer();
+        clearPersistedCoachFreeformThread();
         S.focusSession = null;
         S.coachAgentMessages = [];
     }
@@ -1389,6 +1455,7 @@ function selectCoachTask(taskId) {
     }
     S.todayFocusTaskId = id;
     if (S.focusSession?.freeform) {
+        clearPersistedCoachFreeformThread();
         S.focusSession = null;
         S.coachAgentMessages = [];
     }

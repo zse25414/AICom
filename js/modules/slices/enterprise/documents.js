@@ -298,9 +298,12 @@ async function saveTeamDocument() {
 
     // Near-empty PDF/Excel: warn but still allow publish
     if ((docType === 'pdf' || docType === 'excel') && (content || '').replace(/【[^】]+】[：:]\s*/g, '').trim().length < 30) {
-        const proceed = confirm(
-            `${docType === 'pdf' ? 'PDF' : 'Excel'} 幾乎沒有可擷取文字。仍要發布嗎？\n（教練知識庫可能無法有效檢索這份文件）`
-        );
+        const proceed = await showConfirmDialog({
+            title: '文字很少',
+            message: `${docType === 'pdf' ? 'PDF' : 'Excel'} 幾乎沒有可擷取文字。仍要發布嗎？\n（教練知識庫可能無法有效檢索這份文件）`,
+            confirmLabel: '仍要發布',
+            cancelLabel: '取消'
+        });
         if (!proceed) return;
     }
 
@@ -1231,9 +1234,14 @@ async function deleteTeamDocument(docId, options = {}) {
     const skipRefresh = options.skipRefresh === true;
 
     if (!skipConfirm) {
-        if (!confirm('確定要刪除此文件嗎？刪除後將無法恢復，且 AI 也無法讀取該資料。')) {
-            return { ok: false, cancelled: true };
-        }
+        const ok = await showConfirmDialog({
+            title: '刪除文件',
+            message: '確定要刪除此文件嗎？刪除後將無法恢復，且 AI 也無法讀取該資料。',
+            confirmLabel: '刪除',
+            cancelLabel: '取消',
+            danger: true
+        });
+        if (!ok) return { ok: false, cancelled: true };
     }
     
     const docs = S.enterpriseGroupData?.documents || [];
@@ -1396,7 +1404,13 @@ async function bulkRetrySelectedDocumentIndexes() {
     if (!targets.length) {
         return showToast(set.size ? '選取的文件沒有需重試的索引' : '請先勾選文件', 'error');
     }
-    if (!confirm(`將重試 ${targets.length} 份選取文件的索引，是否繼續？`)) return;
+    const retryOk = await showConfirmDialog({
+        title: '重試索引',
+        message: `將重試 ${targets.length} 份選取文件的索引，是否繼續？`,
+        confirmLabel: '重試',
+        cancelLabel: '取消'
+    });
+    if (!retryOk) return;
 
     S._batchRetryInFlight = true;
     let okCount = 0;
@@ -1433,7 +1447,14 @@ async function bulkDeleteSelectedDocuments() {
     const set = ensureDocSelectionSet();
     const ids = [...set];
     if (!ids.length) return showToast('請先勾選要刪除的文件', 'error');
-    if (!confirm(`確定刪除 ${ids.length} 份選取文件？此操作無法復原。`)) return;
+    const delOk = await showConfirmDialog({
+        title: '批次刪除',
+        message: `確定刪除 ${ids.length} 份選取文件？此操作無法復原。`,
+        confirmLabel: '刪除',
+        cancelLabel: '取消',
+        danger: true
+    });
+    if (!delOk) return;
 
     S._bulkDeleteInFlight = true;
     let okCount = 0;
@@ -1690,7 +1711,14 @@ async function deleteTeamKnowledgeBase(kbId) {
         return showToast('不可刪除預設知識庫 general', 'error');
     }
     const label = getRagKbLabel(kbId).replace(/\s*\([^)]*\)\s*$/, '').trim();
-    if (!confirm(`確定刪除知識庫「${label}」？庫內文件將一併移除，且教練無法再檢索。`)) return;
+    const kbOk = await showConfirmDialog({
+        title: '刪除知識庫',
+        message: `確定刪除知識庫「${label}」？庫內文件將一併移除，且教練無法再檢索。`,
+        confirmLabel: '刪除',
+        cancelLabel: '取消',
+        danger: true
+    });
+    if (!kbOk) return;
 
     try {
         const data = await deleteRagKnowledgeBase({
@@ -1820,7 +1848,13 @@ async function retryAllFailedDocumentIndexes() {
     if (!failed.length) {
         return showToast('目前沒有索引失敗的文件', 'success');
     }
-    if (!confirm(`將重試 ${failed.length} 份失敗文件的索引，是否繼續？`)) return;
+    const failedOk = await showConfirmDialog({
+        title: '重試失敗索引',
+        message: `將重試 ${failed.length} 份失敗文件的索引，是否繼續？`,
+        confirmLabel: '重試',
+        cancelLabel: '取消'
+    });
+    if (!failedOk) return;
 
     S._batchRetryInFlight = true;
     const btn = document.getElementById('team-docs-retry-failed-btn');
