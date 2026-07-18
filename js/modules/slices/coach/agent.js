@@ -5,11 +5,27 @@ function pushCoachAgentMessage(role, content, sources, meta) {
         content,
         ts: Date.now(),
         sources: sources || null,
-        meta: meta || null
+        meta: meta || null,
+        expanded: false
     });
-    if (S.coachAgentMessages.length > 24) S.coachAgentMessages = S.coachAgentMessages.slice(-24);
+    // Keep thread short so the panel never balloons in DOM size
+    if (S.coachAgentMessages.length > 16) S.coachAgentMessages = S.coachAgentMessages.slice(-16);
     S.chatHistory.push({ role: role === 'coach' ? 'assistant' : 'user', content });
-    if (S.chatHistory.length > 20) S.chatHistory = S.chatHistory.slice(-20);
+    if (S.chatHistory.length > 16) S.chatHistory = S.chatHistory.slice(-16);
+}
+
+/** Long coach replies stay collapsed inside the fixed-height thread. */
+function toggleCoachMessageExpand(msgIndex) {
+    const m = S.coachAgentMessages[msgIndex];
+    if (!m) return;
+    m.expanded = !m.expanded;
+    renderCoachAgentThread();
+}
+
+function shouldCollapseCoachText(text) {
+    const t = String(text || '');
+    if (t.length > 420) return true;
+    return (t.match(/\n/g) || []).length >= 8;
 }
 
 /** Map retrieval score → 高 / 中 / 低 (never show misleading %) */
@@ -1094,7 +1110,8 @@ function renderCoachAddTaskButton(msgIndex, content) {
 function renderCoachAgentThread(thinking) {
     const el = document.getElementById('coach-agent-thread');
     if (!el) return;
-    const recent = S.coachAgentMessages.slice(-12);
+    // Only paint last few turns — rest stays in memory but not DOM
+    const recent = S.coachAgentMessages.slice(-8);
     if (!recent.length && !thinking) {
         el.innerHTML = '<div class="coach-agent-thread-hint"><i class="fa-solid fa-bolt text-sky-500/60 text-2xl mb-3 block"></i>教練會在這裡回應你<br>帶你一步一步完成任務</div>';
         return;
@@ -1102,31 +1119,52 @@ function renderCoachAgentThread(thinking) {
     const thinkingLabel = thinking === 'deepseek' ? 'DeepSeek 回覆中'
         : thinking === 'offline' ? '離線引導中'
         : thinking ? '教練思考中' : '';
-    
+
     const baseIndex = Math.max(0, S.coachAgentMessages.length - recent.length);
+    const hiddenCount = Math.max(0, S.coachAgentMessages.length - recent.length);
     let html = '';
+    if (hiddenCount > 0) {
+        html += `<div class="coach-agent-thread-more text-[10px] text-slate-500 text-center py-1">較早 ${hiddenCount} 則已收合 · 對話區固定高度，可在此捲動</div>`;
+    }
     recent.forEach((m, idx) => {
         const isLast = idx === recent.length - 1;
         const msgIndex = baseIndex + idx;
         let displayContent = m.content;
         const options = [];
-        
+
         if (m.role === 'coach') {
             displayContent = m.content.replace(/\[選項:\s*([^\]]+)\]/g, (match, optText) => {
                 options.push(optText.trim());
                 return '';
             }).replace(/\n\s*\n/g, '\n').trim();
         }
-        
+
         const sourcesHtml = m.role === 'coach' ? renderCoachSourceChips(m.sources, msgIndex) : '';
         const kbBadge = m.role === 'coach' ? renderCoachKbUsageBadge(m.meta) : '';
         const addTaskHtml = m.role === 'coach' ? renderCoachAddTaskButton(msgIndex, m.content) : '';
+
+        // Long replies collapse so the fixed chat viewport stays usable
+        const canCollapse = m.role === 'coach' && shouldCollapseCoachText(displayContent);
+        const collapsed = canCollapse && !m.expanded;
+        const bodyClass = collapsed ? 'coach-msg-body is-collapsed' : 'coach-msg-body';
+        const expandBtn = canCollapse
+            ? `<button type="button" class="coach-msg-expand-btn focus-ring"
+                data-lumina-action="toggleCoachMessageExpand"
+                data-lumina-arg="${msgIndex}"
+                data-lumina-arg-type="number">
+                <i class="fa-solid fa-chevron-${collapsed ? 'down' : 'up'}"></i>
+                ${collapsed ? '展開全文' : '收合'}
+               </button>`
+            : '';
 
         html += `
             <div class="coach-agent-msg coach-agent-msg-${m.role}">
                 ${m.role === 'coach' ? '<i class="fa-solid fa-bolt text-sky-400"></i>' : ''}
                 <div class="flex-1 min-w-0">
-                    <span>${m.role === 'coach' ? formatCoachContent(displayContent) : escapeHtml(displayContent)}</span>
+                    <div class="${bodyClass}">
+                        <div class="coach-msg-text">${m.role === 'coach' ? formatCoachContent(displayContent) : escapeHtml(displayContent)}</div>
+                    </div>
+                    ${expandBtn}
                     ${kbBadge}
                     ${sourcesHtml}
                     ${addTaskHtml}
@@ -1140,13 +1178,16 @@ function renderCoachAgentThread(thinking) {
                 </div>
             </div>`;
     });
-    
+
     if (thinkingLabel) {
         html += `<div class="coach-agent-thinking"><span class="thinking-dots">${thinkingLabel}</span></div>`;
     }
-    
+
     el.innerHTML = html;
-    el.scrollTop = el.scrollHeight;
+    // Keep latest message in view inside the fixed viewport
+    requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+    });
 }
 
 function renderCoachEmptyState(container) {
