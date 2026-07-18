@@ -1113,7 +1113,10 @@ function renderCoachAgentThread(thinking) {
     // Only paint last few turns — rest stays in memory but not DOM
     const recent = S.coachAgentMessages.slice(-8);
     if (!recent.length && !thinking) {
-        el.innerHTML = '<div class="coach-agent-thread-hint">跟我說你在做什麼，或直接問問題 ✨<br><span class="text-slate-600 text-xs">Enter 送出</span></div>';
+        const task = typeof getCoachTask === 'function' ? getCoachTask() : null;
+        el.innerHTML = task
+            ? `<div class="coach-agent-thread-hint">準備好了嗎？<span>選「帶我做」，或直接在下方輸入</span></div>`
+            : `<div class="coach-agent-thread-hint">今天想完成什麼？<span>上方選任務，或直接開始對話</span></div>`;
         return;
     }
     const thinkingLabel = thinking === 'deepseek' ? 'DeepSeek 回覆中'
@@ -1159,7 +1162,7 @@ function renderCoachAgentThread(thinking) {
 
         html += `
             <div class="coach-agent-msg coach-agent-msg-${m.role}">
-                ${m.role === 'coach' ? '<i class="fa-solid fa-bolt text-sky-400"></i>' : ''}
+                ${m.role === 'coach' ? '<span class="coach-msg-avatar" aria-hidden="true"><i class="fa-solid fa-bolt"></i></span>' : ''}
                 <div class="flex-1 min-w-0">
                     <div class="${bodyClass}">
                         <div class="coach-msg-text">${m.role === 'coach' ? formatCoachContent(displayContent) : escapeHtml(displayContent)}</div>
@@ -1169,7 +1172,7 @@ function renderCoachAgentThread(thinking) {
                     ${sourcesHtml}
                     ${addTaskHtml}
                     ${(isLast && options.length > 0 && !thinking) ? `
-                        <div class="coach-agent-options flex flex-wrap gap-2 mt-3">
+                        <div class="coach-agent-options">
                             ${options.map(opt => `
                                 <button type="button" ${luminaAction('sendCoachAgentMessage', { argFrom: 'dataset.msg' })} data-msg="${escapeHtml(opt)}" class="coach-agent-option-btn">${escapeHtml(opt)}</button>
                             `).join('')}
@@ -1191,7 +1194,7 @@ function renderCoachAgentThread(thinking) {
 }
 
 /** Today / pending tasks the coach can focus on */
-function getCoachSelectableTasks(limit = 10) {
+function getCoachSelectableTasks(limit = 12) {
     const todayPending = typeof getTodayPendingTasks === 'function'
         ? getTodayPendingTasks()
         : (getTodayStats()?.pending || []);
@@ -1202,42 +1205,39 @@ function getCoachSelectableTasks(limit = 10) {
     return rankTasksByNextStepScore(all, getScoringContext()).slice(0, limit);
 }
 
-function renderCoachTaskPicker(activeId) {
-    const list = getCoachSelectableTasks(10);
-    if (!list.length) return '';
-    return `
-        <div class="coach-task-picker" role="listbox" aria-label="選擇要帶做的任務">
-            <div class="coach-task-picker-label">
-                <i class="fa-solid fa-list-check"></i>
-                <span>任務選項</span>
-                <span class="coach-task-picker-hint">點選切換焦點</span>
-            </div>
-            <div class="coach-task-picker-list">
-                ${list.map(t => {
-                    const active = t.id === activeId;
-                    const short = t.name.length > 28 ? t.name.slice(0, 26) + '…' : t.name;
-                    return `
-                    <button type="button"
-                        role="option"
-                        aria-selected="${active ? 'true' : 'false'}"
-                        class="coach-task-pick ${active ? 'is-active' : ''}"
-                        title="${escapeHtml(t.name)} · ${t.duration || 30} 分"
-                        data-lumina-action="selectCoachTask"
-                        data-lumina-arg="${t.id}"
-                        data-lumina-arg-type="number">
-                        <span class="coach-task-pick-name">${escapeHtml(short)}</span>
-                        <span class="coach-task-pick-meta">${t.duration || 30}分</span>
-                    </button>`;
-                }).join('')}
-            </div>
-        </div>`;
+/** Grok-style topbar: native select for task options (always available). */
+function syncCoachTaskSelect(activeId) {
+    const sel = document.getElementById('coach-task-select');
+    if (!sel) return;
+    const list = getCoachSelectableTasks(12);
+    const cur = activeId != null ? String(activeId) : '';
+    const opts = ['<option value="">選擇任務…</option>']
+        .concat(list.map(t => {
+            const label = `${t.name.length > 36 ? t.name.slice(0, 34) + '…' : t.name}（${t.duration || 30}分）`;
+            return `<option value="${t.id}" ${String(t.id) === cur ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+        }));
+    sel.innerHTML = opts.join('');
+    if (cur && list.some(t => String(t.id) === cur)) sel.value = cur;
+}
+
+function updateCoachGuideButton(task, isGuiding) {
+    const btn = document.getElementById('coach-guide-btn');
+    if (!btn) return;
+    if (task && !isGuiding) {
+        btn.classList.remove('hidden');
+    } else {
+        btn.classList.add('hidden');
+    }
 }
 
 function selectCoachTask(taskId) {
+    if (taskId === '' || taskId == null) return;
     const id = Number(taskId);
+    if (!Number.isFinite(id)) return;
     const task = S.tasks.find(t => t.id === id && !t.completed);
     if (!task) {
         showToast('找不到該任務', 'error');
+        syncCoachTaskSelect(S.todayFocusTaskId);
         return;
     }
     if (S.focusSession?.taskId && S.focusSession.taskId !== id) {
@@ -1253,31 +1253,11 @@ function selectCoachTask(taskId) {
     renderCoachAgentView();
     updateCoachContextBar();
     renderCoachQuickActions();
-    showToast(`已選擇：${task.name}`, 'success');
 }
 
 function renderCoachEmptyState(container) {
-    const hasTeam = !!S.enterpriseSession && !S.enterpriseSession.offline;
-    const picker = renderCoachTaskPicker(null);
-    // If picker has tasks, getCoachTask should have found one — still show actions
-    container.innerHTML = `
-        <div class="coach-focus-panel">
-            ${picker}
-            <div class="coach-empty-state">
-                <div class="coach-empty-title">
-                    ${picker ? '請從上方選擇一項任務' : `直接下方對話即可${hasTeam ? ' · 或問知識庫' : ''}`}
-                </div>
-                <div class="coach-empty-actions">
-                    <button type="button" ${luminaAction('seedDemoFirstTask')} class="coach-empty-btn">
-                        <i class="fa-solid fa-wand-magic-sparkles mr-1"></i>一鍵體驗
-                    </button>
-                    <button type="button" ${luminaAction('showSection', { arg: 'dashboard' })} class="coach-empty-btn opacity-90">
-                        去今日新增
-                    </button>
-                    ${hasTeam ? `<button type="button" ${luminaAction('askCoach', { arg: '新人第一天要做什麼？' })} class="coach-empty-btn opacity-90">問知識庫</button>` : ''}
-                </div>
-            </div>
-        </div>`;
+    // Empty focus strip — greeting lives in the thread (Grok style)
+    container.innerHTML = '';
 }
 
 function toggleCoachKbTools() {
@@ -1286,9 +1266,16 @@ function toggleCoachKbTools() {
     if (!panel) return;
     const open = panel.classList.toggle('hidden') === false;
     if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open && S.enterpriseSession) {
-        document.getElementById('rag-kb-selector-wrap')?.classList.remove('hidden');
-        try { window.renderRagKbCheckboxes?.(); } catch (_) {}
+    if (open) {
+        if (S.enterpriseSession) {
+            document.getElementById('rag-kb-selector-wrap')?.classList.remove('hidden');
+            try { window.renderRagKbCheckboxes?.(); } catch (_) {}
+            try { updateRagSelectorChrome?.(); } catch (_) {}
+        } else {
+            showToast('加入團隊後可選知識庫', 'error');
+            panel.classList.add('hidden');
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        }
     }
 }
 
@@ -1306,8 +1293,11 @@ function renderCoachAgentView() {
     if (!ws) return;
     const task = getCoachTask();
 
+    syncCoachTaskSelect(task?.id ?? null);
+
     if (!task) {
         renderCoachEmptyState(ws);
+        updateCoachGuideButton(null, false);
         renderCoachAgentThread();
         updateCoachTaskKbBanner(null);
         return;
@@ -1318,68 +1308,51 @@ function renderCoachAgentView() {
     const session = S.focusSession?.taskId === task.id ? S.focusSession : null;
     const steps = session?.steps || getStepsForTask(task);
     const isActive = !!session?.coachActive && !session?.freeform;
-    const cur = isActive ? Math.min(session.currentStep || 0, Math.max(0, steps.length - 1)) : 0;
+    updateCoachGuideButton(task, isActive);
+
+    // Not guiding → clean chat only (task is in top select)
+    if (!isActive) {
+        ws.innerHTML = '';
+        renderCoachAgentThread();
+        return;
+    }
+
+    const cur = Math.min(session.currentStep || 0, Math.max(0, steps.length - 1));
     const current = steps[cur] || { title: '步驟', action: task.name };
     const isLast = cur >= steps.length - 1;
-    const picker = renderCoachTaskPicker(task.id);
 
-    if (!isActive) {
-        ws.innerHTML = `
-            <div class="coach-focus-panel">
-                ${picker}
-                <div class="coach-agent-ready">
-                    <div class="coach-agent-ready-main">
-                        <div class="coach-agent-task-badge" title="${escapeHtml(task.name)}">${escapeHtml(task.name)}</div>
-                        <div class="coach-agent-ready-meta">${task.duration || 30} 分鐘 · ${steps.length} 個步驟</div>
-                        <p class="coach-agent-ready-desc">選好任務後點「教練帶我做」，或直接在下方對話。</p>
-                    </div>
-                    <button type="button" ${luminaAction('coachBeginGuidedSession')} class="coach-agent-start-btn">
-                        <i class="fa-solid fa-play"></i> 教練帶我做
+    ws.innerHTML = `
+        <div class="coach-focus-panel">
+            <div class="coach-agent-session">
+                <div class="coach-agent-session-header">
+                    <span class="coach-agent-live"><i class="fa-solid fa-circle text-[6px]"></i> 進行中</span>
+                    <span id="focus-timer-display" class="coach-agent-timer">--:--</span>
+                    <span class="coach-agent-progress">${cur + 1} / ${steps.length}</span>
+                </div>
+                <div class="coach-agent-hero">
+                    <div class="coach-agent-hero-label">現在</div>
+                    <div class="coach-agent-hero-title">${escapeHtml(current.title)}</div>
+                    <div class="coach-agent-hero-action">${escapeHtml(current.action)}</div>
+                </div>
+                <div class="coach-agent-steps-rail">
+                    ${steps.map((s, i) => {
+                        const cls = i < cur ? 'done' : i === cur ? 'active' : '';
+                        return `<div class="coach-agent-rail-step ${cls}" title="${escapeHtml(s.title || '')}">
+                            <span>${i + 1}</span>
+                            <span class="truncate">${escapeHtml(s.title || '步驟')}</span>
+                        </div>`;
+                    }).join('')}
+                </div>
+                <div class="coach-agent-actions">
+                    <button type="button" ${luminaAction(isLast ? 'coachCompleteTaskFromAgent' : 'coachAdvanceStepFromAgent')} class="coach-agent-btn-primary">
+                        ${isLast ? '完成這件' : '完成這步'}
                     </button>
+                    <button type="button" ${luminaAction('sendCoachAgentMessage', { arg: '卡住了' })} class="coach-agent-btn-secondary">卡住了</button>
+                    <button type="button" ${luminaAction('coachPauseSession')} class="coach-agent-btn-ghost">暫停</button>
                 </div>
-                <div class="coach-agent-preview">
-                    ${steps.map((s, i) => `
-                        <span class="coach-agent-preview-step">
-                            <span class="coach-step-num">${i + 1}</span>
-                            ${escapeHtml(s.title || '步驟')}
-                        </span>`).join('')}
-                </div>
-            </div>`;
-    } else {
-        ws.innerHTML = `
-            <div class="coach-focus-panel">
-                ${picker}
-                <div class="coach-agent-session">
-                    <div class="coach-agent-session-header">
-                        <span class="coach-agent-live"><i class="fa-solid fa-circle text-[6px]"></i> 教練帶做中</span>
-                        <span id="focus-timer-display" class="coach-agent-timer">--:--</span>
-                        <span class="coach-agent-progress">步驟 ${cur + 1} / ${steps.length}</span>
-                    </div>
-                    <div class="coach-agent-hero">
-                        <div class="coach-agent-hero-label">現在就做</div>
-                        <div class="coach-agent-hero-title">${escapeHtml(current.title)}</div>
-                        <div class="coach-agent-hero-action">${escapeHtml(current.action)}</div>
-                    </div>
-                    <div class="coach-agent-steps-rail">
-                        ${steps.map((s, i) => {
-                            const cls = i < cur ? 'done' : i === cur ? 'active' : '';
-                            return `<div class="coach-agent-rail-step ${cls}" title="${escapeHtml(s.title || '')}">
-                                <span>${i + 1}</span>
-                                <span class="truncate">${escapeHtml(s.title || '步驟')}</span>
-                            </div>`;
-                        }).join('')}
-                    </div>
-                    <div class="coach-agent-actions">
-                        <button type="button" ${luminaAction(isLast ? 'coachCompleteTaskFromAgent' : 'coachAdvanceStepFromAgent')} class="coach-agent-btn-primary">
-                            <i class="fa-solid fa-${isLast ? 'check' : 'forward-step'} mr-1"></i>${isLast ? '完成這件' : '完成這步'}
-                        </button>
-                        <button type="button" ${luminaAction('sendCoachAgentMessage', { arg: '卡住了' })} class="coach-agent-btn-secondary">卡住了</button>
-                        <button type="button" ${luminaAction('coachPauseSession')} class="coach-agent-btn-ghost">暫停</button>
-                    </div>
-                </div>
-            </div>`;
-        tickFocusTimer();
-    }
+            </div>
+        </div>`;
+    tickFocusTimer();
     renderCoachAgentThread();
 }
 

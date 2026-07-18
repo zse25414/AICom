@@ -402,66 +402,76 @@
             </div>
         </div>
         
-        <!-- AI COACH — chat-first, human-scale composer -->
+        <!-- AI COACH — Grok-style clean chat -->
         <div id="coach" class="section">
-            <div class="coach-page max-w-3xl mx-auto">
-                <header class="coach-page-head">
-                    <div class="coach-page-head-left">
-                        <span class="coach-page-mark" aria-hidden="true"><i class="fa-solid fa-bolt"></i></span>
-                        <div>
-                            <h2 class="coach-page-title">行動教練</h2>
-                            <p class="coach-page-sub">像跟同事說話一樣 · Enter 送出</p>
+            <div class="coach-page">
+                <div class="coach-agent-shell">
+                    <!-- Top bar: model-like controls -->
+                    <header class="coach-topbar">
+                        <div class="coach-topbar-brand">
+                            <span class="coach-topbar-orb" aria-hidden="true"></span>
+                            <div class="coach-topbar-titles">
+                                <h2 class="coach-topbar-title">Lumina 教練</h2>
+                                <p class="coach-topbar-sub">一步一步帶你做完</p>
+                            </div>
+                        </div>
+                        <div class="coach-topbar-controls">
+                            <label class="coach-task-select-wrap" title="選擇要帶做的任務">
+                                <span class="sr-only">任務</span>
+                                <i class="fa-solid fa-bullseye coach-task-select-icon" aria-hidden="true"></i>
+                                <select id="coach-task-select" class="coach-task-select"
+                                        onchange="if(typeof selectCoachTask==='function') selectCoachTask(this.value)">
+                                    <option value="">選擇任務…</option>
+                                </select>
+                            </label>
+                            <button type="button" id="coach-guide-btn" class="coach-topbar-btn coach-topbar-btn-primary hidden"
+                                    data-lumina-action="coachBeginGuidedSession">
+                                <i class="fa-solid fa-play"></i><span>帶我做</span>
+                            </button>
+                            <button type="button" id="coach-tools-toggle" class="coach-topbar-btn"
+                                    data-lumina-action="toggleCoachKbTools"
+                                    aria-expanded="false" aria-controls="coach-tools-panel" title="知識庫">
+                                <i class="fa-solid fa-book"></i>
+                            </button>
+                        </div>
+                    </header>
+
+                    <div id="coach-readiness-bar" class="coach-readiness-bar hidden"></div>
+                    <div id="coach-context-bar" class="coach-context-bar" aria-live="polite"></div>
+
+                    <!-- Active step only (when guiding) -->
+                    <div id="coach-workspace" class="coach-focus-strip" aria-label="目前步驟"></div>
+
+                    <div id="coach-tools-panel" class="coach-tools-panel hidden">
+                        <div id="rag-kb-selector-wrap" class="coach-rag-selector hidden" aria-disabled="false">
+                            <div class="coach-rag-selector-label">
+                                <i class="fa-solid fa-database"></i>
+                                <span>知識庫</span>
+                                <span class="coach-rag-selector-hint">可不選 · 可用 @庫名</span>
+                            </div>
+                            <div id="rag-kb-offline-banner" class="coach-rag-offline-banner hidden" role="status">
+                                <i class="fa-solid fa-triangle-exclamation"></i>
+                                <span>RAG 離線，改用一般教練。</span>
+                            </div>
+                            <div id="rag-kb-empty-banner" class="coach-rag-empty-banner hidden" role="status">
+                                <i class="fa-solid fa-folder-open"></i>
+                                <span id="rag-kb-empty-banner-text">所選庫尚無文件。</span>
+                            </div>
+                            <div id="rag-kb-checkboxes" class="coach-rag-checkboxes" role="group" aria-label="知識庫多選"></div>
+                            <div id="rag-kb-query-summary" class="coach-rag-query-summary hidden" aria-live="polite"></div>
                         </div>
                     </div>
-                    <div id="coach-context-bar" class="coach-context-bar" aria-live="polite"></div>
-                </header>
-
-                <div class="coach-agent-shell">
-                    <div id="coach-readiness-bar" class="coach-readiness-bar hidden"></div>
-
-                    <!-- Slim focus strip (current step) — not a side panel -->
-                    <div id="coach-workspace" class="coach-focus-strip custom-scroll" aria-label="目前步驟"></div>
 
                     <div class="coach-chat-panel">
                         <div id="coach-agent-thread" class="coach-agent-thread custom-scroll" role="log" aria-live="polite" aria-relevant="additions"></div>
 
                         <div class="coach-composer">
-                            <div id="coach-quick-actions" class="coach-quick-actions" aria-label="快捷回覆"></div>
+                            <div id="coach-quick-actions" class="coach-quick-actions" aria-label="快捷"></div>
                             <div id="coach-task-kb-banner" class="coach-task-kb-banner hidden" role="status"></div>
-
-                            <div class="coach-composer-toolbar">
-                                <button type="button" id="coach-tools-toggle" class="coach-tools-toggle focus-ring"
-                                        data-lumina-action="toggleCoachKbTools"
-                                        aria-expanded="false" aria-controls="coach-tools-panel"
-                                        title="知識庫與進階選項">
-                                    <i class="fa-solid fa-sliders"></i>
-                                    <span>知識庫</span>
-                                </button>
-                                <div id="rag-kb-query-summary" class="coach-rag-query-summary hidden" aria-live="polite"></div>
-                            </div>
-
-                            <div id="coach-tools-panel" class="coach-tools-panel hidden">
-                                <div id="rag-kb-selector-wrap" class="coach-rag-selector hidden" aria-disabled="false">
-                                    <div class="coach-rag-selector-label">
-                                        <i class="fa-solid fa-database text-purple-400"></i>
-                                        <span>選用知識庫</span>
-                                        <span class="coach-rag-selector-hint">可不選 · 可用 @庫名</span>
-                                    </div>
-                                    <div id="rag-kb-offline-banner" class="coach-rag-offline-banner hidden" role="status">
-                                        <i class="fa-solid fa-triangle-exclamation"></i>
-                                        <span>RAG 離線，改用一般教練。</span>
-                                    </div>
-                                    <div id="rag-kb-empty-banner" class="coach-rag-empty-banner hidden" role="status">
-                                        <i class="fa-solid fa-folder-open"></i>
-                                        <span id="rag-kb-empty-banner-text">所選庫尚無文件。</span>
-                                    </div>
-                                    <div id="rag-kb-checkboxes" class="coach-rag-checkboxes" role="group" aria-label="知識庫多選"></div>
-                                </div>
-                            </div>
-
                             <div class="coach-composer-bar">
-                                <textarea id="chat-input" rows="1" placeholder="說點什麼… 卡住了、做完了、或 @庫名 提問"
-                                          class="coach-chat-input focus-ring"
+                                <textarea id="chat-input" rows="1"
+                                          placeholder="有什麼想聊的？"
+                                          class="coach-chat-input"
                                           oninput="if (typeof autoResizeCoachInput==='function') autoResizeCoachInput(this)"
                                           onkeydown="if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendCoachAgentMessage(); }"></textarea>
                                 <button type="button" data-lumina-action="sendCoachAgentMessage"
@@ -469,7 +479,6 @@
                                     <i class="fa-solid fa-arrow-up"></i>
                                 </button>
                             </div>
-                            <p class="coach-composer-hint">Enter 送出 · Shift+Enter 換行</p>
                         </div>
                     </div>
                 </div>
