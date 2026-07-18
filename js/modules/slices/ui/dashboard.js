@@ -137,6 +137,16 @@ function addTaskToList() {
     
     // Clear inputs
     document.getElementById('task-name').value = '';
+
+    try {
+        if (typeof track === 'function') {
+            track('task_created', {
+                source: 'scheduler',
+                duration: newTask.duration,
+                dueToday: due <= getTodayISO()
+            });
+        }
+    } catch (_) {}
     
     refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
     showToast(due <= getTodayISO() ? '任務已加入今日清單' : '任務已加入清單', 'success');

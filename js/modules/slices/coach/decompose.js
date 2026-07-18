@@ -36,6 +36,11 @@ function openCoachForTask(taskId) {
         S.focusSession = null;
         S.coachAgentMessages = [];
     }
+    try {
+        if (typeof track === 'function') {
+            track('coach_open', { hasTask: true, source: 'openCoachForTask', taskId });
+        }
+    } catch (_) {}
     showSection('coach');
     setTimeout(() => coachBeginGuidedSession(), 120);
 }

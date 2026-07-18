@@ -130,25 +130,25 @@ function renderBeginnerWelcome() {
 
     el.innerHTML = `
         <div class="beginner-welcome-inner">
-            <div class="beginner-welcome-badge"><i class="fa-solid fa-sparkles"></i> 新人 3 步上手</div>
-            <h2 class="beginner-welcome-title">Lumina 很簡單：今天只做一件事</h2>
+            <div class="beginner-welcome-badge"><i class="fa-solid fa-bolt"></i> 今天只做最重要那一件</div>
+            <h2 class="beginner-welcome-title">用知識庫，一步一步做完今天那件事</h2>
             <ol class="beginner-welcome-steps">
-                <li><strong>加一項任務</strong>（或一鍵體驗）</li>
-                <li>按 <strong>開始做這件</strong></li>
-                <li>卡住就按 <strong>教練帶我做</strong></li>
+                <li><strong>加一項今日任務</strong>（或一鍵體驗）</li>
+                <li>按 <strong>教練帶我做</strong></li>
+                <li>做完勾選 → 自動下一件</li>
             </ol>
             <div class="beginner-welcome-actions">
                 <button type="button" class="beginner-cta-primary focus-ring" data-lumina-action="seedDemoFirstTask">
                     <i class="fa-solid fa-play"></i> 一鍵體驗
                 </button>
                 <button type="button" class="beginner-cta-secondary focus-ring" data-lumina-action="focusQuickAdd">
-                    自己輸入任務
+                    自己輸入
                 </button>
-                <button type="button" class="beginner-cta-ghost focus-ring" data-lumina-action="dismissBeginnerWelcome">
-                    我知道了
+                <button type="button" class="beginner-cta-secondary focus-ring" data-lumina-action="openCoachForNextTask">
+                    <i class="fa-solid fa-bolt"></i> 教練
                 </button>
             </div>
-            <p class="beginner-welcome-note">團隊知識庫、數據洞察屬於進階功能，之後在「更多」打開即可。</p>
+            <p class="beginner-welcome-note">團隊知識庫與數據洞察在「更多」— 先完成今天一件事就好。</p>
         </div>
     `;
 }

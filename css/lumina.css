@@ -4261,11 +4261,18 @@ body {
 
 /* Progressive disclosure: hide advanced chrome for newcomers */
 body.simple-mode .quick-action-advanced { display: none; }
-body.simple-mode #dash-stats-toggle { opacity: 0.75; }
+body.simple-mode #dash-stats-toggle { opacity: 0.55; }
+body.simple-mode #dash-stats-panel { display: none !important; }
 body.simple-mode #dashboard-category-filters { display: none; }
 body.simple-mode #nav-more-wrap .nav-dropdown-item[data-lumina-arg="insights"],
-body.simple-mode #nav-dropdown-insights { opacity: 0.65; }
-body.simple-mode .positioning-tagline { font-size: 0.9rem; }
+body.simple-mode #nav-dropdown-insights { opacity: 0.55; }
+body.simple-mode .positioning-tagline {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #cbd5e1;
+}
+body.simple-mode .dash-summary { font-size: 0.75rem; opacity: 0.85; }
+body.simple-mode #active-goals-panel { margin-bottom: 0.75rem; }
 
 .auth-guest-primary {
     transition: filter 0.15s ease, transform 0.15s ease;

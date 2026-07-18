@@ -64,6 +64,16 @@ async function initializeApp() {
         try { showToast('部分介面載入失敗，請重新整理頁面', 'error'); } catch (_) {}
     }
 
+    try {
+        if (typeof track === 'function') {
+            track('session_boot', {
+                tasks: Array.isArray(S.tasks) ? S.tasks.length : 0,
+                hasTeam: !!S.enterpriseSession,
+                loggedIn: typeof isLoggedIn === 'function' ? !!isLoggedIn() : false
+            });
+        }
+    } catch (_) {}
+
     const navDashboard = document.getElementById('nav-dashboard');
     if (navDashboard) navDashboard.classList.add('active', 'text-indigo-400');
 

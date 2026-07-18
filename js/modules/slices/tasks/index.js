@@ -773,6 +773,12 @@ function quickAddTask() {
     saveState();
     input.value = '';
 
+    try {
+        if (typeof track === 'function') {
+            track('task_created', { source: 'quick_add', duration, dueToday: !!dueToday });
+        }
+    } catch (_) {}
+
     showToast(
         dueToday ? `已加入今日（${duration} 分）— 可按「開始做這件」` : `已排到明天（${duration} 分）`,
         'success'
@@ -804,6 +810,12 @@ function seedDemoFirstTask() {
     S.todayFocusTaskId = demo.id;
     saveState();
     localStorage.setItem('lumina_beginner_dismissed', 'true');
+    try {
+        if (typeof track === 'function') {
+            track('demo_seeded', {});
+            track('task_created', { source: 'demo', duration: demo.duration, dueToday: true });
+        }
+    } catch (_) {}
     showSection('dashboard');
     refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
     showToast('已加入範例任務 — 點「開始做這件」或「教練帶我做」', 'success');
@@ -880,6 +892,15 @@ function toggleTaskComplete(taskId, checkbox, fromDashboard = false, fromFocus =
 
     let advancedToday = false;
     if (task.completed) {
+        try {
+            if (typeof track === 'function') {
+                track('task_completed', {
+                    fromFocus: !!(fromFocus || S.focusSession?.taskId === task.id),
+                    fromDashboard: !!fromDashboard,
+                    source: task.source || null
+                });
+            }
+        } catch (_) {}
         if (fromDashboard || task.due <= getTodayISO()) {
             onTodayTaskCompleted(task.id, fromFocus || S.focusSession?.taskId === task.id);
             advancedToday = true;

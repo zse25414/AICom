@@ -449,6 +449,11 @@ function coachBeginGuidedSession() {
     startStepTimerForCoach(session);
     document.getElementById('next-step-card')?.classList.add('focus-session-active');
     renderCoachAgentView();
+    try {
+        if (typeof track === 'function') {
+            track('coach_start', { taskId: task.id, steps: session.steps?.length || 0 });
+        }
+    } catch (_) {}
     showToast('教練開始帶你做', 'success');
 }
 
@@ -1002,6 +1007,11 @@ function addCoachMessageAsTodayTasks(msgIndex) {
 
     if (created[0]) S.todayFocusTaskId = created[0].id;
     saveState();
+    try {
+        if (typeof track === 'function') {
+            track('task_created', { source: 'coach_extract', count: created.length, dueToday: true });
+        }
+    } catch (_) {}
     refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
 
     if (created.length === 1) {
@@ -1512,6 +1522,16 @@ async function sendCoachAgentMessage(preset) {
     renderCoachAgentThread(isApiReady() ? 'deepseek' : 'offline');
     S.coachRequestInFlight = true;
 
+    try {
+        if (typeof track === 'function') {
+            track('coach_message', {
+                freeform: !!freeform,
+                hasTask: !!task,
+                api: !!isApiReady()
+            });
+        }
+    } catch (_) {}
+
     let result;
     try {
         if (isApiReady()) {
@@ -1532,12 +1552,23 @@ async function sendCoachAgentMessage(preset) {
         }
     } catch (err) {
         console.warn('[Lumina Coach] AI 請求失敗，改用離線引導:', err.message);
+        try {
+            if (typeof track === 'function') {
+                track('coach_error', { reason: 'ai_request', message: String(err.message || '').slice(0, 120) });
+            }
+        } catch (_) {}
         result = buildOfflineAgentReply(msg, task, S.focusSession);
         if (S.enterpriseSession && !result.meta) {
             result.meta = { usedKnowledge: false, kbSkipReason: 'degraded' };
         }
     } finally {
         S.coachRequestInFlight = false;
+    }
+
+    if (result?.meta?.usedKnowledge === true && result.meta.sourceCount === 0) {
+        try {
+            if (typeof track === 'function') track('rag_empty', { kbIds: result.meta.kbIds || [] });
+        } catch (_) {}
     }
 
     pushCoachAgentMessage('coach', result.reply, result.sources, result.meta || null);
@@ -1755,8 +1786,18 @@ function renderCoachQuickActions() {
 function openCoachForNextTask() {
     const next = resolveTodayFocusTask() || getNextRecommendedTask('today');
     if (!next) {
-        showToast('尚無待辦，先分解一個大目標吧', 'error');
-        openDecomposeTab();
+        try {
+            if (typeof track === 'function') {
+                track('coach_open', { hasTask: false, source: 'openCoachForNextTask' });
+            }
+        } catch (_) {}
+        // Phase 1: go coach freeform or dashboard quick-add, not force decompose
+        showSection('coach');
+        showToast('先加一項今日任務，或直接問教練', 'success');
+        setTimeout(() => {
+            try { if (typeof focusQuickAdd === 'function') { /* stay coach */ } } catch (_) {}
+            try { refreshCoachView(); } catch (_) {}
+        }, 80);
         return;
     }
     openCoachForTask(next.id);

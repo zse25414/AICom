@@ -4,6 +4,7 @@
     "theme/index.js",
     "dom/index.js",
     "utils/index.js",
+    "utils/analytics.js",
     "bridge/actions.js",
     "auth/index.js",
     "notifications/index.js",
