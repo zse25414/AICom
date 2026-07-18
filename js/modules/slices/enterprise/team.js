@@ -232,6 +232,7 @@ function clearEnterpriseClientState() {
     try { if (typeof stopRagStatusPolling === 'function') stopRagStatusPolling(); } catch (_) {}
     S.enterpriseSession = null;
     S.enterpriseMemberships = [];
+    S._enterpriseMembershipsLoaded = true; // empty is intentional
     S.enterpriseGroupData = null;
     S.enterpriseJoinFormOpen = false;
     S.enterpriseDataFetchedAt = 0;
@@ -272,6 +273,10 @@ function normalizeEnterpriseMembership(m) {
 
 function ensureEnterpriseMembershipsLoaded() {
     if (!Array.isArray(S.enterpriseMemberships)) S.enterpriseMemberships = [];
+    // IMPORTANT: use a flag, not .length — empty list after leave is valid and
+    // must NOT reload the pre-leave snapshot from localStorage.
+    if (S._enterpriseMembershipsLoaded) return S.enterpriseMemberships;
+
     const owner = getEnterpriseOwnerId();
     const storedOwner = localStorage.getItem(enterpriseOwnerKey()) || '';
     // Different account / guest transition → never reuse previous teams
@@ -284,9 +289,9 @@ function ensureEnterpriseMembershipsLoaded() {
             localStorage.removeItem(enterpriseMembershipsKey());
         } catch (_) {}
         localStorage.setItem(enterpriseOwnerKey(), owner);
+        S._enterpriseMembershipsLoaded = true;
         return S.enterpriseMemberships;
     }
-    if (S.enterpriseMemberships.length) return S.enterpriseMemberships;
     try {
         const raw = JSON.parse(localStorage.getItem(enterpriseMembershipsKey()) || 'null');
         // Support { ownerId, items } envelope or legacy bare array
@@ -301,6 +306,7 @@ function ensureEnterpriseMembershipsLoaded() {
         if (fileOwner && fileOwner !== owner) {
             S.enterpriseMemberships = [];
             localStorage.setItem(enterpriseOwnerKey(), owner);
+            S._enterpriseMembershipsLoaded = true;
             return S.enterpriseMemberships;
         }
         const map = new Map();
@@ -315,11 +321,15 @@ function ensureEnterpriseMembershipsLoaded() {
     } catch (_) {
         S.enterpriseMemberships = [];
     }
+    S._enterpriseMembershipsLoaded = true;
     return S.enterpriseMemberships;
 }
 
 function saveEnterpriseMemberships() {
-    ensureEnterpriseMembershipsLoaded();
+    // Do NOT call ensureEnterpriseMembershipsLoaded() here — after leave the list
+    // may legitimately be empty; reloading would resurrect the left group.
+    if (!Array.isArray(S.enterpriseMemberships)) S.enterpriseMemberships = [];
+    S._enterpriseMembershipsLoaded = true;
     const owner = getEnterpriseOwnerId();
     localStorage.setItem(enterpriseOwnerKey(), owner);
     localStorage.setItem(enterpriseMembershipsKey(), JSON.stringify({
@@ -570,23 +580,30 @@ async function joinEnterpriseGroup() {
 
 /**
  * Apply local leave after server (or offline) success.
+ * Must not re-hydrate memberships from localStorage (empty list is valid).
  */
 function applyLocalLeaveMembership(code) {
+    const leaveCode = normalizeEnterpriseCode(code);
     ensureEnterpriseMembershipsLoaded();
-    S.enterpriseMemberships = S.enterpriseMemberships.filter((m) => m.groupCode !== code);
+    S.enterpriseMemberships = (S.enterpriseMemberships || []).filter(
+        (m) => normalizeEnterpriseCode(m.groupCode) !== leaveCode
+    );
+    S._enterpriseMembershipsLoaded = true;
     saveEnterpriseMemberships();
 
-    const leavingActive = normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '') === code;
+    const leavingActive = normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '') === leaveCode;
     if (!leavingActive) {
         renderEnterprisePage();
         return;
     }
     try { stopEnterprisePolling(); } catch (_) {}
     clearActiveEnterpriseWorkspaceCaches();
-    const next = S.enterpriseMemberships[0] || null;
-    setActiveEnterpriseSession(next);
     S.enterpriseJoinFormOpen = false;
+
+    const next = S.enterpriseMemberships[0] || null;
     if (next) {
+        // setActive may upsert membership — next is still in list, OK
+        setActiveEnterpriseSession(next);
         try { loadLocallyReadNotificationIds(); } catch (_) {}
         refreshEnterpriseData(true).then(() => {
             renderEnterprisePage();
@@ -595,7 +612,14 @@ function applyLocalLeaveMembership(code) {
             try { updateNotificationUI(); } catch (_) {}
         }).catch(() => renderEnterprisePage());
     } else {
-        setActiveEnterpriseSession(null);
+        // Fully left all groups — wipe session without reloading memberships
+        S.enterpriseSession = null;
+        S._enterpriseMembershipsLoaded = true;
+        S.enterpriseMemberships = [];
+        try {
+            localStorage.removeItem(enterpriseSessionKey());
+            saveEnterpriseMemberships(); // persist empty items[]
+        } catch (_) {}
         renderEnterprisePage();
         try { updateNotificationUI(); } catch (_) {}
     }
@@ -612,7 +636,9 @@ async function leaveEnterpriseGroup(groupCode) {
         return;
     }
     ensureEnterpriseMembershipsLoaded();
-    const code = normalizeEnterpriseCode(groupCode || S.enterpriseSession?.groupCode || '');
+    // Ignore accidental Event objects from action wiring
+    const rawArg = (groupCode && typeof groupCode === 'object') ? '' : groupCode;
+    const code = normalizeEnterpriseCode(rawArg || S.enterpriseSession?.groupCode || '');
     if (!code) {
         showToast('沒有可離開的群組', 'error');
         return;
