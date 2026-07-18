@@ -1980,15 +1980,9 @@ function renderEnterpriseDocuments() {
             return fileUrl;
         }
         if (fileUrl.startsWith('/uploads/')) {
-            const base = getEnterpriseBaseUrl() + fileUrl;
-            try {
-                const session = JSON.parse(localStorage.getItem('lumina_auth_session') || 'null');
-                if (session?.token) {
-                    const sep = base.includes('?') ? '&' : '?';
-                    return `${base}${sep}token=${encodeURIComponent(session.token)}`;
-                }
-            } catch (_) {}
-            return base;
+            // 不附 ?token=：JWT 進 URL 會經 history/Referer/log 外洩，
+            // 且伺服器只認 Authorization header。開啟改走 openTeamDocFileSecure。
+            return getEnterpriseBaseUrl() + fileUrl.split('?')[0];
         }
         return '';
     }
@@ -2085,10 +2079,10 @@ function renderEnterpriseDocuments() {
             
             ${isPdf ? `
                 <div class="mt-3 flex items-center gap-2">
-                    <a href="${resolveDocFileUrl(d.fileUrl)}" target="_blank" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-red-500/30 bg-red-500/5 text-red-400 text-xs hover:bg-red-500/15 transition-colors">
+                    <button type="button" ${luminaAction('openTeamDocFileSecure', { arg: d.id })} class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-red-500/30 bg-red-500/5 text-red-400 text-xs hover:bg-red-500/15 transition-colors focus-ring">
                         <i class="fa-solid fa-file-pdf"></i>
                         <span>開啟 PDF 檔案 (${escapeHtml(d.filename || '檢視文件')})</span>
-                    </a>
+                    </button>
                 </div>
                 ${contentPreview ? `
                     <div class="mt-3">
@@ -2100,10 +2094,10 @@ function renderEnterpriseDocuments() {
             
             ${isExcel ? `
                 <div class="mt-3 flex items-center gap-2">
-                    <a href="${resolveDocFileUrl(d.fileUrl)}" target="_blank" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-green-500/30 bg-green-500/5 text-green-400 text-xs hover:bg-green-500/15 transition-colors">
+                    <button type="button" ${luminaAction('openTeamDocFileSecure', { arg: d.id })} class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-green-500/30 bg-green-500/5 text-green-400 text-xs hover:bg-green-500/15 transition-colors focus-ring">
                         <i class="fa-solid fa-file-excel"></i>
                         <span>開啟 Excel 檔案 (${escapeHtml(d.filename || '檢視資料')})</span>
-                    </a>
+                    </button>
                 </div>
                 ${contentPreview ? `
                     <div class="mt-3">
@@ -2115,7 +2109,7 @@ function renderEnterpriseDocuments() {
             
             ${isImage ? `
                 <div class="mt-3">
-                    <img src="${resolveDocFileUrl(d.fileUrl)}" class="max-h-48 rounded-xl border border-slate-800/80 object-contain hover:scale-[1.01] transition-transform cursor-pointer" ${luminaAction('openSafeUrl', { argFrom: 'src' })}>
+                    <img data-doc-secure-src="${escapeHtml(resolveDocFileUrl(d.fileUrl))}" alt="${escapeHtml(d.title || '文件圖片')}" class="max-h-48 rounded-xl border border-slate-800/80 object-contain hover:scale-[1.01] transition-transform cursor-pointer" ${luminaAction('openSafeUrl', { argFrom: 'src' })}>
                 </div>
                 <p class="text-xs text-slate-400 mt-2.5 whitespace-pre-wrap leading-relaxed"><i class="fa-solid fa-circle-info mr-1 text-purple-400"></i>${escapeHtml(contentPreview)}</p>
             ` : ''}
@@ -2176,9 +2170,61 @@ function renderEnterpriseDocuments() {
     // Wave 3 polish: keep version/history UI open across re-renders (rag poll, etc.)
     try { restoreDocUiPanels(); } catch (e) { console.warn('[Lumina] restoreDocUiPanels', e); }
     try { updateDocBulkBarUI(); } catch (_) {}
+    try { hydrateSecureDocImages(listEl); } catch (e) { console.warn('[Lumina] hydrateSecureDocImages', e); }
 }
 
 function showMoreEnterpriseDocuments() {
     S._docListVisible = (S._docListVisible || DOC_LIST_PAGE_SIZE) + DOC_LIST_PAGE_SIZE;
     renderEnterpriseDocuments();
+}
+
+// ---- 安全檔案存取：JWT 一律走 Authorization header，不進 URL ----
+
+// blob URL 以來源 URL 為 key 快取：文件列表常因 rag poll 重繪，避免重複下載
+const __docFileBlobUrls = new Map();
+
+async function fetchDocFileBlobUrl(url) {
+    if (__docFileBlobUrls.has(url)) return __docFileBlobUrls.get(url);
+    const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders(false) : {};
+    const res = await fetch(url, { headers, credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    __docFileBlobUrls.set(url, objectUrl);
+    return objectUrl;
+}
+
+function hydrateSecureDocImages(rootEl) {
+    const imgs = (rootEl || document).querySelectorAll('img[data-doc-secure-src]');
+    imgs.forEach(async (img) => {
+        const url = img.getAttribute('data-doc-secure-src');
+        if (!url) return;
+        // 只有本站 /uploads/ 需要帶 Authorization；data:/blob:/外部網址直接用
+        if (!url.includes('/uploads/')) { img.src = url; return; }
+        try {
+            img.src = await fetchDocFileBlobUrl(url);
+        } catch (err) {
+            console.warn('[Lumina] doc image load failed', err);
+            img.alt = '無法載入圖片（請確認登入狀態後重試）';
+        }
+    });
+}
+
+async function openTeamDocFileSecure(docId) {
+    const doc = (S.enterpriseGroupData?.documents || []).find(d => d.id === docId);
+    let url = doc?.fileUrl || '';
+    if (!url) return showToast('此文件沒有可開啟的檔案', 'error');
+    if (url.startsWith('/uploads/')) url = getEnterpriseBaseUrl() + url.split('?')[0];
+    try {
+        if (!url.includes('/uploads/')) {
+            if (typeof openSafeUrl === 'function') openSafeUrl(url);
+            else window.open(url, '_blank', 'noopener,noreferrer');
+            return;
+        }
+        const objectUrl = await fetchDocFileBlobUrl(url);
+        window.open(objectUrl, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+        console.warn('[Lumina] secure doc open failed', err);
+        showToast('無法開啟檔案，請確認登入狀態後重試', 'error');
+    }
 }
