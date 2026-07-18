@@ -38,19 +38,27 @@ async function probeRagServiceOnline() {
 
 function updateRagSelectorChrome() {
     const wrap = document.getElementById('rag-kb-selector-wrap');
-    const toolsOpen = !document.getElementById('coach-tools-panel')?.classList.contains('hidden');
+    const panel = document.getElementById('coach-tools-panel');
+    const toolsOpen = panel && !panel.classList.contains('hidden');
     if (!wrap) return;
 
     if (!S.enterpriseSession) {
         wrap.classList.add('hidden');
+        panel?.classList.add('hidden');
         updateRagQuerySummary();
         return;
     }
 
-    // Tools panel is collapsed by default — only reveal selector when user opens it
-    wrap.classList.toggle('hidden', !toolsOpen);
+    // With team: show KB panel unless user explicitly collapsed it
+    if (!S._coachKbToolsCollapsed && panel) {
+        panel.classList.remove('hidden');
+        document.getElementById('coach-tools-toggle')?.setAttribute('aria-expanded', 'true');
+    }
+    const open = panel ? !panel.classList.contains('hidden') : toolsOpen;
+    wrap.classList.toggle('hidden', !open);
     wrap.classList.toggle('coach-rag-selector-offline', !S.ragServiceActive);
-    wrap.setAttribute('aria-disabled', S.ragServiceActive ? 'false' : 'true');
+    // Preferable: always allow toggling KBs (offline = preference for when back online)
+    wrap.setAttribute('aria-disabled', 'false');
 
     const banner = document.getElementById('rag-kb-offline-banner');
     if (banner) {
@@ -165,6 +173,10 @@ async function renderRagKbCheckboxes() {
         if (list?.items?.length) rememberRagKbItems(list.items);
         kbIds = list?.kb_ids || null;
     }
+    // Prefer team knowledgeBases map when list empty
+    if ((!kbIds || !kbIds.length) && S.enterpriseGroupData?.knowledgeBases) {
+        kbIds = Object.keys(S.enterpriseGroupData.knowledgeBases);
+    }
     if (!kbIds || !kbIds.length) {
         // Fallback labels when list API unavailable; still show for offline (W1)
         kbIds = Object.keys(C.RAG_KB_LABELS);
@@ -176,18 +188,30 @@ async function renderRagKbCheckboxes() {
     // Keep selection intersection; allow empty = pure coach (do NOT force-check)
     S.checkedRagKbs = (S.checkedRagKbs || []).filter(id => available.has(id));
 
+    const pureActive = !S.checkedRagKbs.length;
     const offline = !S.ragServiceActive;
-    container.innerHTML = kbs.map(kb => {
+    const pureChip = `
+        <button type="button" class="coach-rag-kb-chip coach-rag-pure-chip ${pureActive ? 'coach-rag-kb-chip-active' : ''}"
+                data-lumina-action="clearRagKbSelection"
+                title="不查知識庫，只用一般教練／DeepSeek"
+                aria-pressed="${pureActive ? 'true' : 'false'}">
+            <span class="coach-rag-kb-chip-text">
+                <span class="coach-rag-kb-chip-name"><i class="fa-solid fa-comments mr-1 opacity-80"></i>純教練</span>
+                <span class="coach-rag-kb-chip-count">不查庫</span>
+            </span>
+        </button>`;
+
+    container.innerHTML = pureChip + kbs.map(kb => {
         const checked = S.checkedRagKbs.includes(kb.id) ? 'checked' : '';
         const count = getKbDocCount(kb.id);
         const countLabel = count > 0 ? `${count} 份` : '空庫';
         const shortLabel = kb.label.replace(/\s*\([^)]*\)\s*$/, '').trim();
-        const disabledAttr = offline ? 'disabled' : '';
-        const disabledClass = offline ? 'coach-rag-kb-chip-disabled' : '';
+        // Always selectable — offline only dims, does not block (preference for later)
+        const disabledClass = offline ? 'coach-rag-kb-chip-dim' : '';
         const emptyClass = count === 0 ? 'is-empty' : '';
         return `
             <label class="coach-rag-kb-chip ${disabledClass} ${checked ? 'coach-rag-kb-chip-active' : ''}">
-                <input type="checkbox" name="rag-kb" value="${escapeHtml(kb.id)}" ${checked} ${disabledAttr}
+                <input type="checkbox" name="rag-kb" value="${escapeHtml(kb.id)}" ${checked}
                        ${luminaChange('onRagKbCheckboxChange', [])}
                        class="coach-rag-kb-input accent-purple-500"
                        aria-label="${escapeHtml(shortLabel)}，${countLabel}">
@@ -202,25 +226,56 @@ async function renderRagKbCheckboxes() {
     updateRagQuerySummary();
 }
 
+function clearRagKbSelection() {
+    S.checkedRagKbs = [];
+    document.querySelectorAll('input[name="rag-kb"]').forEach((cb) => { cb.checked = false; });
+    document.querySelectorAll('.coach-rag-kb-chip').forEach((label) => {
+        const input = label.querySelector('input[name="rag-kb"]');
+        if (input) label.classList.toggle('coach-rag-kb-chip-active', false);
+        if (label.classList.contains('coach-rag-pure-chip')) {
+            label.classList.add('coach-rag-kb-chip-active');
+            label.setAttribute('aria-pressed', 'true');
+        }
+    });
+    updateRagQuerySummary();
+    try {
+        if (typeof track === 'function') track('rag_mode_pure_coach', {});
+    } catch (_) {}
+    showToast('已切換為純教練（不查知識庫）', 'success');
+}
+
 function onRagKbCheckboxChange() {
     const checkboxes = document.querySelectorAll('input[name="rag-kb"]:checked');
     S.checkedRagKbs = Array.from(checkboxes).map(cb => cb.value);
     // Refresh active chip styles
     document.querySelectorAll('.coach-rag-kb-chip').forEach(label => {
         const input = label.querySelector('input[name="rag-kb"]');
-        label.classList.toggle('coach-rag-kb-chip-active', !!(input && input.checked));
+        if (input) {
+            label.classList.toggle('coach-rag-kb-chip-active', !!(input && input.checked));
+        } else if (label.classList.contains('coach-rag-pure-chip')) {
+            const pure = !S.checkedRagKbs.length;
+            label.classList.toggle('coach-rag-kb-chip-active', pure);
+            label.setAttribute('aria-pressed', pure ? 'true' : 'false');
+        }
     });
     updateRagQuerySummary();
+    try {
+        if (typeof track === 'function') {
+            track('rag_kb_selection', { count: S.checkedRagKbs.length, ids: S.checkedRagKbs.slice(0, 8) });
+        }
+    } catch (_) {}
 }
 
 function setupRagHealthMonitoring() {
     window.checkRagServiceHealth = checkRagServiceHealth;
     window.renderRagKbCheckboxes = renderRagKbCheckboxes;
     window.onRagKbCheckboxChange = onRagKbCheckboxChange;
+    window.clearRagKbSelection = clearRagKbSelection;
     window.updateRagQuerySummary = updateRagQuerySummary;
     window.updateRagSelectorChrome = updateRagSelectorChrome;
     window.openTeamKnowledgeTab = openTeamKnowledgeTab;
     window.registerLuminaAction?.('openTeamKnowledgeTab', openTeamKnowledgeTab);
+    window.registerLuminaAction?.('clearRagKbSelection', clearRagKbSelection);
     checkRagServiceHealth();
     setInterval(checkRagServiceHealth, 10000);
 }

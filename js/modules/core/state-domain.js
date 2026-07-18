@@ -43,7 +43,8 @@ export function createSlice() {
         ragServiceActive: false,
         ragRetrievalMode: 'hybrid',
         ragSyncedGroupKey: null,
-        checkedRagKbs: ['general'],
+        /** Empty = pure coach (no RAG). User opts in by checking KBs or @mention / task-bind. */
+        checkedRagKbs: [],
         /** Session-local RAG status overrides until server persists ragStatus (W1-A) */
         docRagStatusOverrides: {},
         rolledCountOnInit: 0,

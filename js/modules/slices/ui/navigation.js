@@ -136,6 +136,11 @@ function showSection(section) {
         const runCoachUi = () => {
             try { if (typeof autoResizeCoachInput === 'function') autoResizeCoachInput(); } catch (_) {}
             try { if (typeof renderCoachQuickActions === 'function') renderCoachQuickActions(); } catch (_) {}
+            // Surface team KB picker (default pure coach; user opts into RAG)
+            try {
+                if (typeof updateRagSelectorChrome === 'function') updateRagSelectorChrome();
+                if (typeof window.renderRagKbCheckboxes === 'function') window.renderRagKbCheckboxes();
+            } catch (_) {}
             try {
                 if (typeof refreshCoachView === 'function') refreshCoachView();
                 else if (typeof renderCoachAgentView === 'function') renderCoachAgentView();

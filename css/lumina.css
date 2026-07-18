@@ -1534,13 +1534,21 @@ body {
 .coach-tools-panel {
     flex-shrink: 0;
     margin: 0 0.25rem 0.4rem;
-    max-height: 9rem;
+    max-height: 12rem;
     overflow-y: auto;
     border-radius: 1rem;
     border: 1px solid rgba(255, 255, 255, 0.06);
     background: rgba(0, 0, 0, 0.25);
 }
 .coach-tools-panel.hidden { display: none; }
+
+.coach-topbar-btn-label {
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+@media (max-width: 420px) {
+    .coach-topbar-btn-label { display: none; }
+}
 
 .coach-chat-panel {
     display: flex;
@@ -1984,6 +1992,13 @@ body {
 .coach-rag-kb-chip-disabled {
     opacity: 0.55;
     cursor: not-allowed;
+}
+/* Offline: still clickable (preference), just dimmed */
+.coach-rag-kb-chip-dim {
+    opacity: 0.78;
+}
+.coach-rag-pure-chip {
+    border-style: dashed;
 }
 
 .coach-rag-kb-input {

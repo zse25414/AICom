@@ -435,8 +435,8 @@
                             </button>
                             <button type="button" id="coach-tools-toggle" class="coach-topbar-btn"
                                     data-lumina-action="toggleCoachKbTools"
-                                    aria-expanded="false" aria-controls="coach-tools-panel" title="知識庫">
-                                <i class="fa-solid fa-book"></i>
+                                    aria-expanded="false" aria-controls="coach-tools-panel" title="知識庫（勾選才查 RAG）">
+                                <i class="fa-solid fa-book"></i><span class="coach-topbar-btn-label">知識庫</span>
                             </button>
                         </div>
                     </header>
@@ -447,12 +447,13 @@
                     <!-- Active step only (when guiding) -->
                     <div id="coach-workspace" class="coach-focus-strip" aria-label="目前步驟"></div>
 
+                    <!-- Team only: open by default once enterprise session exists (see updateRagSelectorChrome) -->
                     <div id="coach-tools-panel" class="coach-tools-panel hidden">
                         <div id="rag-kb-selector-wrap" class="coach-rag-selector hidden" aria-disabled="false">
                             <div class="coach-rag-selector-label">
                                 <i class="fa-solid fa-database"></i>
                                 <span>知識庫</span>
-                                <span class="coach-rag-selector-hint">可不選 · 可用 @庫名</span>
+                                <span class="coach-rag-selector-hint">預設純教練 · 勾選才查 RAG · 可用 @庫名</span>
                             </div>
                             <div id="rag-kb-offline-banner" class="coach-rag-offline-banner hidden" role="status">
                                 <i class="fa-solid fa-triangle-exclamation"></i>

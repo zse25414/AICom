@@ -844,6 +844,10 @@ async function coachAgentRespondWithAI(userMsg, task, session, messageAttachment
     else if (!effectiveKbIds.length) skipReason = 'empty_selection';
 
     let ragDegraded = false;
+    /** When set, RAG enriches coach AI instead of replacing the whole reply */
+    let ragKnowledgeSnippet = '';
+    let ragEnrichSources = [];
+    let ragDirectMeta = null;
 
     if (!skipReason) {
         try {
@@ -884,31 +888,51 @@ async function coachAgentRespondWithAI(userMsg, task, session, messageAttachment
                 if (!reply) {
                     ragDegraded = true;
                 } else {
-                    reply = normalizeCoachReplyText(reply);
-                    if (!reply.includes('[選項:')) {
-                        reply += freeform
-                            ? `\n\n[選項: 再說清楚一點]\n[選項: 加到今日待辦]`
-                            : `\n\n[選項: 繼續這一步]\n[選項: 拆更細]`;
+                    // Freeform knowledge Q&A with real citations → direct RAG answer
+                    // Guided task coaching → inject as context so AI still coaches steps
+                    // Freeform but zero sources → treat as weak hit, fall through to coach AI
+                    const strongHit = sources.length > 0;
+                    const useDirectRag = freeform && strongHit;
+
+                    if (useDirectRag) {
+                        reply = normalizeCoachReplyText(reply);
+                        if (!reply.includes('[選項:')) {
+                            reply += `\n\n[選項: 再說清楚一點]\n[選項: 加到今日待辦]\n[選項: 改用純教練回答]`;
+                        }
+                        const result = {
+                            reply: clampText(reply, 2600),
+                            sources,
+                            meta: {
+                                usedKnowledge: true,
+                                kbIds: effectiveKbIds,
+                                docIds: effectiveDocIds,
+                                sourceCount: sources.length,
+                                mentionOverride: mention.hadMentions,
+                                taskBound: resolved.taskBound && !mention.hadMentions,
+                                kbSource: resolved.source,
+                                mode: 'rag_direct'
+                            },
+                            ...inferAgentActionsFromUserMsg(userMsg, session || { currentStep: 0, steps: [] })
+                        };
+                        if (cacheKey && typeof setCoachCachedAnswer === 'function') {
+                            setCoachCachedAnswer(cacheKey, result);
+                        }
+                        return result;
                     }
 
-                    const result = {
-                        reply: clampText(reply, 2600),
-                        sources,
-                        meta: {
-                            usedKnowledge: true,
-                            kbIds: effectiveKbIds,
-                            docIds: effectiveDocIds,
-                            sourceCount: sources.length,
-                            mentionOverride: mention.hadMentions,
-                            taskBound: resolved.taskBound && !mention.hadMentions,
-                            kbSource: resolved.source
-                        },
-                        ...inferAgentActionsFromUserMsg(userMsg, session || { currentStep: 0, steps: [] })
+                    // Enrichment path (guided session, or freeform weak hit)
+                    ragKnowledgeSnippet = reply.slice(0, 1600);
+                    ragEnrichSources = sources;
+                    ragDirectMeta = {
+                        usedKnowledge: true,
+                        kbIds: effectiveKbIds,
+                        docIds: effectiveDocIds,
+                        sourceCount: sources.length,
+                        mentionOverride: mention.hadMentions,
+                        taskBound: resolved.taskBound && !mention.hadMentions,
+                        kbSource: resolved.source,
+                        mode: freeform ? 'rag_weak_enrich' : 'rag_enrich'
                     };
-                    if (cacheKey && typeof setCoachCachedAnswer === 'function') {
-                        setCoachCachedAnswer(cacheKey, result);
-                    }
-                    return result;
                 }
             } else {
                 ragDegraded = true;
@@ -920,14 +944,15 @@ async function coachAgentRespondWithAI(userMsg, task, session, messageAttachment
         }
     }
 
-    const kbMeta = {
+    const kbMeta = ragDirectMeta || {
         usedKnowledge: false,
         kbSkipReason: ragDegraded ? 'degraded' : (skipReason || 'degraded'),
         kbIds: effectiveKbIds,
         docIds: effectiveDocIds,
         mentionOverride: mention.hadMentions,
         taskBound: resolved.taskBound && !mention.hadMentions,
-        kbSource: resolved.source
+        kbSource: resolved.source,
+        mode: skipReason === 'empty_selection' ? 'pure_coach' : (ragDegraded ? 'degraded' : 'coach')
     };
 
     const contextBlock = buildCoachContextText(getCoachContext());
@@ -950,12 +975,15 @@ async function coachAgentRespondWithAI(userMsg, task, session, messageAttachment
     const attachCtx = typeof buildAttachmentsContextText === 'function'
         ? buildAttachmentsContextText(messageAttachments, task)
         : '';
+    const knowledgeCtx = ragKnowledgeSnippet
+        ? `\n\n【知識庫摘錄（僅供參考，請轉成可執行建議，勿整段照貼）】\n${ragKnowledgeSnippet}`
+        : '';
 
     let systemPrompt;
     if (freeform) {
         systemPrompt = `你是 Lumina 教練助手。回答工作／知識庫問題：說清楚、給下一步，內容要夠用。
 ${styleRules}
-${contextBlock}${attachCtx}
+${contextBlock}${attachCtx}${knowledgeCtx}
 若有附件：優先引用文字檔摘錄；圖片僅能依檔名與使用者描述推斷（模型未必能看圖），請請對方補關鍵重點。`;
     } else {
         const step = session?.steps?.[session.currentStep];
@@ -963,7 +991,7 @@ ${contextBlock}${attachCtx}
 ${styleRules}
 若使用者卡住：先安撫一句，再拆成 2–3 個更小動作，並說明先做哪一個。
 若使用者問怎麼做：給 3–6 步，必要時補「完成長相／檢查點」。
-${contextBlock}${attachCtx}
+${contextBlock}${attachCtx}${knowledgeCtx}
 當前任務：${task.name}
 當前步驟（${(session.currentStep || 0) + 1}/${session.steps.length}）「${step?.title}」：${step?.action}`;
     }
@@ -994,6 +1022,7 @@ ${contextBlock}${attachCtx}
                 ...parsed,
                 reply: clampText(normalizeCoachReplyText(parsed.reply), COACH_REPLY_MAX),
                 meta: kbMeta,
+                sources: ragEnrichSources.length ? ragEnrichSources : (parsed.sources || null),
                 ...inferAgentActionsFromUserMsg(userMsg, session)
             };
         }
@@ -1001,11 +1030,16 @@ ${contextBlock}${attachCtx}
 
     if (!result) {
         if (!text) {
-            result = { ...buildOfflineAgentReply(userMsg, task, session), meta: kbMeta };
+            result = {
+                ...buildOfflineAgentReply(userMsg, task, session),
+                meta: kbMeta,
+                sources: ragEnrichSources.length ? ragEnrichSources : null
+            };
         } else {
             result = {
                 reply: clampText(text, COACH_REPLY_MAX),
                 meta: kbMeta,
+                sources: ragEnrichSources.length ? ragEnrichSources : null,
                 ...(task ? inferAgentActionsFromUserMsg(userMsg, session) : { advance: false, complete: false })
             };
         }
@@ -1515,18 +1549,19 @@ function toggleCoachKbTools() {
     const panel = document.getElementById('coach-tools-panel');
     const btn = document.getElementById('coach-tools-toggle');
     if (!panel) return;
+    if (!S.enterpriseSession) {
+        showToast('加入團隊後可選知識庫；未加入時一律用一般教練', 'error');
+        panel.classList.add('hidden');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+        return;
+    }
     const open = panel.classList.toggle('hidden') === false;
+    S._coachKbToolsCollapsed = !open;
     if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
-        if (S.enterpriseSession) {
-            document.getElementById('rag-kb-selector-wrap')?.classList.remove('hidden');
-            try { window.renderRagKbCheckboxes?.(); } catch (_) {}
-            try { updateRagSelectorChrome?.(); } catch (_) {}
-        } else {
-            showToast('加入團隊後可選知識庫', 'error');
-            panel.classList.add('hidden');
-            if (btn) btn.setAttribute('aria-expanded', 'false');
-        }
+        document.getElementById('rag-kb-selector-wrap')?.classList.remove('hidden');
+        try { window.renderRagKbCheckboxes?.(); } catch (_) {}
+        try { updateRagSelectorChrome?.(); } catch (_) {}
     }
 }
 
@@ -1658,6 +1693,19 @@ function handleCoachOptionShortcuts(msg) {
     const t = String(msg || '').trim();
     if (/一鍵體驗|範例任務/.test(t)) {
         if (typeof seedDemoFirstTask === 'function') seedDemoFirstTask();
+        return true;
+    }
+    if (/純教練|不查知識庫|改用純教練/.test(t)) {
+        if (typeof clearRagKbSelection === 'function') clearRagKbSelection();
+        else {
+            S.checkedRagKbs = [];
+            try { window.renderRagKbCheckboxes?.(); } catch (_) {}
+        }
+        // Open tools so user sees pure coach chip
+        S._coachKbToolsCollapsed = false;
+        try { updateRagSelectorChrome?.(); } catch (_) {}
+        pushCoachAgentMessage('coach', '已改為「純教練」模式：之後回覆不查知識庫。需要時再勾選上方知識庫或用 @庫名。\n\n[選項: 繼續提問]\n[選項: 帶我做]');
+        renderCoachAgentThread();
         return true;
     }
     if (/連上 AI|設定 AI 連線/.test(t)) {

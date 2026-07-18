@@ -19,7 +19,7 @@
 | `S.coachAgentMessages` | array | 教練對話（上限截斷） |
 | `S.userProfile` | object | 含 `apiEnabled`, `apiMode`, `plan`（free/pro） |
 | `S.enterpriseSession` | object\|null | 當前團隊 |
-| `S.checkedRagKbs` | string[] | 教練勾選庫 |
+| `S.checkedRagKbs` | string[] | 教練勾選庫（**空陣列 = 純教練**，不查 RAG） |
 | `S.ragServiceActive` | boolean | RAG 探活 |
 
 ## Task 最小形狀
