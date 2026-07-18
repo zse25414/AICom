@@ -99,6 +99,9 @@ function updateDashboard() {
     updateNextStepCard(stats);
     try { renderBeginnerWelcome(); } catch (_) {}
     try { applySimpleModeChrome(); } catch (_) {}
+    try { if (typeof renderWorkflowTemplatesPanel === 'function') renderWorkflowTemplatesPanel(); } catch (_) {}
+    try { if (typeof renderExecMemoryPanel === 'function') renderExecMemoryPanel(); } catch (_) {}
+    try { if (typeof renderKnowledgeHealthPanel === 'function') renderKnowledgeHealthPanel(); } catch (_) {}
 }
 
 function syncCategoryFromEnergy() {

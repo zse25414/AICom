@@ -28,3 +28,7 @@
 - Playwright 真瀏覽器截圖 diff（可選安裝）  
 - 多租戶跨 group 自動化（已有 security matrix，可加深）  
 - 雙週「B 週只修品質」流程寫入團隊習慣  
+
+## 下一階段
+
+→ **Phase 4**：`docs/roadmap/PHASE-4.md`（模板、執行記憶、KB 健康、私有部署）

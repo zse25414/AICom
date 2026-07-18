@@ -1632,6 +1632,11 @@ async function sendCoachAgentMessage(preset) {
     }
 
     pushCoachAgentMessage('coach', result.reply, result.sources, result.meta || null);
+    try {
+        if (result.sources?.length && typeof rememberCoachSourcesForMemory === 'function') {
+            rememberCoachSourcesForMemory(result.sources);
+        }
+    } catch (_) {}
     if (!freeform && result.complete) {
         coachCompleteTaskFromAgent();
     } else if (!freeform && result.advance) {
@@ -1677,6 +1682,12 @@ function buildCoachContextText(ctx) {
 ${pendingList || '（今日無待辦）'}
 ${next ? `系統推薦的今日第一步：「${next.name}」（${next.duration} 分鐘）` : '尚無推薦任務，建議先分解一個大目標'}
 ${ctx.activeGoals.length ? `進行中的大目標：${ctx.activeGoals.join('、')}` : ''}`;
+
+    try {
+        if (typeof buildExecMemoryContextText === 'function') {
+            text += buildExecMemoryContextText(5);
+        }
+    } catch (_) {}
 
     if (S.enterpriseSession && S.enterpriseGroupData?.documents?.length) {
         const coachTask = typeof getCoachTask === 'function' ? getCoachTask() : null;

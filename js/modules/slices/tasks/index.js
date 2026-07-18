@@ -901,6 +901,11 @@ function toggleTaskComplete(taskId, checkbox, fromDashboard = false, fromFocus =
                 });
             }
         } catch (_) {}
+        try {
+            if (typeof recordTaskCompletionMemory === 'function') {
+                recordTaskCompletionMemory(task);
+            }
+        } catch (_) {}
         if (fromDashboard || task.due <= getTodayISO()) {
             onTodayTaskCompleted(task.id, fromFocus || S.focusSession?.taskId === task.id);
             advancedToday = true;

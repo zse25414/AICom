@@ -6,6 +6,8 @@
     "utils/index.js",
     "utils/analytics.js",
     "utils/usage.js",
+    "utils/templates.js",
+    "utils/exec-memory.js",
     "bridge/actions.js",
     "utils/chunk-errors.js",
     "auth/index.js",
