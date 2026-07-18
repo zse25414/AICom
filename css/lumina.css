@@ -3003,15 +3003,13 @@ body {
 
 .coach-empty-state {
     display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem 0.75rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.45rem;
     text-align: left;
-    padding: 0.5rem 0.85rem;
+    padding: 0.15rem 0 0.25rem;
     min-height: 0;
-    background: rgba(2, 6, 23, 0.4);
+    background: transparent;
 }
 
 .coach-empty-icon {
@@ -3022,17 +3020,22 @@ body {
     font-weight: 600;
     color: #e2e8f0;
     font-size: 0.8rem;
-    flex: 1 1 10rem;
 }
 
 .coach-empty-desc {
     display: none;
 }
 
+.coach-empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
 .coach-empty-btn {
     margin-top: 0;
     font-size: 0.7rem;
-    padding: 0.3rem 0.7rem;
+    padding: 0.32rem 0.75rem;
     border-radius: 9999px;
     background: #6366f1;
     color: white;
@@ -3060,15 +3063,16 @@ body {
     background: rgba(99, 102, 241, 0.1);
 }
 
-/* Focus strip: one slim band, never a tall side panel */
+/* Focus panel: task options + current step — capped height so chat stays primary */
 .coach-focus-strip,
 .coach-agent-workspace {
     flex-shrink: 0;
-    max-height: none;
+    max-height: min(38vh, 280px);
     min-height: 0;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     padding: 0;
-    background: transparent;
+    background: rgba(2, 6, 23, 0.35);
     border-bottom: 1px solid rgba(51, 65, 85, 0.4);
 }
 
@@ -3078,24 +3082,112 @@ body {
     border: none;
 }
 
+.coach-focus-panel {
+    padding: 0.55rem 0.75rem 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+/* Task options (restored) */
+.coach-task-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.coach-task-picker-label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.68rem;
+    font-weight: 650;
+    color: #94a3b8;
+}
+
+.coach-task-picker-label i {
+    color: #818cf8;
+    font-size: 0.65rem;
+}
+
+.coach-task-picker-hint {
+    margin-left: auto;
+    font-weight: 400;
+    color: #475569;
+    font-size: 0.62rem;
+}
+
+.coach-task-picker-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.coach-task-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+    padding: 0.32rem 0.6rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(71, 85, 105, 0.65);
+    background: rgba(15, 23, 42, 0.75);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.coach-task-pick:hover {
+    border-color: rgba(129, 140, 248, 0.45);
+    color: #e2e8f0;
+}
+
+.coach-task-pick.is-active {
+    border-color: rgba(52, 211, 153, 0.55);
+    background: rgba(16, 185, 129, 0.14);
+    color: #a7f3d0;
+    font-weight: 600;
+}
+
+.coach-task-pick-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 12rem;
+}
+
+.coach-task-pick-meta {
+    font-size: 0.62rem;
+    color: #64748b;
+    font-family: ui-monospace, monospace;
+    flex-shrink: 0;
+}
+
+.coach-task-pick.is-active .coach-task-pick-meta {
+    color: #6ee7b7;
+}
+
 .coach-agent-ready {
     display: flex;
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem 0.75rem;
+    gap: 0.55rem 0.75rem;
     text-align: left;
-    padding: 0.55rem 0.85rem;
-    background: rgba(2, 6, 23, 0.45);
+    padding: 0.35rem 0;
+}
+
+.coach-agent-ready-main {
+    flex: 1 1 10rem;
+    min-width: 0;
 }
 
 .coach-agent-task-badge {
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     color: #e2e8f0;
     line-height: 1.3;
-    flex: 1 1 8rem;
-    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -3104,51 +3196,72 @@ body {
 .coach-agent-ready-meta {
     font-size: 0.65rem;
     color: #64748b;
-    margin: 0;
+    margin: 0.15rem 0 0;
     font-family: ui-monospace, monospace;
 }
 
 .coach-agent-ready-desc {
-    display: none;
+    display: block;
+    font-size: 0.68rem;
+    color: #64748b;
+    margin: 0.25rem 0 0;
+    line-height: 1.35;
 }
 
 .coach-agent-start-btn {
     margin: 0;
-    padding: 0.4rem 0.85rem;
+    padding: 0.45rem 0.95rem;
     border-radius: 9999px;
     background: linear-gradient(135deg, #10b981 0%, #059669 100%);
     color: white;
     font-weight: 600;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    box-shadow: none;
-    transition: transform 0.12s ease, filter 0.12s ease;
+    box-shadow: 0 2px 12px rgba(16, 185, 129, 0.2);
+    transition: filter 0.12s ease;
 }
 
 .coach-agent-start-btn:hover {
-    transform: none;
     filter: brightness(1.08);
-    box-shadow: none;
 }
 
 .coach-agent-preview {
-    display: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
 }
 
 .coach-agent-preview-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     font-size: 0.65rem;
-    padding: 0.25rem 0.55rem;
+    padding: 0.22rem 0.5rem;
     border-radius: 9999px;
     background: rgba(99, 102, 241, 0.1);
-    border: 1px solid rgba(99, 102, 241, 0.2);
+    border: 1px solid rgba(99, 102, 241, 0.22);
     color: #a5b4fc;
+    max-width: 100%;
+}
+
+.coach-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 9999px;
+    background: rgba(99, 102, 241, 0.25);
+    font-size: 0.58rem;
+    font-weight: 700;
+    flex-shrink: 0;
 }
 
 .coach-agent-session {
-    padding: 0.55rem 0.85rem 0.65rem;
-    background: linear-gradient(180deg, rgba(16, 185, 129, 0.08), transparent);
+    padding: 0.15rem 0 0;
+    background: transparent;
 }
 
 .coach-agent-session-header {
@@ -3222,7 +3335,12 @@ body {
 }
 
 .coach-agent-steps-rail {
-    display: none; /* keep strip slim; steps live in chat */
+    display: flex;
+    gap: 0.3rem;
+    margin: 0.35rem 0 0.45rem;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+    -webkit-overflow-scrolling: touch;
 }
 
 .coach-agent-rail-step {
@@ -3411,20 +3529,30 @@ body {
     padding: 0.35rem 0.55rem;
 }
 
+.coach-agent-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+}
+
 .coach-agent-option-btn {
-    font-size: 0.8rem;
-    padding: 0.45rem 0.85rem;
-    border-radius: 0.65rem;
-    border: 1px solid rgba(14, 165, 233, 0.35);
+    font-size: 0.72rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(14, 165, 233, 0.4);
     background: rgba(14, 165, 233, 0.12);
     color: #7dd3fc;
     font-weight: 500;
     transition: background 0.15s ease, border-color 0.15s ease;
+    text-align: left;
+    line-height: 1.3;
 }
 
 .coach-agent-option-btn:hover {
     background: rgba(14, 165, 233, 0.22);
-    border-color: rgba(14, 165, 233, 0.5);
+    border-color: rgba(14, 165, 233, 0.55);
+    color: #bae6fd;
 }
 
 .dash-summary {
