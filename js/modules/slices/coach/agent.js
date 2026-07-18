@@ -1113,7 +1113,7 @@ function renderCoachAgentThread(thinking) {
     // Only paint last few turns — rest stays in memory but not DOM
     const recent = S.coachAgentMessages.slice(-8);
     if (!recent.length && !thinking) {
-        el.innerHTML = '<div class="coach-agent-thread-hint"><i class="fa-solid fa-bolt text-sky-500/60 text-2xl mb-3 block"></i>教練會在這裡回應你<br>帶你一步一步完成任務</div>';
+        el.innerHTML = '<div class="coach-agent-thread-hint">跟我說你在做什麼，或直接問問題 ✨<br><span class="text-slate-600 text-xs">Enter 送出</span></div>';
         return;
     }
     const thinkingLabel = thinking === 'deepseek' ? 'DeepSeek 回覆中'
@@ -1192,30 +1192,39 @@ function renderCoachAgentThread(thinking) {
 
 function renderCoachEmptyState(container) {
     const hasTeam = !!S.enterpriseSession && !S.enterpriseSession.offline;
-    const kbHint = hasTeam
-        ? '也可以直接在下方問知識庫（SOP、環境、流程）。'
-        : '加入團隊後可查知識庫；現在也能先體驗任務帶做。';
     container.innerHTML = `
         <div class="coach-empty-state">
-            <div class="coach-empty-icon"><i class="fa-solid fa-comments"></i></div>
-            <div class="coach-empty-title">知識庫問答 · 或先有一項任務</div>
-            <div class="coach-empty-desc">
-                直接在下方輸入問題即可（例如「新人第一天做什麼」）。
-                有今日任務時，可改用「教練帶我做」逐步執行。<br>
-                <span class="text-slate-500 text-xs">${escapeHtml(kbHint)}</span>
-            </div>
-            <div class="flex flex-wrap gap-2 justify-center mt-3">
+            <div class="coach-empty-title">直接下方說話即可${hasTeam ? ' · 也可問知識庫' : ''}</div>
+            <div class="flex flex-wrap gap-1.5">
                 <button type="button" ${luminaAction('seedDemoFirstTask')} class="coach-empty-btn">
-                    <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> 一鍵體驗
+                    <i class="fa-solid fa-wand-magic-sparkles mr-1"></i>體驗
                 </button>
                 <button type="button" ${luminaAction('showSection', { arg: 'dashboard' })} class="coach-empty-btn opacity-90">
-                    去今日新增
+                    加任務
                 </button>
-                ${hasTeam ? `<button type="button" ${luminaAction('askCoach', { arg: '新人第一天要做什麼？' })} class="coach-empty-btn opacity-90">
-                    問知識庫
-                </button>` : ''}
             </div>
         </div>`;
+}
+
+function toggleCoachKbTools() {
+    const panel = document.getElementById('coach-tools-panel');
+    const btn = document.getElementById('coach-tools-toggle');
+    if (!panel) return;
+    const open = panel.classList.toggle('hidden') === false;
+    if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && S.enterpriseSession) {
+        document.getElementById('rag-kb-selector-wrap')?.classList.remove('hidden');
+        try { window.renderRagKbCheckboxes?.(); } catch (_) {}
+    }
+}
+
+function autoResizeCoachInput(el) {
+    const input = el || document.getElementById('chat-input');
+    if (!input) return;
+    input.style.height = 'auto';
+    const max = 88; // ~5.5rem
+    const next = Math.min(max, Math.max(22, input.scrollHeight));
+    input.style.height = `${next}px`;
 }
 
 function renderCoachAgentView() {
@@ -1242,40 +1251,30 @@ function renderCoachAgentView() {
     if (!isActive) {
         ws.innerHTML = `
             <div class="coach-agent-ready">
-                <div class="coach-agent-task-badge">${escapeHtml(task.name)}</div>
-                <div class="coach-agent-ready-meta">${task.duration} 分鐘 · ${steps.length} 步驟</div>
-                <p class="coach-agent-ready-desc">教練會一步一步帶你做完，不用自己規劃或填表。</p>
+                <div class="coach-agent-task-badge" title="${escapeHtml(task.name)}">${escapeHtml(task.name)}</div>
+                <div class="coach-agent-ready-meta">${task.duration}分 · ${steps.length}步</div>
                 <button type="button" ${luminaAction('coachBeginGuidedSession')} class="coach-agent-start-btn">
-                    <i class="fa-solid fa-play"></i> 教練帶我做
+                    <i class="fa-solid fa-play"></i> 帶我做
                 </button>
-                <div class="coach-agent-preview">
-                    ${steps.map((s, i) => `<span class="coach-agent-preview-step">${i + 1}. ${escapeHtml(s.title)}</span>`).join('')}
-                </div>
             </div>`;
     } else {
         ws.innerHTML = `
             <div class="coach-agent-session">
                 <div class="coach-agent-session-header">
-                    <span class="coach-agent-live"><i class="fa-solid fa-circle text-[6px]"></i> 教練帶做中</span>
+                    <span class="coach-agent-live"><i class="fa-solid fa-circle text-[6px]"></i> 進行中</span>
                     <span id="focus-timer-display" class="coach-agent-timer">--:--</span>
-                    <span class="coach-agent-progress">步驟 ${cur + 1} / ${steps.length}</span>
+                    <span class="coach-agent-progress">${cur + 1}/${steps.length}</span>
                 </div>
                 <div class="coach-agent-hero">
-                    <div class="coach-agent-hero-label">現在就做</div>
+                    <div class="coach-agent-hero-label">現在</div>
                     <div class="coach-agent-hero-title">${escapeHtml(current.title)}</div>
                     <div class="coach-agent-hero-action">${escapeHtml(current.action)}</div>
                 </div>
-                <div class="coach-agent-steps-rail">
-                    ${steps.map((s, i) => {
-                        const cls = i < cur ? 'done' : i === cur ? 'active' : '';
-                        return `<div class="coach-agent-rail-step ${cls}"><span>${i + 1}</span><span class="truncate">${escapeHtml(s.title)}</span></div>`;
-                    }).join('')}
-                </div>
                 <div class="coach-agent-actions">
                     <button type="button" ${luminaAction(isLast ? 'coachCompleteTaskFromAgent' : 'coachAdvanceStepFromAgent')} class="coach-agent-btn-primary">
-                        <i class="fa-solid fa-${isLast ? 'check' : 'forward-step'} mr-1"></i>${isLast ? '完成這件' : '完成這步'}
+                        <i class="fa-solid fa-${isLast ? 'check' : 'forward-step'} mr-1"></i>${isLast ? '完成' : '完成這步'}
                     </button>
-                    <button type="button" ${luminaAction('sendCoachAgentMessage', { arg: '卡住了' })} class="coach-agent-btn-secondary">卡住了</button>
+                    <button type="button" ${luminaAction('sendCoachAgentMessage', { arg: '卡住了' })} class="coach-agent-btn-secondary">卡住</button>
                     <button type="button" ${luminaAction('coachPauseSession')} class="coach-agent-btn-ghost">暫停</button>
                 </div>
             </div>`;
@@ -1355,7 +1354,10 @@ async function sendCoachAgentMessage(preset) {
         showToast('教練還在回覆中，請稍候', 'error');
         return;
     }
-    if (input && typeof preset !== 'string') input.value = '';
+    if (input && typeof preset !== 'string') {
+        input.value = '';
+        autoResizeCoachInput(input);
+    }
 
     // Local shortcuts from option chips (no LLM needed)
     if (handleCoachOptionShortcuts(msg)) return;

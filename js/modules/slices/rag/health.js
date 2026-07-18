@@ -38,15 +38,17 @@ async function probeRagServiceOnline() {
 
 function updateRagSelectorChrome() {
     const wrap = document.getElementById('rag-kb-selector-wrap');
+    const toolsOpen = !document.getElementById('coach-tools-panel')?.classList.contains('hidden');
     if (!wrap) return;
 
     if (!S.enterpriseSession) {
         wrap.classList.add('hidden');
+        updateRagQuerySummary();
         return;
     }
 
-    // Always show when in a team — never hide on RAG offline
-    wrap.classList.remove('hidden');
+    // Tools panel is collapsed by default — only reveal selector when user opens it
+    wrap.classList.toggle('hidden', !toolsOpen);
     wrap.classList.toggle('coach-rag-selector-offline', !S.ragServiceActive);
     wrap.setAttribute('aria-disabled', S.ragServiceActive ? 'false' : 'true');
 
