@@ -229,13 +229,38 @@ async function refreshTeamNotifications(force = false) {
         updateNotificationUI();
         return;
     }
-    const path = `/api/enterprise/notifications?groupCode=${encodeURIComponent(S.enterpriseSession.groupCode)}&memberId=${encodeURIComponent(S.enterpriseSession.memberId)}`;
-    const api = await enterpriseFetch('GET', path);
-    if (api.ok) {
-        processIncomingTeamNotifications(api.data.notifications || []);
-    } else {
-        processIncomingTeamNotifications(getLocalTeamNotifications());
+    if (S._enterpriseRateLimitedUntil && Date.now() < S._enterpriseRateLimitedUntil) {
+        return;
     }
+    if (S._refreshNotifInFlight) return S._refreshNotifInFlight;
+    const now = Date.now();
+    if (!force && S._refreshNotifAt && now - S._refreshNotifAt < 8000) return;
+    S._refreshNotifAt = now;
+
+    S._refreshNotifInFlight = (async () => {
+        const path = `/api/enterprise/notifications?groupCode=${encodeURIComponent(S.enterpriseSession.groupCode)}&memberId=${encodeURIComponent(S.enterpriseSession.memberId || '')}`;
+        const api = await enterpriseFetch('GET', path);
+        if (api.status === 429) {
+            S._enterpriseRateLimitedUntil = Date.now() + 20000;
+            return;
+        }
+        if (api.ok) {
+            if (api.data?.member?.id && api.data.member.id !== S.enterpriseSession.memberId) {
+                try {
+                    if (typeof applyResolvedEnterpriseMember === 'function') {
+                        applyResolvedEnterpriseMember(api.data.member, {
+                            code: S.enterpriseSession.groupCode,
+                            name: S.enterpriseSession.groupName
+                        });
+                    }
+                } catch (_) {}
+            }
+            processIncomingTeamNotifications(api.data.notifications || []);
+        } else {
+            processIncomingTeamNotifications(getLocalTeamNotifications());
+        }
+    })().finally(() => { S._refreshNotifInFlight = null; });
+    return S._refreshNotifInFlight;
 }
 
 function updateNotificationUI() {

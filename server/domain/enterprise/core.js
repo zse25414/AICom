@@ -153,22 +153,21 @@ function register(api) {
     }
 
     /**
-     * Sole manager cannot leave while other members remain.
+     * Kick: sole manager cannot be removed while others remain.
+     * Leave: allow sole manager to leave — auto-promote another member.
      */
     function assertCanRemoveMember(group, member, { isKick = false } = {}) {
         if (!group || !member) {
             return { ok: false, status: 404, error: '找不到成員', code: 'MEMBER_NOT_FOUND' };
         }
-        if (member.role === 'manager') {
+        if (isKick && member.role === 'manager') {
             const managers = (group.members || []).filter(m => m.role === 'manager');
             const others = (group.members || []).filter(m => m.id !== member.id);
             if (managers.length <= 1 && others.length > 0) {
                 return {
                     ok: false,
                     status: 409,
-                    error: isKick
-                        ? '無法移除唯一主管：請先指定其他主管'
-                        : '你是唯一主管且仍有其他成員，請先指定其他主管再退出',
+                    error: '無法移除唯一主管：請先指定其他主管',
                     code: 'LAST_MANAGER'
                 };
             }
@@ -177,16 +176,35 @@ function register(api) {
     }
 
     /**
-     * Remove member from group; returns { ok, groupEmpty }.
+     * If removing the sole manager while others remain, promote the next member.
+     */
+    function ensureManagerSuccessor(group, leavingMember) {
+        if (!group || !leavingMember || leavingMember.role !== 'manager') {
+            return { promoted: null };
+        }
+        const remainingManagers = (group.members || []).filter(
+            (m) => m.role === 'manager' && m.id !== leavingMember.id
+        );
+        if (remainingManagers.length > 0) return { promoted: null };
+        const successor = (group.members || []).find((m) => m.id !== leavingMember.id);
+        if (!successor) return { promoted: null };
+        successor.role = 'manager';
+        return { promoted: successor };
+    }
+
+    /**
+     * Remove member from group; returns { ok, groupEmpty, promoted }.
      */
     function removeMemberFromGroup(group, memberId) {
         if (!group || !Array.isArray(group.members)) {
-            return { ok: false, removed: null };
+            return { ok: false, removed: null, promoted: null };
         }
         const idx = group.members.findIndex(m => m.id === memberId);
-        if (idx < 0) return { ok: false, removed: null };
+        if (idx < 0) return { ok: false, removed: null, promoted: null };
+        const leaving = group.members[idx];
+        const { promoted } = ensureManagerSuccessor(group, leaving);
         const [removed] = group.members.splice(idx, 1);
-        // Drop open tasks assigned to removed member (keep history? soft-cancel)
+        // Soft-cancel open tasks assigned to removed member
         if (Array.isArray(group.tasks)) {
             group.tasks = group.tasks.map((t) => {
                 if (t.assigneeId === memberId && !t.completed) {
@@ -201,7 +219,17 @@ function register(api) {
                 return t;
             });
         }
-        return { ok: true, removed, groupEmpty: group.members.length === 0 };
+        if (promoted) {
+            pushNotification(group, {
+                type: 'role_promoted',
+                recipientId: promoted.id,
+                title: '你已成為主管',
+                message: `原主管已退出，你現在是群組「${group.name}」的主管`,
+                actorId: removed.id,
+                actorName: removed.name
+            });
+        }
+        return { ok: true, removed, groupEmpty: group.members.length === 0, promoted };
     }
 
     async function assertRagGroupAccess(groupCode, authUser, options = {}) {
@@ -238,6 +266,7 @@ function register(api) {
         ensureNotifications,
         listMembershipsForUser,
         assertCanRemoveMember,
+        ensureManagerSuccessor,
         removeMemberFromGroup,
         pushNotification,
         assertEnterpriseMember,

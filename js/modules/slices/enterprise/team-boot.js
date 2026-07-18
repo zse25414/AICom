@@ -98,6 +98,8 @@ function applyTeamInviteFromUrl() {
  * (ui/navigation.js showSection else-branch), so it must be core.
  */
 function stopEnterprisePolling() {
+    // Bump generation so any in-flight tick chains exit
+    S._enterprisePollGen = (S._enterprisePollGen || 0) + 1;
     if (S.enterprisePollTimer) {
         clearTimeout(S.enterprisePollTimer);
         S.enterprisePollTimer = null;

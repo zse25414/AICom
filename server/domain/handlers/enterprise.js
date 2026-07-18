@@ -174,6 +174,7 @@ function register(api) {
                     return api.sendJson(res, 404, { error: '找不到群組', code: 'GROUP_NOT_FOUND' });
                 }
                 const authUser = await api.getOptionalAuth(req);
+                // Resolve by JWT userId first; stale memberId is OK
                 const memberCheck = await api.assertEnterpriseMember(group, memberId, authUser, { store });
                 if (!memberCheck.ok) {
                     return api.sendJson(res, memberCheck.status || 403, {
@@ -182,6 +183,7 @@ function register(api) {
                     });
                 }
                 const member = memberCheck.member;
+                // Leave always allowed (sole manager → auto-promote); kick still guarded elsewhere
                 const can = api.assertCanRemoveMember(group, member, { isKick: false });
                 if (!can.ok) {
                     return api.sendJson(res, can.status || 409, { error: can.error, code: can.code });
@@ -214,7 +216,10 @@ function register(api) {
                         groupName: group.name,
                         memberId: member.id
                     },
-                    groupEmpty: !!result.groupEmpty
+                    groupEmpty: !!result.groupEmpty,
+                    promoted: result.promoted
+                        ? { id: result.promoted.id, name: result.promoted.name, role: 'manager' }
+                        : null
                 });
             });
         }

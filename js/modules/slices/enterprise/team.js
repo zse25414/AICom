@@ -518,9 +518,14 @@ function applyLocalLeaveMembership(code) {
 
 /**
  * Leave one membership (by code) or the active group.
- * Calls server leave API when online + logged in; falls back to local-only.
+ * Always stops polling first (avoids 429 blocking leave). Server leave preferred;
+ * on rate-limit / network error still clears local session so UI recovers.
  */
 async function leaveEnterpriseGroup(groupCode) {
+    if (S._leaveGroupInFlight) {
+        showToast('退出處理中…', 'error');
+        return;
+    }
     ensureEnterpriseMembershipsLoaded();
     const code = normalizeEnterpriseCode(groupCode || S.enterpriseSession?.groupCode || '');
     if (!code) {
@@ -528,41 +533,71 @@ async function leaveEnterpriseGroup(groupCode) {
         return;
     }
     const target = S.enterpriseMemberships.find((m) => m.groupCode === code)
-        || (S.enterpriseSession?.groupCode === code ? S.enterpriseSession : null);
+        || (normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '') === code ? S.enterpriseSession : null);
     const label = target?.groupName || code;
-    const memberId = target?.memberId || (S.enterpriseSession?.groupCode === code ? S.enterpriseSession.memberId : null);
-    if (!confirm(`確定退出群組「${label}」？\n代碼：${code}\n伺服器會正式移除你的成員資格（可再以代碼加入）。`)) return;
+    let memberId = target?.memberId
+        || (normalizeEnterpriseCode(S.enterpriseSession?.groupCode || '') === code ? S.enterpriseSession.memberId : null);
+    if (!confirm(`確定退出群組「${label}」？\n代碼：${code}\n（若你是唯一主管，系統會自動將主管權交給其他成員）`)) return;
 
-    // Prefer server leave when we have memberId and not pure offline session
-    const useServer = memberId && isLoggedIn() && !(target?.offline && !navigator.onLine);
-    if (useServer) {
-        const api = await enterpriseFetch('POST', '/api/enterprise/group/leave', {
-            groupCode: code,
-            memberId
-        });
-        if (api.ok) {
-            applyLocalLeaveMembership(code);
-            showToast(`已正式退出群組 ${code}`, 'success');
-            return;
-        }
-        if (!api.offline) {
-            showToast(api.error || '退出失敗', 'error');
-            return;
-        }
-        // offline fallback below
-    }
+    S._leaveGroupInFlight = true;
+    // Stop request storm before leave API
+    try { stopEnterprisePolling(); } catch (_) {}
+    try { stopRagStatusPolling?.(); } catch (_) {}
 
-    // Offline / local leave
     try {
-        const store = loadLocalEnterpriseStore();
-        const group = store.groups[code];
-        if (group && memberId) {
-            group.members = (group.members || []).filter((m) => m.id !== memberId);
-            saveLocalEnterpriseStore(store);
+        const useServer = isLoggedIn() && !(target?.offline === true && !navigator.onLine);
+        if (useServer) {
+            // Prefer server-resolved member when local id is stale
+            if (!memberId && S.enterpriseSession?.memberId) memberId = S.enterpriseSession.memberId;
+            const api = await enterpriseFetch('POST', '/api/enterprise/group/leave', {
+                groupCode: code,
+                memberId: memberId || ''
+            });
+            if (api.ok) {
+                applyLocalLeaveMembership(code);
+                const promo = api.data?.promoted?.name;
+                showToast(
+                    promo
+                        ? `已退出 ${code}（主管已交接給 ${promo}）`
+                        : `已正式退出群組 ${code}`,
+                    'success'
+                );
+                return;
+            }
+            // 429 / 5xx: still leave locally so UI unsticks; user can re-sync later
+            if (api.status === 429 || api.offline) {
+                applyLocalLeaveMembership(code);
+                showToast(`已退出本機群組 ${code}（伺服器忙碌或離線，稍後會自動同步）`, 'success');
+                return;
+            }
+            if (api.code === 'NOT_A_MEMBER' || api.code === 'GROUP_FORBIDDEN' || api.status === 403 || api.status === 404) {
+                // Already not a member on server — just clean local
+                applyLocalLeaveMembership(code);
+                showToast(`已清除本機群組 ${code}`, 'success');
+                return;
+            }
+            showToast(api.error || '退出失敗', 'error');
+            // Restart poll if still in a group
+            if (S.enterpriseSession) {
+                try { startEnterprisePolling(); } catch (_) {}
+            }
+            return;
         }
-    } catch (_) {}
-    applyLocalLeaveMembership(code);
-    showToast(`已退出群組 ${code}${useServer ? '（離線本機）' : ''}`, 'success');
+
+        // Offline / guest local leave
+        try {
+            const store = loadLocalEnterpriseStore();
+            const group = store.groups[code];
+            if (group && memberId) {
+                group.members = (group.members || []).filter((m) => m.id !== memberId);
+                saveLocalEnterpriseStore(store);
+            }
+        } catch (_) {}
+        applyLocalLeaveMembership(code);
+        showToast(`已退出群組 ${code}`, 'success');
+    } finally {
+        S._leaveGroupInFlight = false;
+    }
 }
 
 /**
@@ -743,10 +778,22 @@ function applyResolvedEnterpriseMember(member, groupMeta) {
 
 async function refreshEnterpriseData(force = false) {
     if (!S.enterpriseSession) return;
-    
+    // Coalesce concurrent refreshes (poll + UI + recovery)
+    if (S._refreshEnterpriseInFlight) {
+        if (force) S._refreshEnterprisePendingForce = true;
+        return S._refreshEnterpriseInFlight;
+    }
+
+    const run = (async () => {
     const now = Date.now();
-    if (!force && S.enterpriseGroupData && (now - S.enterpriseDataFetchedAt) < C.ENTERPRISE_FETCH_TTL_MS) {
+    const ttl = (typeof C !== 'undefined' && C.ENTERPRISE_FETCH_TTL_MS) || 5000;
+    if (!force && S.enterpriseGroupData && (now - S.enterpriseDataFetchedAt) < ttl) {
         renderEnterpriseTasks();
+        return;
+    }
+
+    // Back off when rate-limited
+    if (S._enterpriseRateLimitedUntil && Date.now() < S._enterpriseRateLimitedUntil) {
         return;
     }
     
@@ -754,12 +801,21 @@ async function refreshEnterpriseData(force = false) {
     const memberQ = `?memberId=${encodeURIComponent(S.enterpriseSession.memberId || '')}`;
     let api = await enterpriseFetch('GET', `/api/enterprise/group/${code}${memberQ}`);
 
+    if (api.status === 429) {
+        S._enterpriseRateLimitedUntil = Date.now() + 20000;
+        return;
+    }
+
     // Recover stale local memberId via account memberships, then retry once
     if (!api.ok && !api.offline && (api.status === 403 || api.status === 401
         || api.code === 'GROUP_FORBIDDEN' || api.code === 'NOT_A_MEMBER' || api.code === 'MEMBER_BOUND_OTHER')) {
-        try {
-            await syncEnterpriseMembershipsFromServer({ toast: false, render: false, autoSelect: false });
-        } catch (_) {}
+        // Only one recovery attempt per 30s to avoid loops
+        if (!S._membershipRecoverAt || Date.now() - S._membershipRecoverAt > 30000) {
+            S._membershipRecoverAt = Date.now();
+            try {
+                await syncEnterpriseMembershipsFromServer({ toast: false, render: false, autoSelect: false });
+            } catch (_) {}
+        }
         const fixed = (S.enterpriseMemberships || []).find(
             (m) => normalizeEnterpriseCode(m.groupCode) === normalizeEnterpriseCode(code)
         );
@@ -767,6 +823,10 @@ async function refreshEnterpriseData(force = false) {
             setActiveEnterpriseSession(fixed);
             const q2 = `?memberId=${encodeURIComponent(fixed.memberId || '')}`;
             api = await enterpriseFetch('GET', `/api/enterprise/group/${code}${q2}`);
+            if (api.status === 429) {
+                S._enterpriseRateLimitedUntil = Date.now() + 20000;
+                return;
+            }
         } else {
             // Not a server member anymore — drop stale local entry
             ensureEnterpriseMembershipsLoaded();
@@ -782,7 +842,6 @@ async function refreshEnterpriseData(force = false) {
                 showToast(api.error || '群組成員資格已失效，請重新加入', 'error');
                 renderEnterprisePage();
                 if (next) {
-                    try { await refreshEnterpriseData(true); } catch (_) {}
                     try { startEnterprisePolling(); } catch (_) {}
                 }
             }
@@ -837,8 +896,22 @@ async function refreshEnterpriseData(force = false) {
     S.enterpriseDataFetchedAt = Date.now();
     renderEnterpriseTasks();
     if (S.enterpriseGroupData?.documents?.length) {
-        ensureEnterpriseDocsInRag();
+        // Throttle RAG ensure — not on every poll tick
+        if (!S._ensureDocsAt || Date.now() - S._ensureDocsAt > 60000) {
+            S._ensureDocsAt = Date.now();
+            ensureEnterpriseDocsInRag();
+        }
     }
+    })();
+
+    S._refreshEnterpriseInFlight = run.finally(() => {
+        S._refreshEnterpriseInFlight = null;
+        if (S._refreshEnterprisePendingForce) {
+            S._refreshEnterprisePendingForce = false;
+            refreshEnterpriseData(true);
+        }
+    });
+    return S._refreshEnterpriseInFlight;
 }
 
 function renderEnterprisePage() {
@@ -850,17 +923,16 @@ function renderEnterprisePage() {
     const joinFormBar = document.getElementById('team-join-form-bar');
 
     ensureEnterpriseMembershipsLoaded();
-    // Soft refresh memberships from server when opening team (debounced)
+    // Soft refresh memberships at most every 60s (avoid request storms)
     if (isLoggedIn() && !S._membershipSyncInFlight) {
         const now = Date.now();
-        if (!S._membershipSyncAt || now - S._membershipSyncAt > 15000) {
+        if (!S._membershipSyncAt || now - S._membershipSyncAt > 60000) {
             S._membershipSyncInFlight = true;
             S._membershipSyncAt = now;
             Promise.resolve()
                 .then(() => syncEnterpriseMembershipsFromServer({ toast: false, render: false, autoSelect: false }))
                 .then(() => {
                     renderEnterpriseMembershipsPanel();
-                    // refresh badge/switcher labels without full re-entry loops
                     try {
                         const memCount = (S.enterpriseMemberships || []).length;
                         const b = document.getElementById('team-status-badge');
@@ -1474,35 +1546,58 @@ async function toggleEnterpriseTask(taskId, completed) {
 }
 
 function getEnterprisePollInterval() {
-    if (document.visibilityState !== 'visible') return C.ENTERPRISE_POLL_INTERVAL_MS * 4;
-    if ($('team')?.classList.contains('active')) return C.ENTERPRISE_POLL_INTERVAL_MS;
-    return C.ENTERPRISE_POLL_INTERVAL_MS * 2;
+    const base = (typeof C !== 'undefined' && C.ENTERPRISE_POLL_INTERVAL_MS) || 15000;
+    const safe = Math.max(10000, Number(base) || 15000);
+    if (document.visibilityState !== 'visible') return safe * 4;
+    if ($('team')?.classList.contains('active')) return safe;
+    return safe * 2;
 }
 
 function startEnterprisePolling() {
     stopEnterprisePolling();
     if (!S.enterpriseSession) return;
-    const tick = () => {
-        if (document.visibilityState === 'visible') {
-            refreshTeamNotifications();
-            if ($('team')?.classList.contains('active')) {
-                refreshEnterpriseData();
+    const gen = S._enterprisePollGen || 0;
+    const tick = async () => {
+        if ((S._enterprisePollGen || 0) !== gen) return;
+        if (!S.enterpriseSession) return;
+        try {
+            if (document.visibilityState === 'visible') {
+                // Serialize + skip if previous tick still running (prevents request storms)
+                if (!S._enterprisePollTickBusy) {
+                    S._enterprisePollTickBusy = true;
+                    try {
+                        await refreshTeamNotifications();
+                        if ($('team')?.classList.contains('active')) {
+                            await refreshEnterpriseData(false);
+                        }
+                    } finally {
+                        S._enterprisePollTickBusy = false;
+                    }
+                }
             }
+        } catch (e) {
+            S._enterprisePollTickBusy = false;
+            console.warn('[Lumina] enterprise poll tick', e);
         }
+        if ((S._enterprisePollGen || 0) !== gen) return;
         S.enterprisePollTimer = setTimeout(tick, getEnterprisePollInterval());
     };
     S.enterprisePollTimer = setTimeout(tick, getEnterprisePollInterval());
 }
 
-document.addEventListener('visibilitychange', () => {
-    if (S.enterpriseSession && !S.enterprisePollTimer) startEnterprisePolling();
-});
-
-window.addEventListener('storage', (e) => {
-    if (e.key === C.LOCAL_ENTERPRISE_KEY && S.enterpriseSession) {
-        refreshTeamNotifications(true);
-        if (document.getElementById('team')?.classList.contains('active')) {
-            refreshEnterpriseData();
+// Register global listeners once (chunk may re-eval in some builds)
+if (!window.__luminaEnterprisePollListenersBound) {
+    window.__luminaEnterprisePollListenersBound = true;
+    document.addEventListener('visibilitychange', () => {
+        if (S.enterpriseSession && !S.enterprisePollTimer) startEnterprisePolling();
+    });
+    window.addEventListener('storage', (e) => {
+        const key = (typeof C !== 'undefined' && C.LOCAL_ENTERPRISE_KEY) || 'lumina_enterprise_local_store';
+        if (e.key === key && S.enterpriseSession) {
+            refreshTeamNotifications(true);
+            if (document.getElementById('team')?.classList.contains('active')) {
+                refreshEnterpriseData();
+            }
         }
-    }
-});
+    });
+}
