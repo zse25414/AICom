@@ -53,9 +53,14 @@ function updateDashboard() {
     const pending = getFilteredTasks(stats.pending);
     const ranked = rankTasksByNextStepScore(pending, scoreCtx);
     if (!S.todayFocusTaskId && ranked.length) S.todayFocusTaskId = ranked[0].id;
-    const displayRanked = ranked.slice(0, 8);
-    
+    // Show more of today's queue; virtualize when long
+    const displayRanked = ranked.slice(0, 40);
+
     if (displayRanked.length === 0) {
+        S.todayListVirtual = null;
+        container.onscroll = null;
+        container.classList.remove('virtual-list-host');
+        delete container.dataset.virtual;
         if (S.tasks.length === 0) {
             container.innerHTML = `
                 <div class="beginner-empty-list">
@@ -69,7 +74,25 @@ function updateDashboard() {
             container.innerHTML = `<div class="text-center py-4 text-emerald-400 flex flex-col items-center"><i class="fa-solid fa-check-circle text-3xl mb-2"></i><span class="text-sm">太棒了！今日任務已全部完成</span>${futureHint}</div>`;
         }
     } else {
-        container.innerHTML = displayRanked.map(t => renderPersonalTaskRow(t, 'dashboard')).join('');
+        const mount = globalThis.LuminaVirtual?.mountVirtualList;
+        if (mount && displayRanked.length > 12) {
+            if (!S.todayListVirtual || container.dataset.virtual === undefined) {
+                S.todayListVirtual = mount(container, {
+                    items: displayRanked,
+                    rowHeight: 72,
+                    threshold: 12,
+                    renderRow: (task) => renderPersonalTaskRow(task, 'dashboard')
+                });
+            } else {
+                S.todayListVirtual.refresh(displayRanked);
+            }
+        } else {
+            S.todayListVirtual = null;
+            container.onscroll = null;
+            container.classList.remove('virtual-list-host');
+            delete container.dataset.virtual;
+            container.innerHTML = displayRanked.map(t => renderPersonalTaskRow(t, 'dashboard')).join('');
+        }
     }
     
     renderActiveGoalsPanel();

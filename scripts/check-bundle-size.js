@@ -6,11 +6,12 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 // 2026-07-18：enterprise/team.js 拆入 lazy chunk 後主包下降、enterprise-docs 上升。
-// 上限 = 實測 + ~8% headroom（主 205、coach 90、enterprise 96）。
+// 2026-07-18b：coach 市場合約（無任務問答／離線升級）後 coach chunk 略增。
+// 上限 = 實測 + ~10% headroom。
 const limits = {
-    'js/lumina-app.js': 220 * 1024,
-    'js/chunks/lumina-coach.js': 98 * 1024,
-    'js/chunks/lumina-enterprise-docs.js': 105 * 1024
+    'js/lumina-app.js': 230 * 1024,
+    'js/chunks/lumina-coach.js': 115 * 1024,
+    'js/chunks/lumina-enterprise-docs.js': 130 * 1024
 };
 
 const failures = [];

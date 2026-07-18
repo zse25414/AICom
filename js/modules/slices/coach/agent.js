@@ -33,20 +33,16 @@ function enrichCoachSource(s) {
         if (filename && d.title && filename.includes(d.title)) return true;
         return false;
     });
+    // Keep path only — never append JWT to URL (Referer/log leak). Open via Authorization fetch.
     let fileUrl = s.fileUrl || s.file_url || match?.fileUrl || null;
     if (fileUrl && fileUrl.startsWith('/uploads/')) {
-        const base = getEnterpriseBaseUrl() + fileUrl;
+        fileUrl = getEnterpriseBaseUrl() + fileUrl.split('?')[0];
+    } else if (fileUrl && typeof fileUrl === 'string' && fileUrl.includes('token=')) {
         try {
-            const session = JSON.parse(localStorage.getItem('lumina_auth_session') || 'null');
-            if (session?.token) {
-                const sep = base.includes('?') ? '&' : '?';
-                fileUrl = `${base}${sep}token=${encodeURIComponent(session.token)}`;
-            } else {
-                fileUrl = base;
-            }
-        } catch (_) {
-            fileUrl = base;
-        }
+            const u = new URL(fileUrl, getEnterpriseBaseUrl());
+            u.searchParams.delete('token');
+            fileUrl = u.toString();
+        } catch (_) { /* keep */ }
     }
     const snippet = s.snippet || s.text || s.chunk_text
         || (match?.content ? String(match.content).slice(0, 400) : null);
@@ -60,6 +56,39 @@ function enrichCoachSource(s) {
         snippet,
         fileUrl
     };
+}
+
+/** Open coach source file with Bearer auth → blob URL (no token in address bar). */
+async function openCoachSourceFileSecure(msgIndex, srcIndex) {
+    const m = S.coachAgentMessages[msgIndex];
+    const raw = m?.sources?.[srcIndex];
+    if (!raw) return showToast('找不到來源檔案', 'error');
+    const s = enrichCoachSource(raw);
+    let url = s.fileUrl;
+    if (!url) return showToast('此來源沒有可開啟的檔案連結', 'error');
+
+    // Relative or absolute uploads path
+    if (url.startsWith('/uploads/')) url = getEnterpriseBaseUrl() + url;
+
+    try {
+        if (url.startsWith('blob:') || url.startsWith('data:')) {
+            if (typeof openSafeUrl === 'function') openSafeUrl(url);
+            else window.open(url, '_blank', 'noopener,noreferrer');
+            return;
+        }
+        const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders(false) : {};
+        const res = await fetch(url, { headers, credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        window.open(objectUrl, '_blank', 'noopener,noreferrer');
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 120000);
+    } catch (err) {
+        console.warn('[Lumina Coach] secure open failed', err);
+        // Last resort: open without token (may 401) — better than leaking JWT
+        if (typeof openSafeUrl === 'function') openSafeUrl(url);
+        else showToast('無法開啟檔案，請至知識庫查看', 'error');
+    }
 }
 
 function closeCoachSourcePreview() {
@@ -104,9 +133,15 @@ function openCoachSourcePreview(msgIndex, srcIndex) {
             </div>
             <div class="coach-source-drawer-footer">
                 ${s.fileUrl
-                    ? `<a href="${escapeHtml(s.fileUrl)}" target="_blank" rel="noopener noreferrer" class="coach-source-open-btn focus-ring">
+                    ? `<button type="button" class="coach-source-open-btn focus-ring"
+                        data-lumina-action="openCoachSourceFileSecure"
+                        data-lumina-arg="${msgIndex}"
+                        data-lumina-arg-type="number"
+                        data-lumina-arg2="${srcIndex}"
+                        data-lumina-arg2-type="number"
+                        title="以授權請求開啟（不把 token 放進網址）">
                         <i class="fa-solid fa-arrow-up-right-from-square"></i> 開啟檔案
-                       </a>`
+                       </button>`
                     : ''}
                 ${s.document_id
                     ? `<button type="button" class="coach-source-open-btn focus-ring" data-lumina-action="openCoachSourceInTeamDocs" data-lumina-arg="${escapeHtml(s.document_id)}" title="在團隊知識庫定位此文件">
@@ -242,9 +277,24 @@ function renderCoachKbUsageBadge(meta) {
         if (srcN === 0) {
             return `
                 <div class="coach-kb-used-badge coach-kb-nohit-badge" role="status">
-                    <i class="fa-solid fa-magnifying-glass"></i>
-                    <span>已查知識庫但無相關段落</span>
-                    <span class="coach-kb-unused-hint">（可換庫、補文件，或用 @知識庫 覆寫）${escapeHtml(scopeHint)}</span>
+                    <div class="flex flex-col gap-1.5 w-full">
+                        <div class="flex items-center gap-1.5 flex-wrap">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <span>已查知識庫但無相關段落</span>
+                            <span class="coach-kb-unused-hint">${escapeHtml(scopeHint)}</span>
+                        </div>
+                        <div class="coach-kb-nohit-actions flex flex-wrap gap-1.5">
+                            <button type="button" class="coach-kb-cta focus-ring" data-lumina-action="openTeamKnowledgeTab">
+                                <i class="fa-solid fa-upload"></i> 上傳文件
+                            </button>
+                            <button type="button" class="coach-kb-cta focus-ring" data-lumina-action="showSection" data-lumina-arg="team">
+                                <i class="fa-solid fa-database"></i> 換知識庫
+                            </button>
+                            <button type="button" class="coach-kb-cta focus-ring" data-lumina-action="askCoach" data-lumina-arg="@general 用白話說明這件事">
+                                <i class="fa-solid fa-at"></i> 試 @庫名
+                            </button>
+                        </div>
+                    </div>
                 </div>
             `;
         }
@@ -274,11 +324,19 @@ function renderCoachKbUsageBadge(meta) {
         no_mention_match: '未辨識到有效 @知識庫'
     };
     const hint = hints[reason] || '未檢索';
+    const cta = reason === 'empty_selection'
+        ? `<button type="button" class="coach-kb-cta focus-ring ml-1" data-lumina-action="openTeamKnowledgeTab">選庫 / 上傳</button>`
+        : (reason === 'no_team'
+            ? `<button type="button" class="coach-kb-cta focus-ring ml-1" data-lumina-action="showSection" data-lumina-arg="team">加入團隊</button>`
+            : (reason === 'offline'
+                ? `<button type="button" class="coach-kb-cta focus-ring ml-1" data-lumina-action="showSection" data-lumina-arg="settings">檢查服務</button>`
+                : ''));
     return `
         <div class="coach-kb-unused-badge" role="status">
             <i class="fa-solid fa-book-slash"></i>
             <span>未使用知識庫</span>
             <span class="coach-kb-unused-hint">（${escapeHtml(hint)}）</span>
+            ${cta}
         </div>
     `;
 }
@@ -350,11 +408,22 @@ function startStepTimerForCoach(session) {
 function coachBeginGuidedSession() {
     const task = getCoachTask();
     if (!task) {
-        showToast('尚無待辦，先分解目標吧', 'error');
-        openDecomposeTab();
+        showToast('尚無待辦 — 可先問知識庫，或新增任務後再帶做', 'error');
+        // Stay on coach for freeform; also offer demo
+        if (!S.coachAgentMessages.length) {
+            pushCoachAgentMessage('coach', '還沒有今日任務。你可以先問知識庫，或一鍵體驗。\n\n[選項: 一鍵體驗範例任務]\n[選項: 去今日新增任務]');
+            renderCoachAgentThread();
+        }
         return;
     }
+    // Exit freeform Q&A when starting guided execution
+    if (S.focusSession?.freeform) {
+        clearFocusTimer();
+        S.focusSession = null;
+        S.coachAgentMessages = [];
+    }
     const session = ensureCoachSessionForTask(task);
+    session.freeform = false;
     session.coachActive = true;
     session.startedAt = Date.now();
     session.currentStep = session.currentStep || 0;
@@ -415,51 +484,86 @@ function coachCompleteTaskFromAgent() {
 }
 
 function buildOfflineAgentReply(userMsg, task, session) {
-    const lower = userMsg.toLowerCase();
-    const step = session.steps[session.currentStep];
+    const lower = String(userMsg || '').toLowerCase();
+
+    // Free-form knowledge mode (no task)
+    if (!task || session?.freeform) {
+        if (/加入|建立|新增.*任務|待辦/.test(userMsg)) {
+            return {
+                reply: '可以先到「今日」快速新增一項任務，或點「一鍵體驗」。有任務後我就能一步步帶你做。\n\n[選項: 一鍵體驗範例任務]\n[選項: 去今日新增任務]',
+                advance: false, complete: false
+            };
+        }
+        return {
+            reply: '目前是知識庫問答模式（尚無聚焦任務）。\n\n請用一句話說清楚你要查的流程或文件重點；若已加入團隊並選知識庫，我會優先依庫回答。有具體任務後，點「教練帶我做」會更精準。\n\n[選項: 環境怎麼設定？]\n[選項: 新人第一天要做什麼？]\n[選項: 幫我建立一項今日任務]',
+            advance: false, complete: false
+        };
+    }
+
+    const steps = session?.steps || [];
+    const cur = Math.min(session?.currentStep || 0, Math.max(0, steps.length - 1));
+    const step = steps[cur] || { title: '執行', action: task.name };
+    const cat = typeof resolveCategory === 'function' ? resolveCategory(task) : 'execution';
+    const micro = String(step.action || '').split(/[，。]/)[0] || step.action || task.name;
+
     if (/完成這步|做完了|好了|done/.test(lower)) {
-        const isLast = session.currentStep >= session.steps.length - 1;
+        const isLast = cur >= steps.length - 1;
         if (isLast) {
-            return { reply: '太棒了！點「完成這件」勾選任務。', advance: false, complete: false };
+            return { reply: '太棒了！點「完成這件」勾選任務。\n\n[選項: 完成這件]', advance: false, complete: false };
         }
         return { reply: '收到，幫你進下一步。', advance: true, complete: false };
     }
     if (/卡住|難|不會|拖延|不想/.test(lower)) {
-        const micro = step.action.split(/[，。]/)[0] || step.action;
+        const byCat = {
+            meeting: `只做 2 分鐘：寫下「${task.name}」要達成的 1 個決議，其餘之後補。`,
+            learning: `只做 2 分鐘：用一句話寫出學完要能解釋的重點。`,
+            deep: `只做 2 分鐘：打開檔案，寫下最小可交付版本的標題。`,
+            admin: `只做 2 分鐘：列出要處理的 3 個項目名稱即可。`,
+            execution: `只做 2 分鐘：${String(micro).slice(0, 70)}。`
+        };
         return {
-            reply: `沒問題，我們再縮小一點。\n\n只做這件事：${micro.slice(0, 80)}。\n2 分鐘就好，做完跟我說。`,
+            reply: `沒問題，再縮小。\n\n${byCat[cat] || byCat.execution}\n做完跟我說「完成這步」。\n\n[選項: 完成這步]\n[選項: 再拆更細]\n[選項: 換簡單一點]`,
             advance: false, complete: false
         };
     }
     if (/簡單|太難|換/.test(lower)) {
         return {
-            reply: `好，把「${step.title}」簡化成：先打開相關檔案，寫下今天要交出的「一句話版本」。`,
+            reply: `好，把「${step.title}」簡化成：先打開相關檔案，寫下今天要交出的「一句話版本」。\n\n[選項: 我準備好了，開始第一步]\n[選項: 完成這步]`,
             advance: false, complete: false
         };
     }
-    if (/資料|參考|範本/.test(lower)) {
+    if (/資料|參考|範本|文件|SOP|流程/.test(lower)) {
         const q = encodeURIComponent(`${task.name} 範本`);
         return {
-            reply: `需要參考時，先搜這個關鍵字找範本，找到一個就回來繼續當前步驟。\n（google.com/search?q=${q}）`,
+            reply: `先找 1 份範本就好，關鍵字：「${task.name}」。\n搜尋：https://www.google.com/search?q=${q}\n\n若已在團隊知識庫上傳過，可勾選知識庫或用 @庫名 再問一次。\n\n[選項: 我找到了，繼續執行]\n[選項: 用知識庫再查一次]`,
             advance: false, complete: false
         };
     }
-    const micro = (step.action || '').split(/[，。]/)[0] || step.action;
     if (/怎麼|如何|什麼|為何|哪裡|嗎|？|\?/.test(userMsg)) {
+        const guide = {
+            meeting: `1) 寫下會議目標一句話\n2) 列出 3 個討論點\n3) 預留會後「誰／做什麼／何時」欄位`,
+            learning: `1) 定義學完要能說出的一件事\n2) 只看一個來源 15 分鐘\n3) 用 3 句話總結`,
+            deep: `1) 定義最小可交付\n2) 關掉通知做一個番茄鐘\n3) 對照完成標準收尾`,
+            admin: `1) 列出要清的項目\n2) 每項標 2 分鐘內可做的動作\n3) 先做最短的一項`,
+            execution: `1) ${micro}\n2) 設定計時 ${Math.min(25, task.duration || 25)} 分鐘\n3) 做完回報「完成這步」`
+        };
         return {
-            reply: `可以這樣開始：${micro}。\n先做 2 分鐘能完成的最小塊，做完說「完成這步」。`,
+            reply: `可以這樣做「${step.title}」：\n${guide[cat] || guide.execution}\n\n[選項: 我準備好了，開始第一步]\n[選項: 卡住了]\n[選項: 完成這步]`,
             advance: false, complete: false
         };
     }
     return {
-        reply: `收到。此刻專注「${step.title}」——${micro}。\n卡住就說「卡住了」，我幫你拆更細。`,
+        reply: `收到。此刻專注「${step.title}」——${micro}。\n卡住就說「卡住了」。\n\n[選項: 完成這步]\n[選項: 卡住了]\n[選項: 換簡單一點]`,
         advance: false, complete: false
     };
 }
 
 function inferAgentActionsFromUserMsg(userMsg, session) {
+    if (!session || session.freeform || !Array.isArray(session.steps) || !session.steps.length) {
+        return { advance: false, complete: false };
+    }
     if (/完成這步|做完了|做好了|好了/.test(userMsg)) {
-        const isLast = session.currentStep >= session.steps.length - 1;
+        const isLast = (session.currentStep || 0) >= session.steps.length - 1;
         return { advance: !isLast, complete: isLast };
     }
     return { advance: false, complete: false };
@@ -515,8 +619,8 @@ function resolveCoachQueryKbIds(task, mention) {
 function resolveCoachKbSkipReason(task) {
     if (!S.enterpriseSession) return 'no_team';
     if (!S.ragServiceActive) return 'offline';
-    const boundKb = typeof getTaskBoundKbIds === 'function' ? getTaskBoundKbIds(task) : [];
-    const boundDocs = typeof getTaskBoundDocIds === 'function' ? getTaskBoundDocIds(task) : [];
+    const boundKb = task && typeof getTaskBoundKbIds === 'function' ? getTaskBoundKbIds(task) : [];
+    const boundDocs = task && typeof getTaskBoundDocIds === 'function' ? getTaskBoundDocIds(task) : [];
     if (boundKb.length || boundDocs.length) return null;
     if (!S.checkedRagKbs?.length) return 'empty_selection';
     return null;
@@ -551,13 +655,13 @@ function updateCoachTaskKbBanner(task) {
 }
 
 async function coachAgentRespondWithAI(userMsg, task, session) {
+    const freeform = !task || !!session?.freeform;
     const mention = parseCoachKbMentions(userMsg);
     const resolved = resolveCoachQueryKbIds(task, mention);
     const effectiveKbIds = resolved.kbIds;
     const effectiveDocIds = resolved.docIds || [];
     const queryText = mention.hadMentions ? mention.cleanedMsg : userMsg;
 
-    // Mentions / task binds can supply KBs even when checkbox empty
     let skipReason = null;
     if (!S.enterpriseSession) skipReason = 'no_team';
     else if (!S.ragServiceActive) skipReason = 'offline';
@@ -576,26 +680,26 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
             if (effectiveDocIds.length) {
                 payload.document_ids = effectiveDocIds;
             }
-            
+
             const response = await fetch(getRagQueryUrl(), {
                 method: 'POST',
                 headers: getAuthHeaders(true),
                 body: JSON.stringify(payload)
             });
-            
+
             if (response.ok) {
                 const data = await response.json();
                 if (data.retrieval_mode) S.ragRetrievalMode = data.retrieval_mode;
                 let reply = String(data.answer || '').trim();
                 const sources = (data.citations || data.sources || []).map(enrichCoachSource);
 
-                // Empty RAG answer → fall through to DeepSeek with step context (still useful coaching)
                 if (!reply) {
                     ragDegraded = true;
                 } else {
-                    // Add Claude-style options to the reply if they are not generated
                     if (!reply.includes('[選項:')) {
-                        reply += `\n\n[選項: 我了解，繼續執行當前步驟]\n[選項: 請幫我把這段資料再做詳細拆解]`;
+                        reply += freeform
+                            ? `\n\n[選項: 再說明得更具體一點]\n[選項: 幫我建立一項今日任務]`
+                            : `\n\n[選項: 我了解，繼續執行當前步驟]\n[選項: 請幫我把這段資料再做詳細拆解]`;
                     }
 
                     return {
@@ -610,7 +714,7 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
                             taskBound: resolved.taskBound && !mention.hadMentions,
                             kbSource: resolved.source
                         },
-                        ...inferAgentActionsFromUserMsg(userMsg, session)
+                        ...inferAgentActionsFromUserMsg(userMsg, session || { currentStep: 0, steps: [] })
                     };
                 }
             } else {
@@ -632,9 +736,19 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
         kbSource: resolved.source
     };
 
-    const step = session.steps[session.currentStep];
     const contextBlock = buildCoachContextText(getCoachContext());
-    const systemPrompt = `你是 Lumina 行動教練，是引導用戶高效工作的專業教練。
+    const COACH_REPLY_MAX = 3500;
+
+    let systemPrompt;
+    if (freeform) {
+        systemPrompt = `你是 Lumina 知識庫助理與行動教練。繁體中文，專業、可執行。
+用戶目前沒有聚焦任務，請回答他的問題；若適合，建議他建立一項今日任務。
+回答最後必須附 2-3 個選項，格式每行：[選項: 文字]
+禁止回傳 JSON。可用 markdown。
+${contextBlock}`;
+    } else {
+        const step = session?.steps?.[session.currentStep];
+        systemPrompt = `你是 Lumina 行動教練，是引導用戶高效工作的專業教練。
 請使用繁體中文，語氣專業嚴謹、邏輯條理清晰。請根據用戶當前的情境給予深入且具實用性、結構化的專業引導與建議。
 用戶剛傳了一則訊息——請針對他的訊息進行嚴謹的回應，不要重複貼上無關的完整步驟說明。
 
@@ -653,8 +767,9 @@ async function coachAgentRespondWithAI(userMsg, task, session) {
 允許且建議：使用 markdown（例如粗體、無序列表、有序列點、程式碼區塊等）使回答更具結構性。
 ${contextBlock}
 當前任務：${task.name}
-當前步驟（${session.currentStep + 1}/${session.steps.length}）「${step?.title}」：${step?.action}`;
-    
+當前步驟（${(session.currentStep || 0) + 1}/${session.steps.length}）「${step?.title}」：${step?.action}`;
+    }
+
     const messages = [
         { role: 'system', content: systemPrompt },
         ...S.coachAgentMessages.slice(-8).map(m => ({
@@ -664,11 +779,8 @@ ${contextBlock}
     ];
     const content = await callDeepSeek(messages, { temperature: 0.75 });
     const text = String(content || '').trim();
-    
-    // Market-ready coach: allow full structured guidance (was 400 → clipped mid-sentence)
-    const COACH_REPLY_MAX = 3500;
 
-    if (text.startsWith('{')) {
+    if (text.startsWith('{') && task) {
         const parsed = parseCoachAgentResponse(text, userMsg, task, session);
         if (parsed.reply && !isGenericCoachFallback(parsed.reply)) {
             return {
@@ -679,16 +791,16 @@ ${contextBlock}
             };
         }
     }
-    
+
     if (!text) {
         const offline = buildOfflineAgentReply(userMsg, task, session);
         return { ...offline, meta: kbMeta };
     }
-    
+
     return {
         reply: clampText(text, COACH_REPLY_MAX),
         meta: kbMeta,
-        ...inferAgentActionsFromUserMsg(userMsg, session)
+        ...(task ? inferAgentActionsFromUserMsg(userMsg, session) : { advance: false, complete: false })
     };
 }
 
@@ -1038,18 +1150,29 @@ function renderCoachAgentThread(thinking) {
 }
 
 function renderCoachEmptyState(container) {
+    const hasTeam = !!S.enterpriseSession && !S.enterpriseSession.offline;
+    const kbHint = hasTeam
+        ? '也可以直接在下方問知識庫（SOP、環境、流程）。'
+        : '加入團隊後可查知識庫；現在也能先體驗任務帶做。';
     container.innerHTML = `
         <div class="coach-empty-state">
-            <div class="coach-empty-icon"><i class="fa-solid fa-route"></i></div>
-            <div class="coach-empty-title">先有一項今日任務</div>
-            <div class="coach-empty-desc">教練會針對「正在做的那一件」一步步帶你，而不是空聊。</div>
+            <div class="coach-empty-icon"><i class="fa-solid fa-comments"></i></div>
+            <div class="coach-empty-title">知識庫問答 · 或先有一項任務</div>
+            <div class="coach-empty-desc">
+                直接在下方輸入問題即可（例如「新人第一天做什麼」）。
+                有今日任務時，可改用「教練帶我做」逐步執行。<br>
+                <span class="text-slate-500 text-xs">${escapeHtml(kbHint)}</span>
+            </div>
             <div class="flex flex-wrap gap-2 justify-center mt-3">
                 <button type="button" ${luminaAction('seedDemoFirstTask')} class="coach-empty-btn">
                     <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> 一鍵體驗
                 </button>
                 <button type="button" ${luminaAction('showSection', { arg: 'dashboard' })} class="coach-empty-btn opacity-90">
-                    回今日新增
+                    去今日新增
                 </button>
+                ${hasTeam ? `<button type="button" ${luminaAction('askCoach', { arg: '新人第一天要做什麼？' })} class="coach-empty-btn opacity-90">
+                    問知識庫
+                </button>` : ''}
             </div>
         </div>`;
 }
@@ -1139,6 +1262,50 @@ function askCoach(question) {
     sendCoachAgentMessage();
 }
 
+/** Map option / short phrases to product actions (start step, seed, navigate). */
+function handleCoachOptionShortcuts(msg) {
+    const t = String(msg || '').trim();
+    if (/一鍵體驗|範例任務/.test(t)) {
+        if (typeof seedDemoFirstTask === 'function') seedDemoFirstTask();
+        return true;
+    }
+    if (/去今日|新增任務|建立一項今日/.test(t)) {
+        if (typeof showSection === 'function') showSection('dashboard');
+        if (typeof focusQuickAdd === 'function') focusQuickAdd();
+        return true;
+    }
+    if (/^完成這件$/.test(t)) {
+        if (getCoachTask()) coachCompleteTaskFromAgent();
+        return !!getCoachTask();
+    }
+    // P1-5: option drives start / resume guided step
+    if (/準備好|開始第一步|開始做|繼續執行|執行當前|我了解，繼續/.test(t)) {
+        const task = getCoachTask();
+        if (task) {
+            ensureCoachSessionForTask(task);
+            S.focusSession.coachActive = true;
+            if (!S.focusSession.startedAt) S.focusSession.startedAt = Date.now();
+            startStepTimerForCoach(S.focusSession);
+            document.getElementById('next-step-card')?.classList.add('focus-session-active');
+            if (typeof startTodayTask === 'function' && S.focusSession.taskId !== task.id) {
+                startTodayTask(task.id, { quiet: true });
+                S.focusSession.coachActive = true;
+            }
+            if (!S.coachAgentMessages.some(m => m.role === 'coach')) {
+                pushCoachAgentMessage('coach', getOpeningCoachMessage(task, S.focusSession.steps));
+            } else {
+                const step = S.focusSession.steps[S.focusSession.currentStep];
+                pushCoachAgentMessage('user', t);
+                pushCoachAgentMessage('coach', `很好，我們開始「${step?.title || '這一步'}」：${step?.action || task.name}\n\n做完點「完成這步」。\n[選項: 完成這步]\n[選項: 卡住了]`);
+            }
+            renderCoachAgentView();
+            showToast('已開始這一步', 'success');
+            return true;
+        }
+    }
+    return false;
+}
+
 async function sendCoachAgentMessage(preset) {
     const input = document.getElementById('chat-input');
     const msg = typeof preset === 'string' ? preset : (input?.value?.trim() || '');
@@ -1148,36 +1315,54 @@ async function sendCoachAgentMessage(preset) {
         return;
     }
     if (input && typeof preset !== 'string') input.value = '';
-    
+
+    // Local shortcuts from option chips (no LLM needed)
+    if (handleCoachOptionShortcuts(msg)) return;
+
     const task = getCoachTask();
-    if (!task) {
-        showToast('尚無待辦任務', 'error');
-        return;
-    }
-    
-    if (!S.focusSession?.coachActive) {
-        ensureCoachSessionForTask(task);
-        S.focusSession.coachActive = true;
-        S.focusSession.startedAt = Date.now();
-        if (!S.coachAgentMessages.length) {
-            pushCoachAgentMessage('coach', getOpeningCoachMessage(task, S.focusSession.steps));
+    const freeform = !task;
+
+    if (task) {
+        if (!S.focusSession?.coachActive) {
+            ensureCoachSessionForTask(task);
+            S.focusSession.coachActive = true;
+            S.focusSession.startedAt = Date.now();
+            if (!S.coachAgentMessages.length) {
+                pushCoachAgentMessage('coach', getOpeningCoachMessage(task, S.focusSession.steps));
+            }
+            startStepTimerForCoach(S.focusSession);
+            document.getElementById('next-step-card')?.classList.add('focus-session-active');
+            renderCoachAgentView();
         }
-        startStepTimerForCoach(S.focusSession);
-        document.getElementById('next-step-card')?.classList.add('focus-session-active');
+
+        if (/^完成這步$|^做完了$|^好了$/.test(msg)) {
+            const isLast = S.focusSession.currentStep >= S.focusSession.steps.length - 1;
+            if (isLast) coachCompleteTaskFromAgent();
+            else coachAdvanceStepFromAgent();
+            return;
+        }
+    } else {
+        // Knowledge Q&A without a task
+        if (!S.focusSession || !S.focusSession.freeform) {
+            S.focusSession = {
+                taskId: null,
+                freeform: true,
+                coachActive: true,
+                steps: [{ title: '知識問答', duration: '—', action: '依知識庫或一般教練回答' }],
+                currentStep: 0,
+                startedAt: Date.now()
+            };
+        }
+        if (!S.coachAgentMessages.length) {
+            pushCoachAgentMessage('coach', '目前是知識庫問答模式。直接問流程、SOP 或名詞；有任務後可點「教練帶我做」。\n\n[選項: 新人第一天要做什麼？]\n[選項: 一鍵體驗範例任務]');
+        }
         renderCoachAgentView();
     }
-    
-    if (/^完成這步$|^做完了$|^好了$/.test(msg)) {
-        const isLast = S.focusSession.currentStep >= S.focusSession.steps.length - 1;
-        if (isLast) coachCompleteTaskFromAgent();
-        else coachAdvanceStepFromAgent();
-        return;
-    }
-    
+
     pushCoachAgentMessage('user', msg);
     renderCoachAgentThread(isApiReady() ? 'deepseek' : 'offline');
     S.coachRequestInFlight = true;
-    
+
     let result;
     try {
         if (isApiReady()) {
@@ -1185,15 +1370,14 @@ async function sendCoachAgentMessage(preset) {
         } else {
             result = buildOfflineAgentReply(msg, task, S.focusSession);
             const skip = resolveCoachKbSkipReason(task);
-            // Offline coach path never hits RAG — surface trust badge when team KB is relevant
             if (S.enterpriseSession && !result.meta) {
                 result.meta = {
                     usedKnowledge: false,
                     kbSkipReason: skip || 'degraded',
-                    taskBound: !!(
+                    taskBound: !!(task && (
                         (typeof getTaskBoundKbIds === 'function' && getTaskBoundKbIds(task).length) ||
                         (typeof getTaskBoundDocIds === 'function' && getTaskBoundDocIds(task).length)
-                    )
+                    ))
                 };
             }
         }
@@ -1206,11 +1390,11 @@ async function sendCoachAgentMessage(preset) {
     } finally {
         S.coachRequestInFlight = false;
     }
-    
+
     pushCoachAgentMessage('coach', result.reply, result.sources, result.meta || null);
-    if (result.complete) {
+    if (!freeform && result.complete) {
         coachCompleteTaskFromAgent();
-    } else if (result.advance) {
+    } else if (!freeform && result.advance) {
         coachAdvanceStepFromAgent();
     } else {
         renderCoachAgentView();
@@ -1328,9 +1512,9 @@ function getCoachReadinessChecks() {
     ];
 }
 
-/** Manager-only: failed index docs that hurt coach answers */
+/** Failed index docs that hurt coach answers — visible to all team members */
 function getCoachFailedIndexDocs(limit = 5) {
-    if (!S.enterpriseSession || S.enterpriseSession.role !== 'manager') return [];
+    if (!S.enterpriseSession) return [];
     if (typeof resolveDocRagStatus !== 'function') return [];
     const docs = S.enterpriseGroupData?.documents || [];
     return docs
@@ -1403,14 +1587,16 @@ function renderCoachQuickActions() {
     const ctx = getCoachContext();
     const actions = [];
     if (ctx.nextTask) {
-        if (!S.focusSession?.coachActive) {
+        if (!S.focusSession?.coachActive || S.focusSession?.freeform) {
             actions.push({ label: '教練帶我做', action: 'coachBeginGuidedSession' });
         }
         actions.push({ label: '卡住了', action: 'sendCoachAgentMessage', arg: '卡住了' });
         actions.push({ label: '完成這步', action: 'sendCoachAgentMessage', arg: '完成這步' });
         actions.push({ label: '換簡單點', action: 'sendCoachAgentMessage', arg: '太難了，換簡單一點' });
     } else {
+        actions.push({ label: '問知識庫', action: 'askCoach', arg: '請依知識庫說明重點流程' });
         actions.push({ label: '分解目標', action: 'openDecomposeTab' });
+        actions.push({ label: '一鍵體驗', action: 'seedDemoFirstTask' });
     }
     container.innerHTML = actions.map(a =>
         `<button type="button" ${luminaAction(a.action, a.arg !== undefined ? { arg: a.arg } : {})} class="coach-quick-btn">${escapeHtml(a.label)}</button>`

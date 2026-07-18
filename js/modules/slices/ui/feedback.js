@@ -30,8 +30,9 @@ function triggerConfetti() {
 }
 
 // Toast notifications
+// options: { actionLabel, onAction, durationMs }
 
-function showToast(message, type = 'success') {
+function showToast(message, type = 'success', options = {}) {
     const container = document.getElementById('toast-container');
     if (!container) return;
     const toast = document.createElement('div');
@@ -44,15 +45,80 @@ function showToast(message, type = 'success') {
     const textEl = document.createElement('div');
     textEl.className = 'flex-1 leading-snug';
     textEl.textContent = String(message);
+
+    const actionLabel = options.actionLabel;
+    const onAction = typeof options.onAction === 'function' ? options.onAction : null;
+    let actionBtn = null;
+    if (actionLabel && onAction) {
+        actionBtn = document.createElement('button');
+        actionBtn.type = 'button';
+        actionBtn.className = 'toast-action-btn';
+        actionBtn.textContent = actionLabel;
+        actionBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            try { onAction(); } catch (err) { console.warn('[Lumina] toast action', err); }
+            toast.remove();
+        });
+    }
+
     const closeBtn = document.createElement('button');
     closeBtn.className = 'opacity-70 hover:opacity-100 text-lg leading-none';
     closeBtn.setAttribute('aria-label', '關閉');
     closeBtn.textContent = '×';
     closeBtn.addEventListener('click', () => toast.remove());
     
-    toast.append(iconEl, textEl, closeBtn);
+    if (actionBtn) toast.append(iconEl, textEl, actionBtn, closeBtn);
+    else toast.append(iconEl, textEl, closeBtn);
     container.appendChild(toast);
-    setTimeout(() => { if (toast.parentElement) toast.remove(); }, 3200);
+    const ttl = Math.max(1500, Number(options.durationMs) || (actionBtn ? 7000 : 3200));
+    setTimeout(() => { if (toast.parentElement) toast.remove(); }, ttl);
+}
+
+/** Single-slot undo for last complete/delete (market UX). */
+function setTaskUndo(entry) {
+    if (S._taskUndoTimer) {
+        clearTimeout(S._taskUndoTimer);
+        S._taskUndoTimer = null;
+    }
+    S._taskUndo = entry || null;
+    if (!entry) return;
+    S._taskUndoTimer = setTimeout(() => {
+        S._taskUndo = null;
+        S._taskUndoTimer = null;
+    }, 8000);
+}
+
+function undoLastTaskAction() {
+    const u = S._taskUndo;
+    if (!u) {
+        showToast('沒有可復原的操作', 'error');
+        return;
+    }
+    setTaskUndo(null);
+    if (u.type === 'complete') {
+        const task = S.tasks.find(t => t.id === u.taskId);
+        if (task) {
+            task.completed = !!u.wasCompleted;
+            touchTask(task);
+            if (u.todayFocusTaskId != null) S.todayFocusTaskId = u.todayFocusTaskId;
+            saveState();
+            refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+            if (task.enterpriseTaskId && S.enterpriseSession) {
+                try { syncPersonalTaskCompletionToEnterprise(task); } catch (_) {}
+            }
+            showToast('已復原完成狀態', 'success');
+        }
+        return;
+    }
+    if (u.type === 'delete' && u.task) {
+        S.tasks.splice(Math.min(u.index || 0, S.tasks.length), 0, u.task);
+        rebuildTaskIndex();
+        invalidateTodayStats();
+        if (u.todayFocusTaskId != null) S.todayFocusTaskId = u.todayFocusTaskId;
+        saveState();
+        refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+        showToast('已復原刪除的任務', 'success');
+    }
 }
 
 // Reset everything

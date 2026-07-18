@@ -244,20 +244,25 @@ function onTodayTaskCompleted(completedId, fromFocus = false) {
     if (S.focusSession?.taskId === completedId) endFocusSession();
     if (S.todayFocusTaskId === completedId) S.todayFocusTaskId = null;
     invalidateTodayStats();
+    const undoOpts = {
+        actionLabel: '復原',
+        onAction: () => typeof undoLastTaskAction === 'function' && undoLastTaskAction(),
+        durationMs: 7000
+    };
     const next = getNextRecommendedTask('today');
     if (next) {
         S.todayFocusTaskId = next.id;
         setTimeout(() => {
             if (wasFocus) {
                 startTodayTask(next.id, { quiet: true, autoContinue: true });
-                showToast(`接著做：${next.name}`, 'success');
+                showToast(`接著做：${next.name}`, 'success', undoOpts);
             } else {
-                showToast(`完成！下一項：${next.name}`, 'success');
+                showToast(`完成！下一項：${next.name}`, 'success', undoOpts);
                 pulseNextStepCard();
             }
         }, wasFocus ? 350 : 120);
     } else {
-        setTimeout(() => showToast('今日待辦全部完成！', 'success'), 120);
+        setTimeout(() => showToast('今日待辦全部完成！', 'success', undoOpts), 120);
     }
     updateCoachContextBar();
     renderCoachQuickActions();

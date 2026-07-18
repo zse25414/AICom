@@ -227,11 +227,22 @@
                     </div>
                     <button data-lumina-action="showSection" data-lumina-arg="scheduler" class="text-xs text-indigo-400 hover:text-indigo-300">全部任務 →</button>
                 </div>
-                <div class="flex gap-2 mb-4">
-                    <input id="quick-task-input" type="text" placeholder="輸入任務，按 Enter 新增…" 
-                           class="flex-1 form-input focus-ring"
+                <div class="quick-add-row">
+                    <input id="quick-task-input" type="text" placeholder="輸入任務，按 Enter 新增…"
+                           class="form-input focus-ring"
                            onkeypress="if (event.key === 'Enter') quickAddTask()">
-                    <button data-lumina-action="quickAddTask" class="px-4 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium flex-shrink-0">新增</button>
+                    <select id="quick-task-duration" class="form-input quick-add-duration focus-ring" title="預估時長" aria-label="預估時長">
+                        <option value="15">15 分</option>
+                        <option value="30" selected>30 分</option>
+                        <option value="45">45 分</option>
+                        <option value="60">60 分</option>
+                        <option value="90">90 分</option>
+                    </select>
+                    <label class="quick-add-today-label" title="勾選＝今日待辦；取消＝明天">
+                        <input id="quick-task-today" type="checkbox" checked>
+                        <span>今日</span>
+                    </label>
+                    <button type="button" data-lumina-action="quickAddTask" class="px-4 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium flex-shrink-0">新增</button>
                 </div>
                 <div id="dashboard-category-filters" class="flex flex-wrap gap-1.5 mb-3"></div>
                 <div class="space-y-2" id="today-focus-list"></div>

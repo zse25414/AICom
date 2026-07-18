@@ -746,26 +746,37 @@ function skipToNextTodayTask() {
 
 function quickAddTask() {
     const input = document.getElementById('quick-task-input');
-    if (!input.value.trim()) return;
-    
+    if (!input?.value?.trim()) return;
+
     const name = input.value.trim();
+    const durationEl = document.getElementById('quick-task-duration');
+    const todayEl = document.getElementById('quick-task-today');
+    const duration = Math.max(5, Math.min(480, parseInt(durationEl?.value, 10) || 30));
+    const dueToday = !todayEl || todayEl.checked;
+    const due = dueToday
+        ? getTodayISO()
+        : toLocalISO(new Date(Date.now() + 86400000));
+
     const newTask = {
         id: Date.now(),
         name: name,
-        duration: 30,
+        duration,
         energy: 3,
         category: inferCategory(name, 3),
-        due: getTodayISO(),
+        due,
         completed: false,
         updatedAt: new Date().toISOString()
     };
-    
+
     S.tasks.unshift(newTask);
-    S.todayFocusTaskId = newTask.id;
+    if (dueToday) S.todayFocusTaskId = newTask.id;
     saveState();
     input.value = '';
-    
-    showToast('任務已加入今日！可按「開始做這件」', 'success');
+
+    showToast(
+        dueToday ? `已加入今日（${duration} 分）— 可按「開始做這件」` : `已排到明天（${duration} 分）`,
+        'success'
+    );
     refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
     try { pulseNextStepCard(); } catch (_) {}
 }
@@ -844,25 +855,46 @@ function renderTaskList() {
 function toggleTaskComplete(taskId, checkbox, fromDashboard = false, fromFocus = false) {
     const task = getTaskById(taskId);
     if (!task) return;
-    
-    task.completed = checkbox.checked;
+
+    const wasCompleted = !!task.completed;
+    const prevFocus = S.todayFocusTaskId;
+    const nextCompleted = !!(checkbox && typeof checkbox === 'object' && 'checked' in checkbox
+        ? checkbox.checked
+        : !task.completed);
+
+    task.completed = nextCompleted;
     touchTask(task);
     saveState();
-    
+
     if (task.enterpriseTaskId && S.enterpriseSession) {
         syncPersonalTaskCompletionToEnterprise(task);
     }
-    
+
+    // Undo for accidental complete/uncomplete
+    setTaskUndo({
+        type: 'complete',
+        taskId: task.id,
+        wasCompleted,
+        todayFocusTaskId: prevFocus
+    });
+
     let advancedToday = false;
     if (task.completed) {
         if (fromDashboard || task.due <= getTodayISO()) {
             onTodayTaskCompleted(task.id, fromFocus || S.focusSession?.taskId === task.id);
             advancedToday = true;
         }
-        if (!advancedToday) showToast('太棒了！任務完成', 'success');
+        if (!advancedToday) {
+            showToast('太棒了！任務完成', 'success', {
+                actionLabel: '復原',
+                onAction: () => undoLastTaskAction(),
+                durationMs: 7000
+            });
+        }
         evaluateStreakOnComplete();
         checkParentGoalComplete(task);
-        
+        maybeOfferMeetingActionItems(task);
+
         const stats = getTodayStats();
         if (stats.relevant.length > 0 && stats.relevant.every(t => t.completed)) {
             if (S.userProfile.enableConfetti !== false) triggerConfetti();
@@ -871,14 +903,66 @@ function toggleTaskComplete(taskId, checkbox, fromDashboard = false, fromFocus =
         }
     } else if (fromDashboard) {
         S.todayFocusTaskId = task.id;
+        showToast('已標為未完成', 'success', {
+            actionLabel: '復原',
+            onAction: () => undoLastTaskAction(),
+            durationMs: 7000
+        });
     }
-    
+
     refreshUI({
         dashboard: true,
         scheduler: !fromDashboard,
         filters: true,
         schedule: true
     });
+}
+
+/** After completing a meeting task, offer to spawn follow-up todos. */
+function maybeOfferMeetingActionItems(task) {
+    if (!task?.completed) return;
+    const cat = resolveCategory(task);
+    if (cat !== 'meeting') return;
+    const key = `meeting-offer-${task.id}`;
+    if (S._meetingOfferShown === key) return;
+    S._meetingOfferShown = key;
+    setTimeout(() => {
+        showToast('會議完成 — 要產生會後待辦嗎？', 'success', {
+            actionLabel: '產生待辦',
+            onAction: () => createMeetingFollowUpTasks(task),
+            durationMs: 8000
+        });
+    }, 400);
+}
+
+function createMeetingFollowUpTasks(meetingTask) {
+    const base = Date.now();
+    const title = String(meetingTask?.name || '會議').replace(/^\[團隊\]\s*/, '');
+    const items = [
+        { name: `整理「${title}」決議與紀要`, duration: 15, energy: 2, category: 'admin' },
+        { name: `追蹤「${title}」待辦負責人`, duration: 20, energy: 3, category: 'execution' },
+        { name: `排定「${title}」後續檢查點`, duration: 10, energy: 2, category: 'admin' }
+    ];
+    const created = items.map((it, i) => ({
+        id: base + i + 1,
+        name: it.name.slice(0, (C.TASK_NAME_MAX_LEN || 200)),
+        duration: it.duration,
+        energy: it.energy,
+        category: it.category,
+        due: getTodayISO(),
+        completed: false,
+        updatedAt: new Date().toISOString(),
+        source: 'meeting-followup',
+        parentGoalName: title
+    }));
+    created.forEach(t => S.tasks.unshift(t));
+    if (created[0]) S.todayFocusTaskId = created[0].id;
+    rebuildTaskIndex();
+    invalidateTodayStats();
+    saveState();
+    refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+    showToast(`已加入 ${created.length} 項會後待辦`, 'success');
+    try { pulseNextStepCard(); } catch (_) {}
 }
 
 function splitTask(taskId) {
@@ -907,6 +991,10 @@ function deleteTask(taskId, e) {
     e?.stopImmediatePropagation?.();
     if (!confirm('確定要刪除這個任務嗎？')) return;
 
+    const idx = S.tasks.findIndex(t => t.id === taskId);
+    const removed = idx >= 0 ? S.tasks[idx] : null;
+    const prevFocus = S.todayFocusTaskId;
+
     const wasFocus = S.focusSession?.taskId === taskId;
     if (wasFocus) endFocusSession(false);
     if (S.todayFocusTaskId === taskId) S.todayFocusTaskId = null;
@@ -916,11 +1004,23 @@ function deleteTask(taskId, e) {
     rebuildTaskIndex();
     invalidateTodayStats();
     saveState();
+    if (removed) {
+        setTaskUndo({
+            type: 'delete',
+            task: { ...removed },
+            index: idx,
+            todayFocusTaskId: prevFocus
+        });
+    }
     refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
     if (document.getElementById('coach')?.classList.contains('active')) {
         try { refreshCoachView(); } catch (_) {}
     }
-    showToast('任務已刪除', 'success');
+    showToast('任務已刪除', 'success', {
+        actionLabel: '復原',
+        onAction: () => undoLastTaskAction(),
+        durationMs: 7000
+    });
 }
 
 function clearAllTasks() {
