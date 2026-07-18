@@ -2,6 +2,9 @@
 
 個人／企業生產力與 RAG 知識庫應用。前端靜態頁 + Node API proxy + Python RAG 服務。
 
+> **給 AI 工具／新 Session：** 先讀根目錄 [`PRODUCT-CONTEXT.md`](./PRODUCT-CONTEXT.md)  
+> （產品是什麼、架構、主路徑、優先改善 backlog、檔案地圖）。
+
 ## 快速開始（本機開發）
 
 ### 前置需求

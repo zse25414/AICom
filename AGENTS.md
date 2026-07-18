@@ -1,5 +1,6 @@
 # Lumina AI — Multi-Agent 協作規則
 
+> **產品與改善 backlog 統一入口：** 根目錄 [`PRODUCT-CONTEXT.md`](./PRODUCT-CONTEXT.md)（先讀再派工）。  
 > Grok 專屬 Agent 團隊定義於 `.grok/` 目錄。詳見 `.grok/GROK.md`。
 
 ## 協調者（本 Session）
