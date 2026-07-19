@@ -18,9 +18,7 @@ const PERSONAL_ATTACH_EXT = new Set([
     '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp',
     '.txt', '.md', '.markdown', '.csv', '.json', '.log'
 ]);
-// 濫用防護：單人 10 分鐘 20 次上傳；總容量 50MB / 200 檔
-const ATTACH_RATE_MAX = 20;
-const ATTACH_RATE_WINDOW_MS = 10 * 60 * 1000;
+// 濫用防護：上傳頻率限制在 rate-limit 模組（checkAttachmentRateLimit）；此處為容量配額
 const ATTACH_QUOTA_BYTES = 50 * 1024 * 1024;
 const ATTACH_QUOTA_FILES = 200;
 // GC：未被 user-data 引用且超過寬限期的 user-* 檔才刪（寬限涵蓋「上傳了還沒 sync」的窗口）
@@ -41,10 +39,18 @@ function safeUserIdSegment(userId) {
     return String(userId || '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 40);
 }
 
+// 配額要算使用者已用空間，但每次上傳都掃整個 uploads 目錄會隨總檔案數變慢。
+// 以使用者為單位短期快取：新檔案寫入時增量補上，GC 刪檔後整份失效。
+const attachListCache = new Map();
+const ATTACH_LIST_TTL_MS = 60 * 1000;
+
 function listUserAttachmentFiles(seg) {
+    const hit = attachListCache.get(seg);
+    if (hit && Date.now() - hit.ts < ATTACH_LIST_TTL_MS) return hit.files;
     const prefix = `user-${seg}-`;
+    let files = [];
     try {
-        return fs.readdirSync(UPLOADS_DIR)
+        files = fs.readdirSync(UPLOADS_DIR)
             .filter(name => name.startsWith(prefix))
             .map(name => {
                 try {
@@ -54,8 +60,15 @@ function listUserAttachmentFiles(seg) {
             })
             .filter(Boolean);
     } catch (_) {
-        return [];
+        files = [];
     }
+    attachListCache.set(seg, { files, ts: Date.now() });
+    return files;
+}
+
+function noteUserAttachmentWritten(seg, name, size) {
+    const hit = attachListCache.get(seg);
+    if (hit) hit.files.push({ name, size, mtimeMs: Date.now() });
 }
 
 /** @param {Record<string, Function>} api */
@@ -92,8 +105,7 @@ function register(api) {
 
         // 個人附件上傳（教練附件雲端化）：回 /uploads/ 路徑，僅本人可讀（canAccessUpload）
         if (method === 'POST' && urlPath === '/api/user/attachment') {
-            const attachBuckets = api.__attachRateBuckets || (api.__attachRateBuckets = new Map());
-            if (!api.checkRateLimitBucket(attachBuckets, 'att:' + user.id, ATTACH_RATE_MAX, ATTACH_RATE_WINDOW_MS)) {
+            if (!api.checkAttachmentRateLimit(user.id)) {
                 return api.sendJson(res, 429, { error: '附件上傳過於頻繁，請稍後再試', code: 'RATE_LIMITED' });
             }
             const body = await api.readBody(req);
@@ -133,6 +145,7 @@ function register(api) {
             const unique = `user-${seg}-${crypto.randomBytes(6).toString('hex')}-${safeBase}${ext}`;
             try {
                 fs.writeFileSync(path.join(UPLOADS_DIR, unique), buffer);
+                noteUserAttachmentWritten(seg, unique, buffer.length);
             } catch (e) {
                 return api.sendJson(res, 500, { error: '附件儲存失敗: ' + e.message });
             }
@@ -179,6 +192,7 @@ function register(api) {
             } catch (_) {}
         }
         if (removed.length) {
+            attachListCache.clear(); // 配額快取含已刪檔案，重算
             console.log(`[Lumina UserData] 附件 GC：清除 ${removed.length} 個孤兒檔（保留 ${kept}）`);
         }
         return { removed, kept, referenced: referenced.size };

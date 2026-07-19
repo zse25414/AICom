@@ -225,6 +225,17 @@ function touchTask(task) {
     return task;
 }
 
+/**
+ * 完成狀態的唯一入口。completedAt 記錄真正的完成時刻供執行畫像使用——
+ * updatedAt 在任何編輯（改名、拆分、調時長）都會更新，拿來當完成時間會失準。
+ */
+function setTaskCompletion(task, completed) {
+    if (!task) return task;
+    task.completed = !!completed;
+    task.completedAt = task.completed ? new Date().toISOString() : null;
+    return task;
+}
+
 function getFilteredTasks(taskList) {
     if (S.activeCategoryFilter === 'all') return taskList;
     return taskList.filter(t => resolveCategory(t) === S.activeCategoryFilter);
@@ -541,7 +552,7 @@ function syncEnterpriseCompletionToPersonal(enterpriseTaskId, completed) {
     if (!personal || personal.completed === completed) return;
     S.enterpriseSyncSuppress = true;
     try {
-        personal.completed = completed;
+        setTaskCompletion(personal, completed);
         saveState({ immediateAnalytics: true });
         refreshUI({ dashboard: true, scheduler: true, filters: true });
     } finally {
@@ -872,12 +883,13 @@ function toggleTaskComplete(taskId, checkbox, fromDashboard = false, fromFocus =
     if (!task) return;
 
     const wasCompleted = !!task.completed;
+    const prevCompletedAt = task.completedAt || null;
     const prevFocus = S.todayFocusTaskId;
     const nextCompleted = !!(checkbox && typeof checkbox === 'object' && 'checked' in checkbox
         ? checkbox.checked
         : !task.completed);
 
-    task.completed = nextCompleted;
+    setTaskCompletion(task, nextCompleted);
     touchTask(task);
     saveState();
 
@@ -890,6 +902,7 @@ function toggleTaskComplete(taskId, checkbox, fromDashboard = false, fromFocus =
         type: 'complete',
         taskId: task.id,
         wasCompleted,
+        prevCompletedAt,
         todayFocusTaskId: prevFocus
     });
 

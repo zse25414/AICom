@@ -32,6 +32,9 @@ jobs:
       API_PORT: '3001'
       READY_TIMEOUT_SEC: '90'
       REQUIRE_ENTERPRISE_AUTH: '1'
+      # 所有測試共用同一個來源 IP，連跑會撞到全域每分鐘上限（預設 240）並讓
+      # 後續步驟連鎖失敗。per-user 的附件／SOP 限流不受此值影響，仍照常驗證。
+      RATE_LIMIT_MAX: '3000'
     steps:
       - uses: actions/checkout@v4
 

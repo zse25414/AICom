@@ -32,12 +32,13 @@ function computeExecProfile(input = {}) {
         }
     }
 
-    // 最常完成時段：已完成任務 updatedAt 小時分布的最密集 3 小時窗（樣本 ≥5）
+    // 最常完成時段：completedAt 小時分布的最密集 3 小時窗（樣本 ≥5）。
+    // 只認 completedAt——updatedAt 任何編輯都會更新，會把「最後修改時段」誤當完成時段。
     const hourCounts = new Array(24).fill(0);
     let completedWithTs = 0;
     for (const t of tasks) {
-        if (!t?.completed || !t.updatedAt) continue;
-        const ts = Date.parse(t.updatedAt);
+        if (!t?.completed || !t.completedAt) continue;
+        const ts = Date.parse(t.completedAt);
         if (!ts) continue;
         hourCounts[new Date(ts).getHours()] += 1;
         completedWithTs += 1;

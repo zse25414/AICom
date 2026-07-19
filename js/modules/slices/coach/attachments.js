@@ -490,22 +490,43 @@ async function openCoachCloudAttachment(fileUrl) {
     }
 }
 
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(coachAttB64(String(r.result || '')));
+        r.onerror = () => reject(new Error('讀取附件失敗'));
+        r.readAsDataURL(blob);
+    });
+}
+
+/**
+ * 取附件位元組（base64）。三個來源依序：本機 dataUrl（圖片為壓縮後版本）→
+ * 原始 File → 已上雲檔（帶 Authorization 取回）。
+ * 任一來源可用即可，呼叫端不必知道附件目前處在哪個階段。
+ */
+async function readCoachAttachmentBase64(att) {
+    if (!att) return null;
+    if (att.dataUrl) return coachAttB64(att.dataUrl);
+    if (att._file) return coachAttB64(await readFileAsDataURL(att._file));
+    if (att.fileUrl) {
+        const objectUrl = await fetchCoachAttachmentBlobUrl(att.fileUrl);
+        const res = await fetch(objectUrl);
+        return blobToBase64(await res.blob());
+    }
+    return null;
+}
+
 /** 背景把附件實體傳到伺服器；成功後 att.fileUrl 供跨裝置取用。失敗不影響本機使用。 */
 async function uploadCoachAttachmentToCloud(att) {
     try {
         if (!att || att.fileUrl) return;
         if (typeof isLoggedIn !== 'function' || !isLoggedIn()) return;
-        let base64 = null;
         let filename = att.name || 'file';
-        if (att.kind === 'image' && att.dataUrl) {
-            // 上傳壓縮後版本（jpeg），與本機顯示一致
-            base64 = coachAttB64(att.dataUrl);
-            if (!/\.jpe?g$/i.test(filename)) filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
-        } else if (att._file) {
-            base64 = coachAttB64(await readFileAsDataURL(att._file));
-        } else if (att.dataUrl) {
-            base64 = coachAttB64(att.dataUrl);
+        // 圖片上傳壓縮後版本（jpeg），與本機顯示一致
+        if (att.kind === 'image' && att.dataUrl && !/\.jpe?g$/i.test(filename)) {
+            filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
         }
+        const base64 = await readCoachAttachmentBase64(att);
         if (!base64) return;
         const res = await authApiRequest('/api/user/attachment', {
             method: 'POST',
@@ -513,8 +534,8 @@ async function uploadCoachAttachmentToCloud(att) {
             body: JSON.stringify({ filename, mime: att.mime, data_base64: base64 })
         });
         if (res?.fileUrl) {
+            // 保留 att._file：存入知識庫等後續動作仍需要原始位元組
             att.fileUrl = res.fileUrl;
-            delete att._file;
             renderCoachPendingAttachments();
             propagateCoachAttachmentFileUrl(att.id, res.fileUrl);
         }
@@ -560,8 +581,8 @@ async function saveCoachPendingAttachmentsToKb() {
             let payload = null;
             if (att.kind === 'text' && att.textPreview) {
                 payload = { groupCode, managerId, docType: 'text', title, content: att.textPreview.slice(0, 10000) };
-            } else if (att.kind === 'image' && att.dataUrl) {
-                const base64 = coachAttB64(att.dataUrl);
+            } else if (att.kind === 'image') {
+                const base64 = await readCoachAttachmentBase64(att);
                 if (base64) {
                     payload = {
                         groupCode, managerId, docType: 'image', title,
@@ -569,8 +590,8 @@ async function saveCoachPendingAttachmentsToKb() {
                         fileData: base64, content: ''
                     };
                 }
-            } else if (att._file && /\.pdf$/i.test(att.name || '')) {
-                const base64 = coachAttB64(await readFileAsDataURL(att._file));
+            } else if (/\.pdf$/i.test(att.name || '')) {
+                const base64 = await readCoachAttachmentBase64(att);
                 if (base64) {
                     payload = {
                         groupCode, managerId, docType: 'pdf', title,

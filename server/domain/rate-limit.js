@@ -16,6 +16,12 @@ function register(api) {
     const rateBuckets = api.__rateBuckets || (api.__rateBuckets = new Map());
     const authRateBuckets = api.__authRateBuckets || (api.__authRateBuckets = new Map());
     const aiRateBuckets = api.__aiRateBuckets || (api.__aiRateBuckets = new Map());
+    // 寫入型使用者動作：附件上傳與 SOP 步驟事件（兩者每次都會落盤）
+    const writeRateBuckets = api.__writeRateBuckets || (api.__writeRateBuckets = new Map());
+    const WRITE_RATE_WINDOW_MS = 10 * 60 * 1000;
+    const ATTACH_RATE_MAX = 20;
+    // 一次 12 步的 SOP 約 13 個事件，30 足夠連跑兩輪；超出多半是異常回報
+    const SOP_EVENT_RATE_MAX = 30;
     function checkRateLimitBucket(map, key, max, windowMs = RATE_LIMIT_WINDOW_MS) {
         const now = Date.now();
         let bucket = map.get(key);
@@ -40,6 +46,14 @@ function register(api) {
         return checkRateLimitBucket(aiRateBuckets, key, AI_RATE_LIMIT_MAX, AI_RATE_LIMIT_WINDOW_MS);
     }
 
+    function checkAttachmentRateLimit(userId) {
+        return checkRateLimitBucket(writeRateBuckets, 'att:' + (userId || 'anonymous'), ATTACH_RATE_MAX, WRITE_RATE_WINDOW_MS);
+    }
+
+    function checkSopEventRateLimit(userId) {
+        return checkRateLimitBucket(writeRateBuckets, 'sop:' + (userId || 'anonymous'), SOP_EVENT_RATE_MAX, WRITE_RATE_WINDOW_MS);
+    }
+
     function sweepRateLimitBucket(map, windowMs) {
         const now = Date.now();
         for (const [key, bucket] of map) {
@@ -52,6 +66,8 @@ function register(api) {
         checkRateLimit,
         checkAuthRateLimit,
         checkAiRateLimit,
+        checkAttachmentRateLimit,
+        checkSopEventRateLimit,
         sweepRateLimitBucket
     });
 
@@ -62,6 +78,7 @@ function register(api) {
             sweepRateLimitBucket(rateBuckets, RATE_LIMIT_WINDOW_MS);
             sweepRateLimitBucket(authRateBuckets, RATE_LIMIT_WINDOW_MS);
             sweepRateLimitBucket(aiRateBuckets, AI_RATE_LIMIT_WINDOW_MS);
+            sweepRateLimitBucket(writeRateBuckets, WRITE_RATE_WINDOW_MS);
             if (typeof api.sweepPinAttemptBuckets === "function") api.sweepPinAttemptBuckets();
         }, BUCKET_CLEANUP_INTERVAL_MS);
         bucketCleanupInterval.unref();

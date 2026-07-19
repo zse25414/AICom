@@ -97,6 +97,31 @@ const SOP_CONTENT = [
         JSON.stringify(doc?.sopStats));
     ok('plan persisted on doc', Array.isArray(doc?.compiledPlan?.steps) && doc.compiledPlan.steps.length >= 4);
 
+    // force：略過快取重編（無 LLM key 時仍走 heuristic，但必須重新產出）
+    const forced = await request('POST', '/api/enterprise/group/document/plan', {
+        groupCode, memberId: managerId, documentId: docId, force: true
+    }, token);
+    ok('force bypasses cache', forced.status === 200 && forced.data.cached === false, forced.raw.slice(0, 200));
+    ok('forced heuristic not rewritten', forced.data.persisted === undefined || typeof forced.data.persisted === 'boolean',
+        forced.raw.slice(0, 200));
+    ok('forced plan still valid', (forced.data.plan?.steps || []).length >= 4);
+
+    // 編譯不得覆蓋同時間的其他寫入（plan 走鎖內重載，只改 compiledPlan）
+    const concurrentTitle = `並行文件${suffix}`;
+    const [, concurrentAdd] = await Promise.all([
+        request('POST', '/api/enterprise/group/document/plan', {
+            groupCode, memberId: managerId, documentId: docId, force: true
+        }, token),
+        request('POST', '/api/enterprise/group/document/add', {
+            groupCode, managerId, title: concurrentTitle, content: '並行寫入測試內容。', docType: 'text'
+        }, token)
+    ]);
+    ok('concurrent doc add succeeded', concurrentAdd.status === 200 || concurrentAdd.status === 201, concurrentAdd.raw.slice(0, 200));
+    const afterConcurrent = await request('GET', `/api/enterprise/group/${groupCode}?memberId=${managerId}`, null, token);
+    ok('concurrent write survived plan compile',
+        (afterConcurrent.data.group?.documents || []).some(d => d.title === concurrentTitle),
+        (afterConcurrent.data.group?.documents || []).map(d => d.title).join(','));
+
     // 權限：外人（未入群帳號）不可編譯／回報
     const reg2 = await request('POST', '/api/auth/register', {
         name: '外人', email: `sopx-${suffix}@lumina.test`, role: 'QA', password: 'test1234'
@@ -111,6 +136,15 @@ const SOP_CONTENT = [
         groupCode, memberId: managerId, documentId: docId, event: 'hack', step: 1
     }, token);
     ok('bad event 400', bad.status === 400, bad.raw.slice(0, 120));
+
+    // 事件限流（上限 30 / 10 分）— 放最後：會用掉本帳號額度，也佔全域 IP 配額
+    let sopRateLimited = false;
+    for (let i = 0; i < 34; i++) {
+        const r = await request('POST', '/api/enterprise/group/document/sop-event',
+            { groupCode, memberId: managerId, documentId: docId, event: 'done', step: 1 }, token);
+        if (r.status === 429) { sopRateLimited = true; break; }
+    }
+    ok('sop-event rate limited', sopRateLimited);
 
     console.log('\nAll SOP checks passed');
     process.exit(0);

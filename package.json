@@ -21,7 +21,7 @@
     "build:dev": "npm run build:tailwind && npm run build:app",
     "prestart": "npm run build",
     "predev": "npm run build:dev",
-    "test": "npm run build:app:lazy && node scripts/check-bundle-size.js && node test-init.js && node check-security.js && node check-unsafe.js && node scripts/check-contrast.js && node scripts/test-register.js && node scripts/test-security-api.js && node scripts/test-phase01.js && node scripts/test-phase02.js && node scripts/test-phase03.js && node scripts/test-phase04.js && node scripts/test-phase-p1.js && node scripts/test-phase-p2.js && node scripts/test-exec-profile.js",
+    "test": "npm run build:app:lazy && node scripts/check-bundle-size.js && node test-init.js && node check-security.js && node check-unsafe.js && node scripts/check-contrast.js && node scripts/test-register.js && node scripts/test-security-api.js && node scripts/test-phase01.js && node scripts/test-phase02.js && node scripts/test-phase03.js && node scripts/test-phase04.js && node scripts/test-phase-p1.js && node scripts/test-phase-p2.js && node scripts/test-exec-profile.js && node scripts/test-coach-attach.js",
     "test:contrast": "node scripts/check-contrast.js",
     "test:ui": "node scripts/test-ui-regression.js",
     "test:phase01": "node scripts/test-phase01.js",

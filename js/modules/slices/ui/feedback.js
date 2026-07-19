@@ -99,6 +99,7 @@ function undoLastTaskAction() {
         const task = S.tasks.find(t => t.id === u.taskId);
         if (task) {
             task.completed = !!u.wasCompleted;
+            task.completedAt = u.prevCompletedAt || null; // 復原到原本的完成時刻，不是「現在」
             touchTask(task);
             if (u.todayFocusTaskId != null) S.todayFocusTaskId = u.todayFocusTaskId;
             saveState();

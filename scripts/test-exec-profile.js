@@ -34,14 +34,14 @@ let id = 1;
 for (let i = 0; i < 8; i++) {
     tasks.push({
         id: id++, name: `done${i}`, duration: 25, completed: true,
-        updatedAt: `2026-07-${String(6 + i).padStart(2, '0')}T${String(9 + (i % 3)).padStart(2, '0')}:15:00`
+        completedAt: `2026-07-${String(6 + i).padStart(2, '0')}T${String(9 + (i % 3)).padStart(2, '0')}:15:00`
     });
 }
 // 短任務未完成 2 個 → short: 10 總、8 完成 = 80%
 tasks.push({ id: id++, name: 's1', duration: 20, completed: false });
 tasks.push({ id: id++, name: 's2', duration: 30, completed: false });
 // 長任務 4 個只完成 1 → 25%
-tasks.push({ id: id++, name: 'l1', duration: 90, completed: true, updatedAt: '2026-07-10T10:00:00' });
+tasks.push({ id: id++, name: 'l1', duration: 90, completed: true, completedAt: '2026-07-10T10:00:00' });
 tasks.push({ id: id++, name: 'l2', duration: 90, completed: false });
 tasks.push({ id: id++, name: 'l3', duration: 120, completed: false });
 tasks.push({ id: id++, name: 'l4', duration: 75, completed: false });
@@ -49,7 +49,7 @@ tasks.push({ id: id++, name: 'l4', duration: 75, completed: false });
 for (let i = 0; i < 3; i++) {
     tasks.push({
         id: id++, name: `p${i}`, duration: 20, completed: true, splitPart: 1,
-        updatedAt: `2026-07-1${5 + i}T09:30:00`
+        completedAt: `2026-07-1${5 + i}T09:30:00`
     });
 }
 
@@ -70,6 +70,21 @@ ok(summary.length > 0 && summary.length <= 300, 'summary within 300 chars', summ
 ok(summary.includes('週二'), 'summary mentions Tuesday', summary);
 ok(/先拆|高於長任務/.test(summary), 'summary suggests splitting long tasks', summary);
 ok(!/done0|報帳|l1/.test(summary), 'summary contains no task names (privacy)');
+
+// 完成時段只認 completedAt：晚上才被編輯過的任務不得污染時段統計
+const editedLate = tasks.map(t => (t.completed ? { ...t, updatedAt: '2026-07-18T23:50:00' } : t));
+const profileEdited = computeExecProfile({ dailyHistory, tasks: editedLate });
+ok(profileEdited.bestHourRange?.start === profile.bestHourRange?.start,
+    'late edits do not shift best hour window',
+    `${JSON.stringify(profile.bestHourRange)} vs ${JSON.stringify(profileEdited.bestHourRange)}`);
+
+// 舊資料（只有 updatedAt、沒有 completedAt）→ 不猜完成時段
+const legacy = tasks.map(t => {
+    const { completedAt, ...rest } = t;
+    return completedAt ? { ...rest, updatedAt: completedAt } : rest;
+});
+ok(computeExecProfile({ dailyHistory, tasks: legacy }).bestHourRange === null,
+    'legacy tasks without completedAt yield no hour window');
 
 // 樣本門檻：6 天 → null
 const few = {};

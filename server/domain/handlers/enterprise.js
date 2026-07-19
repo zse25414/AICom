@@ -531,12 +531,32 @@ function register(api) {
                 if (!doc || !api.isActiveDocument(doc)) {
                     return api.sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
                 }
-                const result = await api.compileDocumentPlan(doc, {
-                    apiKey: body.deepseek_api_key || body.deepseekApiKey || null
-                });
+                const apiKey = body.deepseek_api_key || body.deepseekApiKey || null;
+                const hasKey = !!(apiKey || api.config.API_KEY);
+                const cached = api.getCachedSopPlan(doc, { hasKey, force: body.force === true });
+                if (cached) {
+                    return api.sendJson(res, 200, { ok: true, documentId: doc.id, cached: true, plan: cached });
+                }
+                // 編譯可能耗時數十秒：期間不持有 store 快照，結果由 persistCompiledPlan 在鎖內寫入
+                const result = await api.compileSopPlan(doc, { apiKey });
                 if (result.error) return api.sendError(res, 422, result.error, result.code);
-                if (!result.cached) await saveStore(store);
-                api.sendJson(res, 200, { ok: true, documentId: doc.id, cached: result.cached, plan: result.plan });
+
+                // LLM 仍不可用時，降級結果會與既有快取相同 → 重編了但不必再寫一次盤
+                const prev = doc.compiledPlan;
+                const sameAsCachedHeuristic = !!prev
+                    && prev.contentHash === result.plan.contentHash
+                    && prev.engine === 'heuristic'
+                    && result.plan.engine === 'heuristic';
+                const persisted = sameAsCachedHeuristic
+                    ? false
+                    : await api.persistCompiledPlan(code, doc.id, result.plan);
+                api.sendJson(res, 200, {
+                    ok: true,
+                    documentId: doc.id,
+                    cached: false,
+                    persisted,
+                    plan: sameAsCachedHeuristic ? prev : result.plan
+                });
             });
         }
 
@@ -551,14 +571,19 @@ function register(api) {
                 if (!memberCheck.ok) {
                     return api.sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
                 }
-                const doc = api.findGroupDocument(group, { documentId: body.documentId || body.document_id });
-                if (!doc || !api.isActiveDocument(doc)) {
-                    return api.sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+                const rateKey = memberCheck.member.userId || memberCheck.member.id;
+                if (!api.checkSopEventRateLimit(rateKey)) {
+                    return api.sendError(res, 429, 'SOP 事件回報過於頻繁，請稍後再試', 'RATE_LIMITED');
                 }
-                const result = api.recordSopEvent(doc, { step: body.step, event: String(body.event || '') });
-                if (result.error) return api.sendError(res, 400, result.error, result.code);
-                await saveStore(store);
-                api.sendJson(res, 200, { ok: true, documentId: doc.id, stats: result.stats });
+                const docId = body.documentId || body.document_id;
+                const result = await api.applySopEvent(code, docId, {
+                    step: body.step,
+                    event: String(body.event || '')
+                });
+                if (result.error) {
+                    return api.sendError(res, result.status || 400, result.error, result.code);
+                }
+                api.sendJson(res, 200, { ok: true, documentId: docId, stats: result.stats });
             });
         }
 

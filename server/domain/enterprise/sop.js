@@ -5,8 +5,11 @@
  */
 'use strict';
 
+const crypto = require('crypto');
 const config = require('../../config');
 const { API_KEY, DEEPSEEK_URL } = config;
+const { loadStore, saveStore } = require('../../../lib/enterprise-store');
+const { withLock } = require('../../../lib/write-queue');
 
 const SOP_MAX_STEPS = 12;
 const SOP_EVENTS = new Set(['run', 'done', 'stuck']);
@@ -114,24 +117,34 @@ function register(api) {
         }
     }
 
-    function getCurrentContentHash(doc) {
+    /**
+     * 快取鍵。優先用版本雜湊；舊文件沒有版本紀錄時直接雜湊內容，
+     * 否則兩邊都是 null 會讓「相等」恆真、內容改了也永不重編。
+     */
+    function resolvePlanCacheKey(doc) {
         const versions = Array.isArray(doc?.versions) ? doc.versions : [];
         const cur = versions.find(v => v.version === (doc.currentVersion || 1));
-        return cur?.contentHash || null;
+        if (cur?.contentHash) return cur.contentHash;
+        return crypto.createHash('sha256').update(String(doc?.content || '')).digest('hex');
     }
 
     /**
-     * 編譯（或取快取）。以 contentHash 快取：發新版自動重編，舊 plan 覆蓋。
-     * 回傳 { plan, cached }；無內容回 { error }。呼叫端負責 saveStore。
+     * 取可用快取。降級（heuristic）產物在拿得到 LLM key 時視為未命中，
+     * 讓當初因 LLM 暫時失敗而卡住的文件有機會升級成正式編譯。
      */
-    async function compileDocumentPlan(doc, { apiKey } = {}) {
+    function getCachedSopPlan(doc, { hasKey = false, force = false } = {}) {
+        if (force) return null;
+        const plan = doc?.compiledPlan;
+        if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return null;
+        if (plan.contentHash !== resolvePlanCacheKey(doc)) return null;
+        if (plan.engine === 'heuristic' && hasKey) return null;
+        return plan;
+    }
+
+    /** 純編譯：不碰 store、不改 doc（呼叫端負責在鎖內落盤）。 */
+    async function compileSopPlan(doc, { apiKey } = {}) {
         const content = String(doc?.content || '').trim();
         if (!content) return { error: '此文件沒有可編譯的文字內容', code: 'SOP_NO_CONTENT' };
-        const contentHash = getCurrentContentHash(doc);
-        if (doc.compiledPlan && doc.compiledPlan.contentHash === contentHash
-            && Array.isArray(doc.compiledPlan.steps) && doc.compiledPlan.steps.length) {
-            return { plan: doc.compiledPlan, cached: true };
-        }
         let engine = 'llm';
         let steps = await compileLlmSteps(doc.title || '未命名', content, apiKey);
         if (!steps) {
@@ -139,24 +152,52 @@ function register(api) {
             steps = parseHeuristicSteps(content);
         }
         if (!steps) return { error: '文件內容無法編譯為步驟', code: 'SOP_COMPILE_FAILED' };
-        doc.compiledPlan = {
-            v: 1,
-            contentHash,
-            engine,
-            compiledAt: new Date().toISOString(),
-            steps
+        return {
+            plan: {
+                v: 1,
+                contentHash: resolvePlanCacheKey(doc),
+                engine,
+                compiledAt: new Date().toISOString(),
+                steps
+            }
         };
-        return { plan: doc.compiledPlan, cached: false };
+    }
+
+    /**
+     * 在鎖內重新載入 store 後只寫 compiledPlan 欄位。
+     * 編譯可能耗時數十秒，期間別的請求會改動 store——不能把編譯前讀到的
+     * 整份快照寫回去，否則會覆蓋掉那些改動。
+     */
+    async function persistCompiledPlan(groupCode, documentId, plan) {
+        return withLock('enterprise', async () => {
+            const store = await api.prepareStore(await loadStore());
+            const group = api.getGroup(store, api.normalizeCode(groupCode));
+            if (!group) return false;
+            const doc = api.findGroupDocument(group, { documentId });
+            if (!doc || !api.isActiveDocument(doc)) return false;
+            // 編譯期間文件可能已發新版：內容對不上就丟棄這份結果
+            if (resolvePlanCacheKey(doc) !== plan.contentHash) return false;
+            doc.compiledPlan = plan;
+            await saveStore(store);
+            return true;
+        });
     }
 
     /**
      * 卡點事件累計：只存匿名計數，按文件版本分桶（舊版統計保留）。
      * event: run（開跑）| done（完成某步）| stuck（某步卡住）
      */
-    function recordSopEvent(doc, { step, event }) {
+    function validateSopEvent({ step, event }) {
         if (!SOP_EVENTS.has(event)) return { error: '不支援的事件', code: 'VALIDATION_ERROR' };
         const stepNum = Math.max(0, Math.min(50, parseInt(step, 10) || 0));
         if (event !== 'run' && !stepNum) return { error: '缺少 step', code: 'VALIDATION_ERROR' };
+        return { ok: true, step: stepNum, event };
+    }
+
+    function recordSopEvent(doc, { step, event }) {
+        const valid = validateSopEvent({ step, event });
+        if (valid.error) return valid;
+        const stepNum = valid.step;
         const versionKey = 'v' + (doc.currentVersion || 1);
         if (!doc.sopStats || typeof doc.sopStats !== 'object') doc.sopStats = {};
         const bucket = doc.sopStats[versionKey] || (doc.sopStats[versionKey] = { runs: 0, byStep: {} });
@@ -169,11 +210,34 @@ function register(api) {
         return { ok: true, stats: bucket };
     }
 
+    /** 事件落盤同樣走鎖 + 重載，只改目標文件的 sopStats。 */
+    async function applySopEvent(groupCode, documentId, { step, event }) {
+        const valid = validateSopEvent({ step, event });
+        if (valid.error) return valid;
+        return withLock('enterprise', async () => {
+            const store = await api.prepareStore(await loadStore());
+            const group = api.getGroup(store, api.normalizeCode(groupCode));
+            if (!group) return { error: '找不到群組', code: 'GROUP_NOT_FOUND', status: 404 };
+            const doc = api.findGroupDocument(group, { documentId });
+            if (!doc || !api.isActiveDocument(doc)) {
+                return { error: '找不到該文件', code: 'DOC_NOT_FOUND', status: 404 };
+            }
+            const result = recordSopEvent(doc, { step, event });
+            if (result.error) return result;
+            await saveStore(store);
+            return result;
+        });
+    }
+
     Object.assign(api, {
         parseHeuristicSteps,
         validateSopSteps,
-        compileDocumentPlan,
-        recordSopEvent
+        resolvePlanCacheKey,
+        getCachedSopPlan,
+        compileSopPlan,
+        persistCompiledPlan,
+        recordSopEvent,
+        applySopEvent
     });
 }
 
