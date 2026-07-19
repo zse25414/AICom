@@ -32,6 +32,9 @@ function normalizeTaskAttachments(raw) {
             dataUrl: typeof a.dataUrl === 'string' && a.dataUrl.startsWith('data:')
                 ? a.dataUrl.slice(0, 1_500_000)
                 : null,
+            fileUrl: typeof a.fileUrl === 'string' && a.fileUrl.startsWith('/uploads/')
+                ? a.fileUrl.slice(0, 300)
+                : null,
             textPreview: typeof a.textPreview === 'string'
                 ? a.textPreview.slice(0, COACH_ATTACH_TEXT_MAX)
                 : null,
@@ -175,8 +178,10 @@ async function addCoachAttachmentsFromFiles(fileList) {
         }
         try {
             const att = await processCoachAttachmentFile(file);
+            att._file = file; // 保留原始 File 供上雲／存 KB（不會被序列化進 localStorage 訊息）
             pending.push(att);
             added++;
+            uploadCoachAttachmentToCloud(att); // 背景上雲；未登入自動略過
         } catch (err) {
             showToast(err.message || `無法加入 ${file.name}`, 'error');
         }
@@ -261,6 +266,11 @@ function renderCoachPendingAttachments() {
                     title="綁到目前任務，之後教練可見">
                 <i class="fa-solid fa-paperclip"></i> 加到任務
             </button>
+            ${S.enterpriseSession?.role === 'manager' && !S.enterpriseSession?.offline ? `
+            <button type="button" class="coach-attach-action-btn" data-lumina-action="saveCoachPendingAttachmentsToKb"
+                    title="發布為團隊知識庫文件（會進 RAG 索引，全隊可檢索）">
+                <i class="fa-solid fa-book"></i> 存入知識庫
+            </button>` : ''}
             <button type="button" class="coach-attach-action-btn coach-attach-action-muted" data-lumina-action="clearCoachPendingAttachments">
                 清除
             </button>
@@ -277,11 +287,23 @@ function renderMessageAttachmentsHtml(attachments) {
                 <span>${escapeHtml(a.name)}</span>
             </a>`;
         }
+        if (a.kind === 'image' && a.fileUrl) {
+            // 跨裝置：本機沒有 dataUrl，帶 Authorization 抓 blob 後填入
+            return `<a class="coach-msg-attach coach-msg-attach-image" href="#" data-lumina-action="openCoachCloudAttachment"
+                data-lumina-arg="${escapeHtml(a.fileUrl)}" title="${escapeHtml(a.name)}">
+                <img data-coach-secure-src="${escapeHtml(a.fileUrl)}" alt="${escapeHtml(a.name)}">
+                <span>${escapeHtml(a.name)}</span>
+            </a>`;
+        }
         const icon = a.kind === 'text' ? 'fa-file-lines' : 'fa-file';
-        const href = a.dataUrl || '#';
-        const open = a.dataUrl
-            ? `href="${a.dataUrl}" download="${escapeHtml(a.name)}" target="_blank" rel="noopener noreferrer"`
-            : `href="#" onclick="return false;"`;
+        let open;
+        if (a.dataUrl) {
+            open = `href="${a.dataUrl}" download="${escapeHtml(a.name)}" target="_blank" rel="noopener noreferrer"`;
+        } else if (a.fileUrl) {
+            open = `href="#" data-lumina-action="openCoachCloudAttachment" data-lumina-arg="${escapeHtml(a.fileUrl)}"`;
+        } else {
+            open = `href="#" onclick="return false;"`;
+        }
         return `<a class="coach-msg-attach coach-msg-attach-file" ${open} title="${escapeHtml(a.name)}">
             <i class="fa-solid ${icon}"></i>
             <span class="coach-msg-attach-label">${escapeHtml(a.name)}</span>
@@ -298,9 +320,12 @@ function renderTaskAttachmentsBar(task) {
             <div class="coach-task-attachments-label"><i class="fa-solid fa-paperclip"></i> 任務附件 ${list.length}</div>
             <div class="coach-task-attachments-list">
                 ${list.map(a => {
-                    if (a.kind === 'image' && a.dataUrl) {
+                    if (a.kind === 'image' && (a.dataUrl || a.fileUrl)) {
+                        const imgAttr = a.dataUrl
+                            ? `src="${a.dataUrl}"`
+                            : `data-coach-secure-src="${escapeHtml(a.fileUrl)}"`;
                         return `<div class="coach-task-attach-item" title="${escapeHtml(a.name)}">
-                            <img src="${a.dataUrl}" alt="">
+                            <img ${imgAttr} alt="">
                             <span class="truncate">${escapeHtml(a.name)}</span>
                             <button type="button" class="coach-attach-remove" data-lumina-action="removeTaskAttachment"
                                 data-lumina-arg="${escapeHtml(String(task.id))}" data-lumina-arg-type="number"
@@ -404,6 +429,152 @@ function takeCoachPendingAttachmentsForSend() {
     S.coachPendingAttachments = [];
     renderCoachPendingAttachments();
     return normalizeTaskAttachments(pending);
+}
+
+// ---- 附件上雲：檔案存伺服器 /uploads/（僅本人可讀），顯示走 Authorization → blob ----
+
+function coachAttB64(dataUrl) {
+    return String(dataUrl || '').split(',')[1] || null;
+}
+
+// blob URL 以來源 URL 為 key 快取，重繪不重抓
+const __coachAttachBlobUrls = new Map();
+
+function resolveCoachAttachmentUrl(fileUrl) {
+    if (!fileUrl) return '';
+    if (/^(data:|blob:|https?:)/.test(fileUrl)) return fileUrl;
+    const base = typeof getAuthBaseUrl === 'function' ? getAuthBaseUrl() : '';
+    return base + fileUrl;
+}
+
+async function fetchCoachAttachmentBlobUrl(fileUrl) {
+    const url = resolveCoachAttachmentUrl(fileUrl);
+    if (__coachAttachBlobUrls.has(url)) return __coachAttachBlobUrls.get(url);
+    const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders(false) : {};
+    const res = await fetch(url, { headers, credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    __coachAttachBlobUrls.set(url, objectUrl);
+    return objectUrl;
+}
+
+function hydrateCoachAttachmentImages(rootEl) {
+    const imgs = (rootEl || document).querySelectorAll('img[data-coach-secure-src]');
+    imgs.forEach(async (img) => {
+        const fileUrl = img.getAttribute('data-coach-secure-src');
+        if (!fileUrl) return;
+        try {
+            img.src = await fetchCoachAttachmentBlobUrl(fileUrl);
+        } catch (err) {
+            console.warn('[Lumina Coach] 附件圖片載入失敗', err);
+            img.alt = '無法載入附件圖片（請確認登入狀態）';
+        }
+    });
+}
+
+async function openCoachCloudAttachment(fileUrl) {
+    if (!fileUrl) return;
+    try {
+        const objectUrl = await fetchCoachAttachmentBlobUrl(fileUrl);
+        window.open(objectUrl, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+        showToast('無法開啟附件，請確認登入狀態後重試', 'error');
+    }
+}
+
+/** 背景把附件實體傳到伺服器；成功後 att.fileUrl 供跨裝置取用。失敗不影響本機使用。 */
+async function uploadCoachAttachmentToCloud(att) {
+    try {
+        if (!att || att.fileUrl) return;
+        if (typeof isLoggedIn !== 'function' || !isLoggedIn()) return;
+        let base64 = null;
+        let filename = att.name || 'file';
+        if (att.kind === 'image' && att.dataUrl) {
+            // 上傳壓縮後版本（jpeg），與本機顯示一致
+            base64 = coachAttB64(att.dataUrl);
+            if (!/\.jpe?g$/i.test(filename)) filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+        } else if (att._file) {
+            base64 = coachAttB64(await readFileAsDataURL(att._file));
+        } else if (att.dataUrl) {
+            base64 = coachAttB64(att.dataUrl);
+        }
+        if (!base64) return;
+        const res = await authApiRequest('/api/user/attachment', {
+            method: 'POST',
+            timeoutMs: 30000,
+            body: JSON.stringify({ filename, mime: att.mime, data_base64: base64 })
+        });
+        if (res?.fileUrl) {
+            att.fileUrl = res.fileUrl;
+            delete att._file;
+            renderCoachPendingAttachments();
+        }
+    } catch (e) {
+        console.warn('[Lumina Coach] 附件上雲失敗（保留本機版本）:', e.message);
+    }
+}
+
+/** manager：把待送附件發布為團隊知識庫文件（走 document/add，伺服器自動索引） */
+async function saveCoachPendingAttachmentsToKb() {
+    if (!(S.enterpriseSession?.role === 'manager') || S.enterpriseSession?.offline) {
+        return showToast('僅團隊主管可存入知識庫', 'error');
+    }
+    const pending = ensureCoachPendingAttachments();
+    if (!pending.length) return showToast('還沒有待送附件', 'error');
+    if (S._coachKbSaveInFlight) return;
+    S._coachKbSaveInFlight = true;
+    const groupCode = S.enterpriseSession.groupCode;
+    const managerId = S.enterpriseSession.memberId;
+    let okCount = 0;
+    let skipCount = 0;
+    try {
+        for (const att of pending.slice()) {
+            const title = (att.name || '附件').replace(/\.[^.]+$/, '').slice(0, 100) || '附件';
+            let payload = null;
+            if (att.kind === 'text' && att.textPreview) {
+                payload = { groupCode, managerId, docType: 'text', title, content: att.textPreview.slice(0, 10000) };
+            } else if (att.kind === 'image' && att.dataUrl) {
+                const base64 = coachAttB64(att.dataUrl);
+                if (base64) {
+                    payload = {
+                        groupCode, managerId, docType: 'image', title,
+                        filename: /\.(jpe?g|png|gif|webp)$/i.test(att.name || '') ? att.name : `${title}.jpg`,
+                        fileData: base64, content: ''
+                    };
+                }
+            } else if (att._file && /\.pdf$/i.test(att.name || '')) {
+                const base64 = coachAttB64(await readFileAsDataURL(att._file));
+                if (base64) {
+                    payload = {
+                        groupCode, managerId, docType: 'pdf', title,
+                        filename: att.name, fileData: base64, content: att.textPreview || ''
+                    };
+                }
+            }
+            if (!payload) { skipCount++; continue; }
+            try {
+                await authApiRequest('/api/enterprise/group/document/add', {
+                    method: 'POST',
+                    timeoutMs: 30000,
+                    body: JSON.stringify(payload)
+                });
+                okCount++;
+                S.coachPendingAttachments = ensureCoachPendingAttachments().filter(a => a.id !== att.id);
+            } catch (e) {
+                showToast(`「${att.name}」存入失敗：${e.message}`, 'error');
+            }
+        }
+    } finally {
+        S._coachKbSaveInFlight = false;
+    }
+    renderCoachPendingAttachments();
+    if (okCount) {
+        showToast(`已存入知識庫 ${okCount} 份${skipCount ? `（${skipCount} 份無可存內容，已略過）` : ''}，索引處理中`, 'success');
+        try { if (typeof track === 'function') track('coach_attach_save_kb', { count: okCount }); } catch (_) {}
+    } else if (skipCount) {
+        showToast('附件沒有可存入的內容（PDF 需重新選檔）', 'error');
+    }
 }
 
 /** Paste image from clipboard into pending. */

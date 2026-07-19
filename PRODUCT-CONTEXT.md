@@ -105,7 +105,7 @@ js/modules/slices/* ──build──► js/lumina-app.js + chunks
 | ID | 項目 |
 |----|------|
 | P1-RAG-UX | 知識庫選取可發現、純教練預設（**近期已修一輪**，持續驗證） |
-| P1-附件雲端 | 教練附件可選上傳伺服器／進知識庫（現多為本機） |
+| P1-附件雲端 | 教練附件可選上傳伺服器／進知識庫（**已做**：附件背景上雲 `/api/user/attachment` 僅本人可讀、自由對話 thread 隨 user/data 跨裝置同步（tombstone 防復活）、manager 可把附件存入知識庫） |
 | P1-任務 | 完成→下一項、會議→待辦、虛擬列表大清單 |
 | P1-安全 | 來源檔勿 `?token=` 進 URL（**已做**：documents 列表改 Bearer fetch → blob，比照教練來源開啟） |
 | P1-評測 | `npm run test:rag-golden` 當回歸門檻（**已做**：CI 獨立 `rag-golden` job，走無 LLM key 的檢索摘要 fallback） |

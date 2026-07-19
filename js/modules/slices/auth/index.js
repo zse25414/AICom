@@ -205,13 +205,41 @@ function updateAuthUI() {
     }
 }
 
+// 上雲 payload 剝掉附件 base64：伺服器只存中繼資料 + /uploads/ 參照（6MB body 上限）
+function stripAttachmentDataUrls(list) {
+    if (!Array.isArray(list)) return list;
+    return list.map(a => {
+        if (!a || typeof a !== 'object') return a;
+        const { dataUrl, _file, ...rest } = a;
+        return rest;
+    });
+}
+
+function readLocalCoachThreadForSync() {
+    try {
+        const data = JSON.parse(localStorage.getItem(C.COACH_THREAD_STORAGE) || 'null');
+        if (!data?.savedAt) return undefined;
+        if (Array.isArray(data.messages)) {
+            data.messages = data.messages.map(m => (m && Array.isArray(m.attachments))
+                ? { ...m, attachments: stripAttachmentDataUrls(m.attachments) }
+                : m);
+        }
+        return data;
+    } catch (_) {
+        return undefined;
+    }
+}
+
 function buildUserDataPayload() {
     return {
-        tasks: S.tasks,
+        tasks: (S.tasks || []).map(t => (t?.attachments?.length
+            ? { ...t, attachments: stripAttachmentDataUrls(t.attachments) }
+            : t)),
         profile: S.userProfile,
         dailyHistory: S.dailyHistory,
         trackedFocusByDay: S.trackedFocusByDay,
         weeklyScores: S.weeklyScores,
+        coachThread: readLocalCoachThreadForSync(),
         updatedAt: new Date().toISOString()
     };
 }
@@ -219,9 +247,31 @@ function buildUserDataPayload() {
 function applyUserDataFromServer(data) {
     if (!data) return;
     if (Array.isArray(data.tasks)) {
+        // 伺服器版附件無 dataUrl——保留本機既有預覽
+        const kept = new Map();
+        const each = (ts, fn) => (ts || []).forEach(t =>
+            (Array.isArray(t?.attachments) ? t.attachments : []).forEach(a => a?.id && fn(t, a)));
+        each(S.tasks, (t, a) => { if (a.dataUrl) kept.set(t.id + ':' + a.id, a.dataUrl); });
         S.tasks = data.tasks;
+        each(S.tasks, (t, a) => { if (!a.dataUrl) a.dataUrl = kept.get(t.id + ':' + a.id) || null; });
         localStorage.setItem('lumina_tasks', JSON.stringify(S.tasks));
         migrateTasks();
+    }
+    if (data.coachThread?.savedAt) {
+        try {
+            const local = JSON.parse(localStorage.getItem(C.COACH_THREAD_STORAGE) || 'null');
+            if (Number(data.coachThread.savedAt) > (Number(local?.savedAt) || 0)) {
+                localStorage.setItem(C.COACH_THREAD_STORAGE, JSON.stringify(data.coachThread));
+                // 跨裝置接續：無進行中對話時直接還原
+                if (!data.coachThread.cleared && !S.focusSession?.taskId
+                    && !(S.coachAgentMessages || []).length
+                    && typeof loadCoachFreeformThread === 'function'
+                    && loadCoachFreeformThread()
+                    && typeof renderCoachAgentView === 'function') {
+                    renderCoachAgentView();
+                }
+            }
+        } catch (_) {}
     }
     if (data.profile && typeof data.profile === 'object') {
         S.userProfile = { ...S.userProfile, ...data.profile };

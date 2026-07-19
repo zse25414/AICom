@@ -579,6 +579,12 @@ function register(api) {
 
     async function canAccessUpload(authUser, filename) {
         if (!authUser?.id) return false;
+        // 個人附件（user-<seg>- 前綴，seg 不含 '-'）：僅本人可讀
+        const personal = String(filename || '').match(/^user-([a-zA-Z0-9_]+)-/);
+        if (personal) {
+            const seg = String(authUser.id).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 40);
+            return !!seg && personal[1] === seg;
+        }
         const store = await api.prepareStore(await loadStore());
         for (const group of Object.values(store.groups || {})) {
             const owned = (group.documents || []).some(d => {

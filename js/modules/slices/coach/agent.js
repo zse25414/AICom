@@ -18,11 +18,17 @@ function persistCoachFreeformThread() {
             }))
         };
         localStorage.setItem(C.COACH_THREAD_STORAGE, JSON.stringify(payload));
+        // 對話同步上雲（debounced；未登入時 syncUserDataToServer 自動略過）
+        try { if (typeof syncUserDataToServer === 'function') syncUserDataToServer(); } catch (_) {}
     } catch (_) {}
 }
 
 function clearPersistedCoachFreeformThread() {
-    try { localStorage.removeItem(C.COACH_THREAD_STORAGE); } catch (_) {}
+    // 寫 tombstone 而非移除：清除動作也要同步到其他裝置（否則會被雲端版本復活）
+    try {
+        localStorage.setItem(C.COACH_THREAD_STORAGE, JSON.stringify({ v: 1, cleared: true, savedAt: Date.now() }));
+    } catch (_) {}
+    try { if (typeof syncUserDataToServer === 'function') syncUserDataToServer(); } catch (_) {}
 }
 
 /** Restore freeform coach Q&A across reloads (P2-3). Skip if guided session active. */
@@ -1471,6 +1477,8 @@ function renderCoachAgentThread(thinking) {
     }
 
     el.innerHTML = html;
+    // 雲端附件圖片（無本機 dataUrl）需帶 Authorization 抓 blob
+    try { if (typeof hydrateCoachAttachmentImages === 'function') hydrateCoachAttachmentImages(el); } catch (_) {}
     // Keep latest message in view inside the fixed viewport
     requestAnimationFrame(() => {
         el.scrollTop = el.scrollHeight;

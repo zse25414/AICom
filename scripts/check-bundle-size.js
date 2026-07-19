@@ -12,7 +12,8 @@ const limits = {
     // 2026-07-18d：Phase 0–3 analytics + usage + chunk-errors 進 core
     // 2026-07-18e：P5-A1 key 設定嚮導進 coach chunk（實測 115 KB + headroom）
     // 2026-07-18f：P1 support.js + API key persist 進 core（實測 308 KB + headroom）
-    'js/lumina-app.js': 340 * 1024,
+    // 2026-07-19：P1-附件雲端 — user-data 同步含 coachThread／附件參照（實測 341 KB + headroom）
+    'js/lumina-app.js': 355 * 1024,
     // 2026-07-18g：教練附件 + RAG 選庫 UX
     'js/chunks/lumina-coach.js': 155 * 1024,
     'js/chunks/lumina-enterprise-docs.js': 130 * 1024
