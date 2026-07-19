@@ -1054,12 +1054,13 @@ async function coachAgentRespondWithAI(userMsg, task, session, messageAttachment
     const knowledgeCtx = ragKnowledgeSnippet
         ? `\n\n【知識庫摘錄（僅供參考，請轉成可執行建議，勿整段照貼）】\n${ragKnowledgeSnippet}`
         : '';
+    const execProfileCtx = typeof buildExecProfileContext === 'function' ? buildExecProfileContext() : '';
 
     let systemPrompt;
     if (freeform) {
         systemPrompt = `你是 Lumina 教練助手。回答工作／知識庫問題：說清楚、給下一步，內容要夠用。
 ${styleRules}
-${contextBlock}${attachCtx}${knowledgeCtx}
+${contextBlock}${attachCtx}${knowledgeCtx}${execProfileCtx}
 若有附件：優先引用文字檔摘錄；圖片僅能依檔名與使用者描述推斷（模型未必能看圖），請請對方補關鍵重點。`;
     } else {
         const step = session?.steps?.[session.currentStep];
@@ -1067,7 +1068,7 @@ ${contextBlock}${attachCtx}${knowledgeCtx}
 ${styleRules}
 若使用者卡住：先安撫一句，再拆成 2–3 個更小動作，並說明先做哪一個。
 若使用者問怎麼做：給 3–6 步，必要時補「完成長相／檢查點」。
-${contextBlock}${attachCtx}${knowledgeCtx}
+${contextBlock}${attachCtx}${knowledgeCtx}${execProfileCtx}
 當前任務：${task.name}
 當前步驟（${(session.currentStep || 0) + 1}/${session.steps.length}）「${step?.title}」：${step?.action}`;
     }

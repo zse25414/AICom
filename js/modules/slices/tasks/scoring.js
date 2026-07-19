@@ -122,19 +122,36 @@ function parseHour(timeStr) {
     return parseInt((timeStr || '09:00').split(':')[0], 10);
 }
 
+/** 執行畫像加權（軌道2）：小幅 nudge，不蓋過逾期/到期主導權重 */
+function getExecProfileScoreBonus(task, ctx) {
+    const profile = typeof getExecProfile === 'function' ? getExecProfile() : null;
+    if (!profile) return 0;
+    let bonus = 0;
+    const d = parseInt(task.duration, 10) || 30;
+    const key = d <= 30 ? 'short' : d <= 60 ? 'mid' : 'long';
+    const rate = profile.durationBuckets?.[key]?.rate;
+    if (rate != null && rate >= 70) bonus += 6; // 你擅長完成的任務長度
+    const hr = profile.bestHourRange;
+    if (hr && ctx.hour >= hr.start && ctx.hour < hr.end && (task.energy || 3) >= 4) {
+        bonus += 6; // 高完成時段優先排難任務
+    }
+    return bonus;
+}
+
 function scoreTaskForNextStep(task, ctx) {
     ctx = ctx || getScoringContext();
     let score = 0;
     if (task.due < ctx.today) score += 50;
     else if (task.due === ctx.today) score += 30;
-    
+
     const inPeak = ctx.hour >= ctx.peakStart && ctx.hour < ctx.peakEnd;
     const cat = resolveCategory(task);
-    
+
     if (inPeak && cat === 'deep') score += 25;
     if (task.duration <= 25) score += 15;
     if (task.wasOverdue) score += 20;
     score += (task.energy || 3) * 3;
+    score += getExecProfileScoreBonus(task, ctx);
     return score;
 }
 
@@ -157,6 +174,10 @@ function getNextStepReason(task) {
     const ctx = getScoringContext();
     const inPeak = ctx.hour >= ctx.peakStart && ctx.hour < ctx.peakEnd;
     if (task.wasOverdue) return '逾期優先處理';
+    const hr = (typeof getExecProfile === 'function' ? getExecProfile() : null)?.bestHourRange;
+    if (hr && ctx.hour >= hr.start && ctx.hour < hr.end && (task.energy || 3) >= 4) {
+        return '正值你的高完成時段（依你的執行紀錄）';
+    }
     if (inPeak && resolveCategory(task) === 'deep') return '高效時段，適合深度工作';
     if (!inPeak && resolveCategory(task) === 'deep') return '可先啟動，深度段落留到高效時段';
     if (task.duration <= 15) return '短小精悍，現在就能完成';

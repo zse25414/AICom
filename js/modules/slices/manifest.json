@@ -7,7 +7,7 @@
     "utils/analytics.js",
     "utils/usage.js",
     "utils/templates.js",
-    "utils/exec-memory.js",
+    "utils/exec-memory.js", "utils/exec-profile.js",
     "bridge/actions.js",
     "utils/chunk-errors.js",
     "auth/index.js",

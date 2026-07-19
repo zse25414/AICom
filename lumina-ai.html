@@ -539,7 +539,24 @@
                     </div>
                     
                     <!-- Key Insights Cards -->
-                    <div class="lg:col-span-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="lg:col-span-5 space-y-4">
+                    <div id="insight-exec-profile-card" class="hidden bg-slate-900 border border-indigo-500/30 rounded-3xl p-5">
+                        <div class="flex gap-x-3 items-start">
+                            <div class="text-indigo-400 mt-0.5"><i class="fa-solid fa-fingerprint text-xl"></i></div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center justify-between gap-2">
+                                    <div class="font-semibold">你的執行模式</div>
+                                    <button type="button" id="insight-exec-profile-toggle" data-lumina-action="toggleExecProfileEnabled"
+                                            class="text-[10px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:text-slate-200 focus-ring">
+                                        停用畫像
+                                    </button>
+                                </div>
+                                <div class="text-xs text-slate-300 mt-1.5 leading-relaxed" id="insight-exec-profile-text">—</div>
+                                <div class="text-[10px] text-slate-500 mt-1.5">依你本機的完成紀錄彙算（僅統計量，不含任務內容）；教練與今日排序會參考。</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div class="bg-slate-900 border border-slate-700 rounded-3xl p-5">
                             <div class="flex gap-x-3">
                                 <div class="text-emerald-400 mt-0.5"><i class="fa-solid fa-arrow-trend-up text-xl"></i></div>
@@ -576,10 +593,11 @@
                             </div>
                         </div>
                     </div>
+                    </div>
                 </div>
             </div>
         </div>
-        
+
         <!-- TEAM / ENTERPRISE -->
         <div id="team" class="section">
             <div class="max-w-5xl mx-auto">

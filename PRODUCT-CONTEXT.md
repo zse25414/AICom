@@ -57,6 +57,8 @@ js/modules/slices/* ──build──► js/lumina-app.js + chunks
 
 - 無任務 = 自由問答（freeform）；有任務可「帶我做」引導步驟。  
 - 回覆要有可執行步驟 + `[選項: …]`。  
+- **執行畫像**（2026-07-19）：≥7 天完成紀錄後，教練 prompt 與今日排序會引用本機統計
+  （最佳時段／任務長度甜蜜點／拆分效益）；洞察頁有卡片、可停用（`enableExecProfile`）。  
 - **無 API Key** 仍可用離線規則教練。  
 - Key：預設 session；可選「本機記住」。嚮導：`coach/keywizard.js`。  
 - 附件：`coach/attachments.js`（圖壓縮、文字摘錄、任務綁定）。  
@@ -67,6 +69,8 @@ js/modules/slices/* ──build──► js/lumina-app.js + chunks
 - 勾選知識庫或 `@庫名` / 任務綁定才查庫。  
 - 自由問答 + 有 citations → 可直接 RAG 答；**引導任務** → RAG 當摘錄、仍由教練帶做。  
 - 頂欄「知識庫」可開面板；有 **「純教練」** 芯片。  
+- **活的 SOP**（2026-07-19）：文件卡「跑這份 SOP」→ 編譯成步驟（LLM／規則式 fallback，
+  contentHash 快取）→ 教練帶做；done/stuck 匿名累計，manager 文件卡看卡點。  
 
 ### 3.3 任務
 

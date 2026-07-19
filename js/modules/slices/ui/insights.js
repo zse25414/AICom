@@ -22,7 +22,43 @@ async function refreshInsightsPage() {
     }
 }
 
+/** 執行畫像卡（軌道2）：有足量樣本才顯示；可停用（flag 隨個人資料同步） */
+function updateExecProfileCard() {
+    const card = document.getElementById('insight-exec-profile-card');
+    if (!card) return;
+    const enabled = S.userProfile.enableExecProfile !== false;
+    const profile = enabled && typeof getExecProfile === 'function' ? getExecProfile() : null;
+    const summary = profile && typeof buildExecProfileSummary === 'function'
+        ? buildExecProfileSummary(profile)
+        : '';
+    const textEl = document.getElementById('insight-exec-profile-text');
+    const toggleEl = document.getElementById('insight-exec-profile-toggle');
+    if (!enabled) {
+        card.classList.remove('hidden');
+        if (textEl) textEl.innerText = '執行畫像已停用。教練與排序不再引用你的完成紀錄統計。';
+        if (toggleEl) toggleEl.innerText = '重新啟用';
+        return;
+    }
+    if (!summary) {
+        // 樣本不足：不顯示卡片（避免亂講）
+        card.classList.add('hidden');
+        return;
+    }
+    card.classList.remove('hidden');
+    if (textEl) textEl.innerText = summary;
+    if (toggleEl) toggleEl.innerText = '停用畫像';
+}
+
+function toggleExecProfileEnabled() {
+    S.userProfile.enableExecProfile = S.userProfile.enableExecProfile === false;
+    S._execProfileCache = null;
+    saveState();
+    updateExecProfileCard();
+    showToast(S.userProfile.enableExecProfile === false ? '已停用執行畫像' : '已重新啟用執行畫像', 'success');
+}
+
 function updateInsightsCards() {
+    try { updateExecProfileCard(); } catch (e) { console.warn('[Lumina] updateExecProfileCard', e); }
     const dist = getTimeDistribution();
     const avgScore = Math.round(S.weeklyScores.reduce((a, b) => a + b, 0) / S.weeklyScores.length);
     const prevAvg = Math.round(S.weeklyScores.slice(0, 6).reduce((a, b) => a + b, 0) / 6);
