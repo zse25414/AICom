@@ -169,6 +169,7 @@ npm run test:ready       # /ready
 | 事故 | `docs/engineering/RUNBOOK.md` |
 | SLO | `docs/engineering/SLO.md` |
 | 階段路線 | `docs/roadmap/PHASE-*.md` |
+| 差異化創新選單（活的 SOP、執行畫像、Agentic、內容對帳、本地 LLM） | `docs/roadmap/INNOVATION-TRACKS.md` |
 | 5 分鐘 dogfood | `docs/engineering/DOGFOOD-5MIN.md` |
 | 團隊 dogfood | `docs/engineering/DOGFOOD-TEAM.md` |
 | 人類 README | `README.md` |
