@@ -44,6 +44,7 @@
     "test:enterprise": "node scripts/test-enterprise.js",
     "test:coach-rag": "node scripts/test-coach-rag.js",
     "test:attachments": "node scripts/test-user-attachments.js",
+    "test:sop": "node scripts/test-sop.js",
     "test:rag-cache": "node scripts/test-rag-cache.js",
     "test:security-matrix": "node scripts/test-security-matrix.js",
     "test:w2-kb": "node scripts/test-w2-kb-sync.js",

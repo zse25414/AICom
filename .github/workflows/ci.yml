@@ -96,6 +96,9 @@ jobs:
       - name: User attachment cloud tests
         run: node scripts/test-user-attachments.js
 
+      - name: SOP compile/stats contract tests
+        run: node scripts/test-sop.js
+
       - name: Coach RAG tests
         run: node scripts/test-coach-rag.js
 

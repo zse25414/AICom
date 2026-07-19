@@ -53,6 +53,7 @@ const order = [
     'enterprise/core',
     'enterprise/kb',
     'enterprise/documents',
+    'enterprise/sop',
     'rag/ops',
     'handlers/user-data',
     'handlers/auth',

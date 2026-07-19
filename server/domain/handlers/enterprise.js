@@ -516,6 +516,52 @@ function register(api) {
             });
         }
 
+        // 活的 SOP：文件 → 可執行步驟（成員皆可；contentHash 快取，發新版自動重編）
+        if (method === 'POST' && urlPath === '/api/enterprise/group/document/plan') {
+            return api.readBody(req).then(async body => {
+                const code = api.normalizeCode(body.groupCode);
+                const group = api.getGroup(store, code);
+                if (!group) return api.sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+                const authUser = await api.getOptionalAuth(req);
+                const memberCheck = await api.assertEnterpriseMember(group, body.memberId, authUser, { store, bind: false });
+                if (!memberCheck.ok) {
+                    return api.sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
+                }
+                const doc = api.findGroupDocument(group, { documentId: body.documentId || body.document_id });
+                if (!doc || !api.isActiveDocument(doc)) {
+                    return api.sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+                }
+                const result = await api.compileDocumentPlan(doc, {
+                    apiKey: body.deepseek_api_key || body.deepseekApiKey || null
+                });
+                if (result.error) return api.sendError(res, 422, result.error, result.code);
+                if (!result.cached) await saveStore(store);
+                api.sendJson(res, 200, { ok: true, documentId: doc.id, cached: result.cached, plan: result.plan });
+            });
+        }
+
+        // 活的 SOP：步驟事件（run/done/stuck）匿名累計到 doc.sopStats（按版本分桶）
+        if (method === 'POST' && urlPath === '/api/enterprise/group/document/sop-event') {
+            return api.readBody(req).then(async body => {
+                const code = api.normalizeCode(body.groupCode);
+                const group = api.getGroup(store, code);
+                if (!group) return api.sendError(res, 404, '找不到群組', 'GROUP_NOT_FOUND');
+                const authUser = await api.getOptionalAuth(req);
+                const memberCheck = await api.assertEnterpriseMember(group, body.memberId, authUser, { store, bind: false });
+                if (!memberCheck.ok) {
+                    return api.sendError(res, memberCheck.status || 403, memberCheck.error, memberCheck.code || 'GROUP_FORBIDDEN');
+                }
+                const doc = api.findGroupDocument(group, { documentId: body.documentId || body.document_id });
+                if (!doc || !api.isActiveDocument(doc)) {
+                    return api.sendError(res, 404, '找不到該文件', 'DOC_NOT_FOUND');
+                }
+                const result = api.recordSopEvent(doc, { step: body.step, event: String(body.event || '') });
+                if (result.error) return api.sendError(res, 400, result.error, result.code);
+                await saveStore(store);
+                api.sendJson(res, 200, { ok: true, documentId: doc.id, stats: result.stats });
+            });
+        }
+
         if (method === 'POST' && urlPath === '/api/enterprise/group/document/reindex') {
             return api.readBody(req).then(async body => {
                 const code = api.normalizeCode(body.groupCode);
