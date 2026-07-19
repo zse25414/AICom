@@ -519,12 +519,92 @@ async function handleLogin(e) {
     }
 }
 
+/**
+ * 登出後清空本機工作區（任務／教練／統計／對話），避免共用裝置殘留。
+ * 已先 syncUserDataToServer 的話，雲端資料登入後仍會拉回。
+ */
+function clearLocalWorkspaceForLogout() {
+    try { if (typeof clearFocusTimer === 'function') clearFocusTimer(); } catch (_) {}
+    try { if (typeof endFocusSession === 'function') endFocusSession(false); } catch (_) {}
+
+    S.tasks = [];
+    S.weeklyScores = [0, 0, 0, 0, 0, 0, 0];
+    S.dailyHistory = {};
+    S.trackedFocusByDay = {};
+    S.todayFocusTaskId = null;
+    S.focusSession = null;
+    S.chatHistory = [];
+    S.coachAgentMessages = [];
+    S.coachPendingAttachments = [];
+    S.coachRequestInFlight = false;
+    S.currentDecomposedPlan = null;
+    S.editingTaskId = null;
+    S.checkedRagKbs = [];
+    S.docRagStatusOverrides = {};
+    S.ragSyncedGroupKey = null;
+    S.taskCoachPlans = S.taskCoachPlans instanceof Map ? new Map() : S.taskCoachPlans;
+    try {
+        if (S.taskCoachPlans && typeof S.taskCoachPlans.clear === 'function') S.taskCoachPlans.clear();
+    } catch (_) {}
+    try { if (typeof rebuildTaskIndex === 'function') rebuildTaskIndex(); } catch (_) {}
+    try { if (typeof invalidateTodayStats === 'function') invalidateTodayStats(); } catch (_) {}
+
+    // 個人檔：回到訪客預設（不留上一帳號姓名）
+    S.userProfile = {
+        ...(S.userProfile || {}),
+        name: '使用者',
+        role: '知識工作者',
+        streak: 0,
+        bestStreak: 0,
+        plan: 'free',
+        apiEnabled: false
+    };
+
+    const keysToRemove = [
+        'lumina_tasks',
+        'lumina_weekly',
+        'lumina_profile',
+        C.DAILY_HISTORY_KEY,
+        C.TRACKED_FOCUS_KEY,
+        C.COACH_THREAD_STORAGE,
+        C.LAST_ACTIVE_DATE_KEY,
+        'lumina_last_streak_date',
+        'lumina_exec_memory_v1',
+        'lumina_analytics_v1',
+        'lumina_mp_created',
+        'lumina_mp_coach',
+        'lumina_mp_completed',
+        'lumina_usage_v1',
+        'lumina_plan',
+        'lumina_beginner_dismissed',
+        'lumina_support_reports_v1',
+        C.TEAM_NOTIF_PREFS_KEY,
+        'lumina_enterprise_owner_id'
+    ];
+    keysToRemove.forEach((k) => {
+        try { if (k) localStorage.removeItem(k); } catch (_) {}
+    });
+    // 未勾「本機記住」的 API key 一併清掉 session
+    try {
+        if (localStorage.getItem(C.API_KEY_PERSIST_FLAG) !== '1') {
+            sessionStorage.removeItem(C.API_KEY_STORAGE);
+            localStorage.removeItem(C.API_KEY_STORAGE);
+        }
+    } catch (_) {}
+
+    try { if (typeof clearCoachAttachmentBlobCache === 'function') clearCoachAttachmentBlobCache(); } catch (_) {}
+    try { if (typeof clearDocFileBlobCache === 'function') clearDocFileBlobCache(); } catch (_) {}
+    try {
+        if (typeof __coachAnswerCache !== 'undefined' && __coachAnswerCache?.clear) __coachAnswerCache.clear();
+    } catch (_) {}
+}
+
 async function handleLogout() {
     if (!isLoggedIn()) return;
     const ok = await showConfirmDialog({
         title: '登出',
-        message: '確定要登出嗎？你的任務與設定仍會保留在本機。',
-        confirmLabel: '登出',
+        message: '確定要登出嗎？\n\n會先同步資料到雲端，再清除本機的任務、教練對話與統計（共用裝置較安全）。\n下次登入同一帳號仍可從雲端載回。',
+        confirmLabel: '登出並清除本機',
         cancelLabel: '取消'
     });
     if (!ok) return;
@@ -533,12 +613,21 @@ async function handleLogout() {
     } catch (_) {}
     clearEnterpriseStateForAccountSwitch();
     localStorage.removeItem(C.AUTH_SESSION_KEY);
-    // 帶授權抓來的 blob 不跨帳號留存（lazy chunk 未載入時為 undefined）
-    try { if (typeof clearCoachAttachmentBlobCache === 'function') clearCoachAttachmentBlobCache(); } catch (_) {}
-    try { if (typeof clearDocFileBlobCache === 'function') clearDocFileBlobCache(); } catch (_) {}
+    clearLocalWorkspaceForLogout();
     hideAuthOverlay();
     updateAuthUI();
-    showToast('已登出', 'success');
+    try {
+        refreshUI({ dashboard: true, scheduler: true, filters: true, schedule: true });
+    } catch (_) {}
+    try {
+        if (typeof renderCoachAgentView === 'function') renderCoachAgentView();
+        else if (typeof window.renderCoachAgentView === 'function') window.renderCoachAgentView();
+    } catch (_) {}
+    try {
+        if (typeof renderEnterprisePage === 'function') renderEnterprisePage();
+        else if (typeof window.renderEnterprisePage === 'function') window.renderEnterprisePage();
+    } catch (_) {}
+    showToast('已登出，本機工作紀錄已清除', 'success');
     showAuthOverlay('login');
 }
 
