@@ -545,6 +545,72 @@ function coachPauseSession() {
     renderCoachAgentView();
 }
 
+/** SOP 卡點回報（軌道1）：只在 SOP session 有效，匿名計數，失敗靜默 */
+function postSopStepEvent(event, step) {
+    const docId = S.focusSession?.sopDocId;
+    if (!docId || !S.enterpriseSession || S.enterpriseSession.offline) return;
+    try {
+        fetch(getEnterpriseBaseUrl() + '/api/enterprise/group/document/sop-event', {
+            method: 'POST',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify({
+                groupCode: S.enterpriseSession.groupCode,
+                memberId: S.enterpriseSession.memberId,
+                documentId: docId,
+                event,
+                step: step || 0
+            })
+        }).catch(() => {});
+    } catch (_) {}
+}
+
+/** 由知識庫文件啟動 SOP 引導（軌道1）。plan 來自 document/plan 端點。 */
+function startSopGuidedSession(docId, plan, docTitle) {
+    const rawSteps = Array.isArray(plan?.steps) ? plan.steps : [];
+    if (!rawSteps.length) return showToast('此文件沒有可執行步驟', 'error');
+    const steps = rawSteps.map(s => ({
+        title: s.title,
+        action: s.action || s.title,
+        duration: `${parseInt(s.duration, 10) || 15}分`
+    }));
+    const totalMins = rawSteps.reduce((n, s) => n + (parseInt(s.duration, 10) || 15), 0);
+    let task = S.tasks.find(t => !t.completed && t.sopDocId === docId);
+    if (!task) {
+        task = {
+            id: Date.now(),
+            name: `SOP：${docTitle || '團隊文件'}`.slice(0, 80),
+            duration: Math.min(480, Math.max(5, totalMins)),
+            energy: 3,
+            category: 'execution',
+            due: getTodayISO(),
+            completed: false,
+            sopDocId: docId,
+            updatedAt: new Date().toISOString()
+        };
+        S.tasks.push(task);
+        saveState();
+    }
+    if (S.focusSession?.freeform) clearFocusTimer();
+    S.todayFocusTaskId = task.id;
+    S.focusSession = {
+        taskId: task.id,
+        steps: normalizeFocusSteps(steps),
+        currentStep: 0,
+        startedAt: Date.now(),
+        coachActive: true,
+        freeform: false,
+        sopDocId: docId
+    };
+    S.coachAgentMessages = [];
+    pushCoachAgentMessage('coach', getOpeningCoachMessage(task, S.focusSession.steps));
+    try { showSection('coach'); } catch (_) {}
+    try { renderCoachAgentView(); } catch (_) {}
+    startStepTimerForCoach(S.focusSession);
+    document.getElementById('next-step-card')?.classList.add('focus-session-active');
+    postSopStepEvent('run', 0);
+    showToast(`開始執行：${task.name}`, 'success');
+}
+
 function coachAdvanceStepFromAgent() {
     const task = getCoachTask();
     if (!task || !S.focusSession || S.focusSession.taskId !== task.id) {
@@ -553,6 +619,7 @@ function coachAdvanceStepFromAgent() {
     const steps = S.focusSession.steps;
     const cur = S.focusSession.currentStep;
     if (cur < steps.length - 1) {
+        postSopStepEvent('done', cur + 1);
         S.focusSession.currentStep++;
         const next = steps[S.focusSession.currentStep];
         const cheers = ['很好，繼續！', '做得漂亮！', '保持這個節奏！'];
@@ -567,6 +634,9 @@ function coachAdvanceStepFromAgent() {
 function coachCompleteTaskFromAgent() {
     const task = getCoachTask();
     if (!task) return;
+    if (S.focusSession?.sopDocId) {
+        postSopStepEvent('done', (S.focusSession.currentStep || 0) + 1);
+    }
     const taskName = task.name;
     S.coachAgentMessages = [];
     S.focusSession.coachActive = false;
@@ -1811,6 +1881,10 @@ async function sendCoachAgentMessage(preset) {
             if (isLast) coachCompleteTaskFromAgent();
             else coachAdvanceStepFromAgent();
             return;
+        }
+        // SOP 卡點：使用者說卡住 → 匿名累計到該步（不 return，照常進教練引導）
+        if (S.focusSession?.sopDocId && /卡住/.test(outboundText)) {
+            postSopStepEvent('stuck', (S.focusSession.currentStep || 0) + 1);
         }
     } else {
         // Knowledge Q&A without a task

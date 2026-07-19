@@ -2040,6 +2040,7 @@ function renderEnterpriseDocuments() {
                         ${ragBadge}
                     </div>
                     <div class="text-[10px] text-slate-500 mt-0.5">發布者：${escapeHtml(d.author || '主管')} · ${new Date(d.createdAt).toLocaleString('zh-TW')}${d.updatedAt && d.updatedAt !== d.createdAt ? ' · 更新 ' + new Date(d.updatedAt).toLocaleString('zh-TW') : ''}</div>
+                    ${isManager ? renderSopStatsLine(d) : ''}
                     ${nearEmpty ? `
                         <div class="doc-near-empty-warn mt-1.5" role="status">
                             <i class="fa-solid fa-triangle-exclamation"></i>
@@ -2117,6 +2118,13 @@ function renderEnterpriseDocuments() {
             ` : ''}
 
             <div class="doc-ver-toolbar mt-3">
+                ${String(d.content || '').trim() ? `
+                <button type="button" class="doc-ver-history-btn focus-ring"
+                    ${luminaAction('runDocumentSop', { arg: d.id })}
+                    title="AI 把文件編成步驟，教練帶你逐步執行">
+                    <i class="fa-solid fa-play"></i>
+                    <span>跑這份 SOP</span>
+                </button>` : ''}
                 <button type="button" class="doc-ver-history-btn focus-ring"
                     ${luminaAction('toggleDocVersionPanel', { arg: d.id })}
                     aria-expanded="false"
@@ -2178,6 +2186,50 @@ function renderEnterpriseDocuments() {
 function showMoreEnterpriseDocuments() {
     S._docListVisible = (S._docListVisible || DOC_LIST_PAGE_SIZE) + DOC_LIST_PAGE_SIZE;
     renderEnterpriseDocuments();
+}
+
+// ---- 活的 SOP（軌道1）：文件 → 教練引導執行 + 卡點統計 ----
+
+/** manager 文件卡上的 SOP 執行摘要（匿名計數；只看目前版本桶） */
+function renderSopStatsLine(d) {
+    const bucket = d?.sopStats?.['v' + (d.currentVersion || 1)];
+    if (!bucket || (!bucket.runs && !Object.keys(bucket.byStep || {}).length)) return '';
+    const stuckTop = Object.entries(bucket.byStep || {})
+        .filter(([, v]) => (v?.stuck || 0) > 0)
+        .sort((a, b) => b[1].stuck - a[1].stuck)[0];
+    const stuckTxt = stuckTop
+        ? ` · <span class="text-amber-400">步驟 ${escapeHtml(stuckTop[0])} 卡住 ×${stuckTop[1].stuck}（考慮改寫該段）</span>`
+        : '';
+    return `<div class="text-[10px] text-slate-500 mt-0.5"><i class="fa-solid fa-person-running mr-1"></i>SOP 執行 ${bucket.runs || 0} 次${stuckTxt}</div>`;
+}
+
+/** 成員：把文件編譯成步驟並交給教練帶做 */
+async function runDocumentSop(docId) {
+    if (!S.enterpriseSession) return showToast('請先加入團隊', 'error');
+    if (S.enterpriseSession.offline) return showToast('離線團隊模式不支援跑 SOP', 'error');
+    if (S._sopRunInFlight) return;
+    S._sopRunInFlight = true;
+    const doc = (S.enterpriseGroupData?.documents || []).find(x => x.id === docId);
+    try {
+        showToast('正在編譯步驟…', 'success');
+        const res = await fetch(getEnterpriseBaseUrl() + '/api/enterprise/group/document/plan', {
+            method: 'POST',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify({
+                groupCode: S.enterpriseSession.groupCode,
+                memberId: S.enterpriseSession.memberId,
+                documentId: docId
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `編譯失敗 (${res.status})`);
+        // startSopGuidedSession 在 coach chunk；lazy stub 會自動載入
+        await startSopGuidedSession(docId, data.plan, doc?.title || null);
+    } catch (e) {
+        showToast(`無法啟動 SOP：${e.message}`, 'error');
+    } finally {
+        S._sopRunInFlight = false;
+    }
 }
 
 // ---- 安全檔案存取：JWT 一律走 Authorization header，不進 URL ----
