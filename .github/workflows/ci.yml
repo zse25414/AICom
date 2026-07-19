@@ -93,6 +93,9 @@ jobs:
         env:
           REQUIRE_ENTERPRISE_AUTH: '1'
 
+      - name: User attachment cloud tests
+        run: node scripts/test-user-attachments.js
+
       - name: Coach RAG tests
         run: node scripts/test-coach-rag.js
 

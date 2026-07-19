@@ -33,6 +33,12 @@ function startServer() {
                         ? `every ${Math.round(runtime.config.RAG_RECONCILE_INTERVAL_MS / 60000)}min (reindex-only)`
                         : 'disabled');
                 }
+                if (typeof runtime.startUserAttachmentGc === 'function') {
+                    const gc = runtime.startUserAttachmentGc();
+                    console.log('  Attachment GC:', gc
+                        ? `every ${Math.round(runtime.config.USER_ATTACH_GC_INTERVAL_MS / 3600000)}h (24h grace)`
+                        : 'disabled');
+                }
                 resolve(server);
             });
         });

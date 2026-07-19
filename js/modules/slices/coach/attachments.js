@@ -437,8 +437,15 @@ function coachAttB64(dataUrl) {
     return String(dataUrl || '').split(',')[1] || null;
 }
 
-// blob URL 以來源 URL 為 key 快取，重繪不重抓
+// blob URL 以來源 URL 為 key 快取，重繪不重抓；登出時 revoke + 清空
 const __coachAttachBlobUrls = new Map();
+
+function clearCoachAttachmentBlobCache() {
+    for (const url of __coachAttachBlobUrls.values()) {
+        try { URL.revokeObjectURL(url); } catch (_) {}
+    }
+    __coachAttachBlobUrls.clear();
+}
 
 function resolveCoachAttachmentUrl(fileUrl) {
     if (!fileUrl) return '';
@@ -509,10 +516,29 @@ async function uploadCoachAttachmentToCloud(att) {
             att.fileUrl = res.fileUrl;
             delete att._file;
             renderCoachPendingAttachments();
+            propagateCoachAttachmentFileUrl(att.id, res.fileUrl);
         }
     } catch (e) {
         console.warn('[Lumina Coach] 附件上雲失敗（保留本機版本）:', e.message);
     }
+}
+
+/**
+ * 上傳完成時附件可能已被送進訊息／綁到任務（normalize 會複製物件），
+ * 回填 fileUrl 並重新持久化，跨裝置那則訊息才有雲端參照。
+ */
+function propagateCoachAttachmentFileUrl(attId, fileUrl) {
+    if (!attId || !fileUrl) return;
+    let inMsg = false;
+    (S.coachAgentMessages || []).forEach(m => (Array.isArray(m?.attachments) ? m.attachments : []).forEach(a => {
+        if (a?.id === attId && !a.fileUrl) { a.fileUrl = fileUrl; inMsg = true; }
+    }));
+    let inTask = false;
+    (S.tasks || []).forEach(t => (Array.isArray(t?.attachments) ? t.attachments : []).forEach(a => {
+        if (a?.id === attId && !a.fileUrl) { a.fileUrl = fileUrl; inTask = true; }
+    }));
+    if (inMsg) { try { persistCoachFreeformThread(); } catch (_) {} }
+    if (inTask) { try { saveState(); } catch (_) {} }
 }
 
 /** manager：把待送附件發布為團隊知識庫文件（走 document/add，伺服器自動索引） */

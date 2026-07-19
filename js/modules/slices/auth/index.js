@@ -533,6 +533,9 @@ async function handleLogout() {
     } catch (_) {}
     clearEnterpriseStateForAccountSwitch();
     localStorage.removeItem(C.AUTH_SESSION_KEY);
+    // 帶授權抓來的 blob 不跨帳號留存（lazy chunk 未載入時為 undefined）
+    try { if (typeof clearCoachAttachmentBlobCache === 'function') clearCoachAttachmentBlobCache(); } catch (_) {}
+    try { if (typeof clearDocFileBlobCache === 'function') clearDocFileBlobCache(); } catch (_) {}
     hideAuthOverlay();
     updateAuthUI();
     showToast('已登出', 'success');

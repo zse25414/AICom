@@ -2182,8 +2182,15 @@ function showMoreEnterpriseDocuments() {
 
 // ---- 安全檔案存取：JWT 一律走 Authorization header，不進 URL ----
 
-// blob URL 以來源 URL 為 key 快取：文件列表常因 rag poll 重繪，避免重複下載
+// blob URL 以來源 URL 為 key 快取：文件列表常因 rag poll 重繪，避免重複下載；登出時清空
 const __docFileBlobUrls = new Map();
+
+function clearDocFileBlobCache() {
+    for (const url of __docFileBlobUrls.values()) {
+        try { URL.revokeObjectURL(url); } catch (_) {}
+    }
+    __docFileBlobUrls.clear();
+}
 
 async function fetchDocFileBlobUrl(url) {
     if (__docFileBlobUrls.has(url)) return __docFileBlobUrls.get(url);

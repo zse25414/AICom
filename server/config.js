@@ -56,6 +56,10 @@ const RAG_INDEX_EVENT_LIMIT = 40;
 const RAG_RECONCILE_INTERVAL_MS = process.env.RAG_RECONCILE_INTERVAL_MS != null
     ? Math.max(0, Number(process.env.RAG_RECONCILE_INTERVAL_MS) || 0)
     : 60 * 60 * 1000;
+// 個人附件孤兒檔 GC（0 = 停用；預設每 6 小時，只清 24h 以上未被引用的 user-* 檔）
+const USER_ATTACH_GC_INTERVAL_MS = process.env.USER_ATTACH_GC_INTERVAL_MS != null
+    ? Math.max(0, Number(process.env.USER_ATTACH_GC_INTERVAL_MS) || 0)
+    : 6 * 60 * 60 * 1000;
 const serviceStartedAt = Date.now();
 
 function enforceProductionSecrets() {
@@ -80,6 +84,6 @@ module.exports = {
     DEFAULT_LLM_API_BASE, ALLOWED_LLM_API_BASES,
     MAX_UPLOAD_BYTES, ALLOWED_UPLOAD_EXT, WEAK_PINS, UPLOADS_DIR, ALLOWED_ORIGINS,
     RAG_INDEX_TIMEOUT_MS, RAG_INDEX_MAX_ATTEMPTS, RAG_INDEX_EVENT_LIMIT,
-    RAG_RECONCILE_INTERVAL_MS,
+    RAG_RECONCILE_INTERVAL_MS, USER_ATTACH_GC_INTERVAL_MS,
     serviceStartedAt, enforceProductionSecrets
 };
